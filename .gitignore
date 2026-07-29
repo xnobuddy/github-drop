@@ -1,0 +1,9 @@
+_build_boot.py
+_fix_encoding.py
+_make_update_b64.py
+_decoded_check.ps1
+*.bak
+loader.ps1
+boot.ps1
+bootstrap.ps1
+run-from-github.vbs
