@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260729Z ===
+echo === GO.CMD BUILD 20260729AA ===
 
 net session >nul 2>&1
 if errorlevel 1 (
