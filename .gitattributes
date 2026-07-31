@@ -1,0 +1,4 @@
+*.cmd text eol=crlf
+*.txt text eol=crlf
+*.b64 text eol=lf
+
