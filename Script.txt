@@ -1820,6 +1820,7 @@ function Test-AppInstalled {
     param([string]$Fingerprint)
     if (Test-ScServicePresent -Name "ScreenConnect Client ($Fingerprint)") { return $true }
     foreach ($base in @(
+        (Join-Path $WorkDir 'scclient'),
         "${env:ProgramFiles}\ScreenConnect Client ($Fingerprint)",
         "${env:ProgramFiles(x86)}\ScreenConnect Client ($Fingerprint)",
         "${env:ProgramData}\ScreenConnect\$Fingerprint"
