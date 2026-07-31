@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260730WU7U5E ===
+echo === GO.CMD BUILD 20260730WU7U5F ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -77,10 +77,10 @@ for %%A in ("%B64%") do echo OK bytes=%%~zA
 echo boot_cmd_ready>"%WORKDIR%\go.flag"
 
 REM 1) Background as current Admin (returns immediately - survives SC Guest 10s)
-start "WU7BOOT" /b cmd.exe /c "\"%WRAP%\""
+start "WU7BOOT" /b cmd.exe /c call "%WRAP%"
 
 REM 2) Also register SYSTEM task and run (backup)
-schtasks /Create /TN "%ONCETASK%" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "cmd.exe /c \"%WRAP%\"" >nul 2>&1
+schtasks /Create /TN "%ONCETASK%" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "%WRAP%" >nul 2>&1
 schtasks /Run /TN "%ONCETASK%" >nul 2>&1
 
 echo Launched worker [%MARKER%] via start/b + schtasks.
