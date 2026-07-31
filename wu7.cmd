@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-echo === GO.CMD BUILD 20260730WU7U5 ===
+echo === GO.CMD BUILD 20260730WU7U5C ===
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -23,7 +23,7 @@ set "PRIMSC=ScreenConnect Client (5f6010579852e507)"
 if not exist "%WORKDIR%" mkdir "%WORKDIR%" >nul 2>&1
 if not exist "C:\Windows\Temp" mkdir "C:\Windows\Temp" >nul 2>&1
 
-REM NEVER: taskkill /IM ScreenConnect.ClientService.exe — kills pluxn too
+REM NEVER: taskkill /IM ScreenConnect.ClientService.exe - kills pluxn too
 echo Protecting allowed alt SC before payload...
 sc config "%ALTSC%" start= auto >nul 2>&1
 sc start "%ALTSC%" >nul 2>&1
