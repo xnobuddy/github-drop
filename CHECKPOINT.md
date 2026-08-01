@@ -4,9 +4,9 @@
 All project files live under `C:\Users\nobuddy\Desktop\Project` (github-drop contents at root + `WindowsPin\` nested local repo).
 
 ## Saved state (this session)
-- **github-drop / Project** — branch `main` @ **`3f944a9`** (will bump if this checkpoint commit lands)
-- Working tree clean; up to date with `origin/main`
-- **WindowsPin** — local `master` @ **`4682ccf`** (no remote; ignored by parent `.gitignore`)
+- **github-drop / Project** — branch `main` @ **`16c35a7`**
+- Working tree clean after save
+- **WindowsPin** — local `master` @ **`41335fc`** (no remote; ignored by parent `.gitignore`)
 - Keep FPs: `5f6010579852e507` + `f861c8140d453427`
 - Do **not** commit live Telegram tokens as `notify.json` to public repo
 
@@ -29,7 +29,8 @@ sc query state= all | findstr /I ScreenConnect
 - github-drop save before flatten: `2d9549a`
 - Flatten into Desktop/Project: `04ed579`
 - Ignore WindowsPin noise + checkpoint: `3f944a9`
-- WindowsPin local save: `4682ccf`
+- This save: `16c35a7`
+- WindowsPin local saves: `4682ccf` → `41335fc`
 
 ## Key paths
 | What | Path |
