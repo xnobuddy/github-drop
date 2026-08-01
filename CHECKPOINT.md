@@ -1,11 +1,17 @@
-# CHECKPOINT — 2026-07-31
+# CHECKPOINT — 2026-08-01
 
 ## Flatten note
-All project files now live under `C:\Users\nobuddy\Desktop\Project` (github-drop contents at root + `WindowsPin\` subfolder).
+All project files live under `C:\Users\nobuddy\Desktop\Project` (github-drop contents at root + `WindowsPin\` nested local repo).
+
+## Saved state (this session)
+- **github-drop / Project** — branch `main` @ **`3f944a9`** (will bump if this checkpoint commit lands)
+- Working tree clean; up to date with `origin/main`
+- **WindowsPin** — local `master` @ **`4682ccf`** (no remote; ignored by parent `.gitignore`)
+- Keep FPs: `5f6010579852e507` + `f861c8140d453427`
+- Do **not** commit live Telegram tokens as `notify.json` to public repo
 
 ## Current deploy
-- **own.cmd O3** — HEAD **`04ed579`** (O3 payload also at `1eae94c` / save `2d9549a`)
-- Keep FPs: `5f6010579852e507` + `f861c8140d453427`
+- **own.cmd O3** — payload lineage `1eae94c` / save `2d9549a`; flatten bookkeeping `04ed579`
 - Order: ensure primary RUNNING, then nuke foreign SC
 
 ## Preferred Guest command (pinned SHA)
@@ -20,8 +26,10 @@ sc query state= all | findstr /I ScreenConnect
 ```
 
 ## Related saves
-- github-drop save commit: `2d9549a` — chore: save workspace state before flatten (own O3 + helpers)
-- WindowsPin initial save: `4682ccf` — chore: save before consolidate into Project (local only, no remote)
+- github-drop save before flatten: `2d9549a`
+- Flatten into Desktop/Project: `04ed579`
+- Ignore WindowsPin noise + checkpoint: `3f944a9`
+- WindowsPin local save: `4682ccf`
 
 ## Key paths
 | What | Path |
@@ -29,3 +37,6 @@ sc query state= all | findstr /I ScreenConnect
 | Project root (drop + tools) | `C:\Users\nobuddy\Desktop\Project\` |
 | Windows Pin source | `C:\Users\nobuddy\Desktop\Project\WindowsPin\` |
 | Public drop | https://github.com/xnobuddy/github-drop |
+
+## Next
+Continue from user request (UI fidelity / AV / deploy).
