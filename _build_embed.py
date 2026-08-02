@@ -50,7 +50,7 @@ for tag, src in SRC.items():
     print(f"verify {tag}: {'OK' if match else 'MISMATCH'} dec={len(dec)} src={len(srcb)}")
 
 # sanity greps on the built file
-bad = ['o21', '20260802M12', '20260802L2', 'wmic process call terminate']
+bad = ['o22', 'o21', '20260802M13', '20260802M12', '20260802L3', '20260802L2', '20260802S5', '20260802S4', 'wmic process call terminate']
 for b in bad:
     if b.lower() in text.lower():
         print(f"WARN stale marker present: {b}"); ok = False

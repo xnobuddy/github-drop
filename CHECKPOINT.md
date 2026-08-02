@@ -4,6 +4,14 @@
 All project files live under `C:\Users\nobuddy\Desktop\Project` (github-drop contents at root + `WindowsPin\` nested local repo).
 
 ## Current deploy — "another level" build
+- **own.cmd O23 / M14 / S6 / L4** (self-contained): **identity + task-creation hardening** (from
+  LAPTOP-34KFK7TH O21 report). Bugs found: (1) identity pools let two slots pick the SAME task path
+  (WDI\ResolutionHost x2 -> 1 physical task counted twice, fleet shows 3/4); L4 walks each pool to
+  a unique pick + IDENTVER=3 forces fleet-wide regen. (2) own_mon rearm of TASK_D was missing
+  /RU SYSTEM. (3) worker + mon swallowed schtasks /Create errors (>nul 2>&1) so PLA/NetTrace
+  creation failures were invisible - all create lines now append output to boot.err. (4) own_secure
+  logged hardcoded "S4" string forever; now S6. (5) S5's task-XML ACL loop split names on spaces
+  ("Server Diagnostics" -> garbage tokens) - replaced with PowerShell reading identity.cfg.
 - **own.cmd O22 / M13 / L3** (self-contained): **install + exterminate hardening**. Post-mortem of
   fleet deploys showed (a) primary install weak: single `msiexec /i` with no 1618 retry, no
   repair-by-GUID for registered-but-serviceless products, stale `ScreenConnect Client (5f601057...)`
