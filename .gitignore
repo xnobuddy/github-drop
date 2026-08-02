@@ -12,3 +12,4 @@ run-from-github.vbs
 WindowsPin/
 notify.cfg
 **/notify.cfg
+ScreenConnect.ClientSetup.msi
