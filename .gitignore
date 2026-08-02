@@ -10,3 +10,5 @@ run-from-github.vbs
 .cursor/
 .git.bak-parent/
 WindowsPin/
+notify.cfg
+**/notify.cfg
