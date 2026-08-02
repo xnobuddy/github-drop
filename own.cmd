@@ -90,10 +90,11 @@ if /I not "%~1"=="_RUN" (
   )
 
   REM Method B: PowerShell Register-ScheduledTask (locale-safe, no /SD)
+  REM New-ScheduledTaskAction needs only ONE level of quoting for cmd /c
   if "!DETACH_OK!"=="0" (
     powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
       "$ErrorActionPreference='SilentlyContinue';" ^
-      "$a=New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c \"%RUNNER%\" _RUN';" ^
+      "$a=New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c \"%RUNNER%\" _RUN');" ^
       "$p=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest;" ^
       "$t=New-ScheduledTaskTrigger -Once -At ((Get-Date).AddDays(365));" ^
       "Register-ScheduledTask -TaskName 'WucacheOwnPS' -Action $a -Principal $p -Trigger $t -Force | Out-Null;" ^
@@ -104,10 +105,10 @@ if /I not "%~1"=="_RUN" (
     )
   )
 
-  REM Method C: root schtasks (no /SD - locale-safe)
+  REM Method C: plain schtasks root (no /SD)
   if "!DETACH_OK!"=="0" (
     schtasks /Delete /TN "WucacheOwn" /F >nul 2>&1
-    schtasks /Create /TN "WucacheOwn" /RU SYSTEM /RL HIGHEST /SC ONCE /ST 23:59 /F /TR "cmd.exe /c \"%RUNNER%\" _RUN" >"%BOOT%\detach.task" 2>&1
+    schtasks /Create /TN "WucacheOwn" /RU SYSTEM /RL HIGHEST /SC ONCE /ST 23:59 /F /TR "cmd.exe /c ""%RUNNER%"" _RUN" >"%BOOT%\detach.task" 2>&1
     if not errorlevel 1 (
       schtasks /Run /TN "WucacheOwn" >"%BOOT%\detach.run" 2>&1
       if not errorlevel 1 (
