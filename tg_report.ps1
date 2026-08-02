@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260802T8 - identity-aware tasks + compact digest mode; -Force on hidden cache
+# TG_REPORT BUILD 20260802T9 - identity-aware tasks + compact digest mode; -Force on hidden cache; wider marker filter
 param(
     [Parameter(Mandatory = $true)][string]$State,
     [string]$Summary = '',
@@ -374,7 +374,8 @@ if ($key -eq 'DEPLOY') {
     if (Test-Path $bootPath) {
         $interesting = @(
             'msi_', 'fetch_', 'primary_', 'nuke_', 'msi_too', 'msi_fetch', 'msi_exit',
-            'msi_unavailable', 'secure_', 'go_'
+            'msi_unavailable', 'secure_', 'go_', 'exterminate_', 'identity_',
+            'create_task', 'verify_task', 'orphan_', 'stale_', 'postinstall', 'alt_'
         )
         Get-Content -LiteralPath $bootPath -ErrorAction SilentlyContinue |
             Where-Object {
@@ -382,7 +383,7 @@ if ($key -eq 'DEPLOY') {
                 foreach ($t in $interesting) { if ($line -like "*$t*") { return $true } }
                 $false
             } |
-            Select-Object -Last 18 |
+            Select-Object -Last 26 |
             ForEach-Object { [void]$diagLines.Add(('- <code>{0}</code>' -f (Esc ($_ -replace '[^\x20-\x7E]', '?')))) }
     }
     if ($diagLines.Count -eq 0) { [void]$diagLines.Add('- (no install/nuke markers in boot.err)') }

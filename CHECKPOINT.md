@@ -1,5 +1,19 @@
 # CHECKPOINT — 2026-08-02
 
+## O26 / T9 / L6 — fleet-wide identity collapse fix (18-machine wave analysis)
+- **Root cause (proven empirically via local reproduction)**: `Initialize-Identity`'s
+  slot loop `@(@('A', $s % 8), ...)` — bare `%` inside `@()` parses as the
+  ForEach-Object ALIAS in PS 5.1, not modulo. Collection collapsed → loop never ran →
+  identity.cfg written with EMPTY TASK_A..D → entire fleet (18/18 machines in the
+  14:47 wave) fell back to identical default task names, state showed tasks=0/4.
+  Rewritten as a `$seeds` ordered hashtable with fully parenthesized modulo +
+  empty-pick fallback to Defaults. Verified: distinct seeded names per host again.
+- **TG_REPORT T9**: marker filter widened (exterminate_, identity_, create_task,
+  verify_task, orphan_, stale_, postinstall, alt_) + last 26 lines → next reports
+  show the exterminate result line (`exterminate svc=N proc=N dir=N product=N
+  rmm=N`) and identity picks as ground truth, not just install markers.
+- Worker stale `order=` log text corrected to exterminate_then_repair_then_install.
+
 ## Flatten note
 All project files live under `C:\Users\nobuddy\Desktop\Project` (github-drop contents at root + `WindowsPin\` nested local repo).
 
