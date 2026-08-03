@@ -1,5 +1,11 @@
 # CHECKPOINT — 2026-08-03
 
+## O40 / M30 / L17 — STOP Gryxa reinstall loop
+If ANY non-sevrz ScreenConnect is Running → never msiexec. FP drift while
+Running is log-only. EnsureGryxaMust has zero msiexec. 7-day reinstall cap.
+
+# CHECKPOINT — 2026-08-03
+
 ## O39 / M29 / L16 — stop Gryxa panel duplicates
 Root cause: TCP/relay false UNHEALTHY + `findstr HEALTHY` matching
 `UNHEALTHY` → msiexec /x+/i while service already Running → new panel sessions.
