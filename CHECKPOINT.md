@@ -1,5 +1,11 @@
 # CHECKPOINT — 2026-08-03
 
+## O42 / M31 / L19 — own.cmd amputated after [5b]; Gryxa absent
+O40 botched edit inlined EnsureGryxaMust + `exit /b 0` into own.cmd [5b],
+so deploy never reached [6] persist/[7] TG and Gryxa often stayed missing.
+Also 7d `gryxa_reinstall.flag` blocked reinstall even when fully absent.
+Fix: restore [6+] from O39; thin Ensure; skip rate-limit if absent; Force retry.
+
 ## O41 / M31 / L18 — exterminate was KILLING Gryxa
 Root cause of reinstall loop:
 1. `Invoke-Exterminate` treated ScreenConnect procs with null ExecutablePath
