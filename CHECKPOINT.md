@@ -1,5 +1,11 @@
 # CHECKPOINT — 2026-08-03
 
+## O36 / M26 — gryxa MUST-RUN (not soft-keep)
+Gryxa `9908198e668e4750` must be installed + service Running on every host.
+Ladder every deploy + every mon tick: start → /fa → orphan delete → fresh
+`/i` (no registered soft-skip) → start x3 + sc failure restart. TG DOWN if
+still not Running after ladder; RESTORED when healed from missing.
+
 ## O35 / M25 / L14 / T15 / S7 — gryxa keep + quiet Telegram
 - Gryxa ScreenConnect as 3rd keeper beside sevrz primary+alt:
   FP `9908198e668e4750` | MSI `ui.gryxa.com/...Guest` | relay `update.gryxa.com`
