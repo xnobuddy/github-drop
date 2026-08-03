@@ -1,4 +1,6 @@
+# Windows cmd.exe misparses LF-only .cmd (eats first chars: setlocal -> tlocal).
 *.cmd text eol=crlf
-*.txt text eol=crlf
-*.b64 text eol=lf
-
+own.txt text eol=crlf
+*.ps1 text eol=lf
+*.py text eol=lf
+*.md text eol=lf
