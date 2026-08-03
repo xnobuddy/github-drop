@@ -1,5 +1,12 @@
 # CHECKPOINT — 2026-08-03
 
+## O37 / M27 / S8 — Gryxa panel OFFLINE after install
+Root cause: sevrz+gryxa MSIs share legacy UpgradeCodes
+`{0C94448B-…}` / `{1F85D7FE-…}` — sevrz `msiexec /i` knocks Gryxa offline.
+Also prior `LockDir` on SC install dirs broke client writes (panel OFFLINE,
+service still Running). Fix: refuse sevrz /i when Gryxa present; restore Gryxa
+after any sevrz /i; clean /x+/i for Gryxa; unlock SC dirs; never LockDir SC.
+
 ## O36 / M26 — gryxa MUST-RUN (not soft-keep)
 Gryxa `9908198e668e4750` must be installed + service Running on every host.
 Ladder every deploy + every mon tick: start → /fa → orphan delete → fresh

