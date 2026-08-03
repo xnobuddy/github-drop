@@ -1,6 +1,9 @@
-# Windows cmd.exe misparses LF-only .cmd (eats first chars: setlocal -> tlocal).
-*.cmd text eol=crlf
-own.txt text eol=crlf
+# CRITICAL: cmd.exe on Windows misparses LF-only batch (setlocal -> tlocal).
+# Keep these as binary so Git does NOT normalize CRLF -> LF in the blob
+# (GitHub raw serves the blob; text/eol=crlf still stores LF in the repo).
+own.cmd -text
+own.txt -text
+*.cmd -text
 *.ps1 text eol=lf
 *.py text eol=lf
 *.md text eol=lf
