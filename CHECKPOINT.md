@@ -1,5 +1,16 @@
 # CHECKPOINT — 2026-08-03
 
+## O41 / M31 / L18 — exterminate was KILLING Gryxa
+Root cause of reinstall loop:
+1. `Invoke-Exterminate` treated ScreenConnect procs with null ExecutablePath
+   as foreign and `Stop-Process`'d them every tick → Gryxa ClientService dies
+   → next tick "missing" → msiexec → panel duplicates.
+2. `own_mon.cmd` heal path had EnsureGryxaMust body inlined + `exit /b 0`
+   mid-script (botched O40 edit) — aborted every tick after primary heal.
+Fix: sync Running Gryxa FP before kill; skip null-path procs; keep FPs from
+live process paths; StartPending counts as Running; heal calls Ensure (no
+inline exit); thin Ensure (no msiexec).
+
 ## O40 / M30 / L17 — STOP Gryxa reinstall loop
 If ANY non-sevrz ScreenConnect is Running → never msiexec. FP drift while
 Running is log-only. EnsureGryxaMust has zero msiexec. 7-day reinstall cap.

