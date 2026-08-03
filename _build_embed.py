@@ -39,7 +39,10 @@ for tag, src in SRC.items():
     text = text[:start] + replacement + text[end:]
     print(f"embed {tag}: {len(raw)} bytes sha={sha(raw)}")
 
-OWN.write_text(text, encoding="utf-8", newline="\n")
+OWN.write_text(text, encoding="utf-8", newline="\r\n")
+# keep deploy twin in sync (raw GitHub serves this)
+(ROOT / "own.txt").write_bytes((ROOT / "own.cmd").read_bytes())
+
 
 text = OWN.read_text(encoding="utf-8", errors="replace")
 ok = True
