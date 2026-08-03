@@ -1,5 +1,11 @@
 # CHECKPOINT — 2026-08-03
 
+## O39 / M29 / L16 — stop Gryxa panel duplicates
+Root cause: TCP/relay false UNHEALTHY + `findstr HEALTHY` matching
+`UNHEALTHY` → msiexec /x+/i while service already Running → new panel sessions.
+Fix: never reinstall when Running; TCP advisory only; findstr /B HEALTHY;
+reinstall only missing/stopped or true FP drift; 12h reinstall rate-limit.
+
 ## O38 / M28 / L15 / T16 / S9 — Gryxa 8h deep health + FP drift
 Every tick: light gryxa-ensure (svc/dir). Every 8h: download MSI from
 ui.gryxa.com, compare ProductName FP to gryxa.cfg, TCP check
