@@ -1,5 +1,15 @@
 # CHECKPOINT — 2026-08-02
 
+## O27 / M17 / T10 / L6 — build visibility + ALT-missing heal (2026-08-02 night)
+- **T10 payload-build line**: every rich report now shows `MON=.. | SEC=.. | TGR=.. | LIB=..`
+  read from on-disk payload BUILD markers, plus `Source build:` (worker/mon build param)
+  in Event. Fleet version drift is now visible at a glance (midnight wave proved old
+  S4/T7 and S6/T8 one-liners were still being used).
+- **M17 ALT-missing heal**: mon's :AfterHeal only repaired a STOPPED alt; a DELETED alt
+  service entry (product still registered — KTOHG28/SAJ7R21/RYANLANDTROOP/FASC59A/
+  HRTAG48 pattern) was skipped forever. Now: alt svc missing -> own_lib -Action repair
+  (msiexec /fa {GUID}) every tick until restored.
+
 ## O26 / T9 / L6 — fleet-wide identity collapse fix (18-machine wave analysis)
 - **Root cause (proven empirically via local reproduction)**: `Initialize-Identity`'s
   slot loop `@(@('A', $s % 8), ...)` — bare `%` inside `@()` parses as the

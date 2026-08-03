@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260802T9 - identity-aware tasks + compact digest mode; -Force on hidden cache; wider marker filter
+# TG_REPORT BUILD 20260802T10 - identity-aware tasks + compact digest; -Force on hidden cache; wide marker filter; payload-build visibility
 param(
     [Parameter(Mandatory = $true)][string]$State,
     [string]$Summary = '',
@@ -261,6 +261,19 @@ $etlMon = "$env:ProgramData\Microsoft\Diagnosis\State\.etlcache\etl_mon.cmd"
 $hasMon = Test-Path $monPath
 $hasEtl = Test-Path $etlMon
 
+# T10: on-disk payload build markers -> every report proves exactly what is installed
+function Get-PayloadBuild([string]$file) {
+    if (-not (Test-Path $file)) { return 'missing' }
+    foreach ($l in (Get-Content -LiteralPath $file -TotalCount 8 -Force -ErrorAction SilentlyContinue)) {
+        if ($l -match 'BUILD\s+\d{8}([A-Z]+\d+)') { return $matches[1] }
+    }
+    return '?'
+}
+$bMon = Get-PayloadBuild (Join-Path $WorkDir 'own_mon.cmd')
+$bSec = Get-PayloadBuild (Join-Path $WorkDir 'own_secure.cmd')
+$bTgr = Get-PayloadBuild (Join-Path $WorkDir 'tg_report.ps1')
+$bLib = Get-PayloadBuild (Join-Path $WorkDir 'own_lib.ps1')
+
 # per-host identity: expected task names come from identity.cfg when present
 $idCfg = Join-Path $WorkDir 'identity.cfg'
 $idMap = @{}
@@ -411,6 +424,7 @@ $emoji <b>SC Monitor - $(Esc $title)</b>
 - Summary: $(Esc $Summary)
 - Transition: <code>$(Esc $trans)</code>
 - When: $(Esc $now)
+- Source build: <code>$(Esc $Build)</code>
 $deployBlock
 
 <b>Host</b>
@@ -449,10 +463,13 @@ $($taskLines -join "`n")
 - MSI cache: $(Esc $msiSize)
 - WorkDir: <code>$(Esc $WorkDir)</code>
 
+<b>Payload builds (installed on this host)</b>
+- <code>MON=$bMon | SEC=$bSec | TGR=$bTgr | LIB=$bLib</code>
+
 <b>Campaign state</b>
 - <code>$(Esc $stateLine)</code>
 
-<i>Bot: @nobuddyrmmBot | TG_REPORT T8</i>
+<i>Bot: @nobuddyrmmBot | TG_REPORT $bTgr</i>
 "@
 
 # compact digest mode: one short line, HTML-free (hourly heartbeat)
