@@ -1,5 +1,15 @@
 # CHECKPOINT — 2026-08-03
 
+## O44 / M32 / L20 — stop Gryxa RESTORED Telegram flood
+Gryxa TG reused Primary `own_mon.state` and had no RESTORED rate-limit, so
+every tick/chain spammed "Primary RESTORED". Fix: `:TgGryxa` with its own
+`own_mon_gryxa.state` + 24h RESTORED suppress; alerts only on real recovery.
+
+## O43 / M31 / L20 — start Gryxa before deep rate-limit
+Deep mon ticks skipped start/repair and hit `reinstall_rate_limited`, leaving
+Gryxa Stopped forever. Fix: always light-start/repair first; rate-limit only
+blocks msiexec churn (never sc start).
+
 ## O42 / M31 / L19 — own.cmd amputated after [5b]; Gryxa absent
 O40 botched edit inlined EnsureGryxaMust + `exit /b 0` into own.cmd [5b],
 so deploy never reached [6] persist/[7] TG and Gryxa often stayed missing.
