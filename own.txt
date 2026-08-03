@@ -80,19 +80,9 @@ if /I not "%~1"=="_RUN" (
     del /f /q "%BOOT%\wproof" >nul 2>&1
     schtasks /Run /TN "WucacheOwn" >"%BOOT%\detach.run" 2>&1
     if not errorlevel 1 (
-      set "PROOF=0"
-      for /l %%N in (1,1,6) do (
-        if exist "%BOOT%\wproof" set "PROOF=1"
-        if not exist "%BOOT%\wproof" timeout /t 2 /nobreak >nul 2>&1
-      )
-      if "!PROOF!"=="1" (
-        set "DETACH_OK=1"
-        echo detach_via=schtasks_root>>"%LOG%"
-      ) else (
-        echo detach_a_noproof>>"%LOG%"
-        type "%BOOT%\detach.task" >>"%LOG%" 2>&1
-        type "%BOOT%\detach.run" >>"%LOG%" 2>&1
-      )
+      REM SC Guest often kills at 10s — do NOT wait 12s for proof; /Run means worker launched.
+      set "DETACH_OK=1"
+      echo detach_via=schtasks_root>>"%LOG%"
     )
   )
 
@@ -122,6 +112,7 @@ if /I not "%~1"=="_RUN" (
   if "!DETACH_OK!"=="0" (
     echo detach_via=inline_fallback>>"%LOG%"
     echo WARNING: detach APIs failed - running inline ^(Guest may kill^)
+
     call "!RUNNER!" _RUN
     exit /b !ERRORLEVEL!
   )
