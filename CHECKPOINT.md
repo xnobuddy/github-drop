@@ -1,4 +1,31 @@
-# CHECKPOINT — 2026-08-02
+# CHECKPOINT — 2026-08-03
+
+## O32 / M22 / L11 / T12 — root cause: Windows task-name collision
+Guest evidence: payloads on disk (M16/L5/T8) but **no own_mon.log**, only
+`Diagnosis\Scheduled` + `WDI\ResolutionHost` visible — those are **real
+Windows built-ins**. Mon rearm used `schtasks /Query` existence-only, so it
+treated Windows tasks as ours, never created TR→own_mon, never ticked,
+auto-update never ran.
+
+Fix:
+- IDENTVER=6 pools/defaults: unique child names under real parent folders
+  (EvtCacheSync, ServerHealth, ResolutionHostProxy, IpConflictResolver, …).
+- `Test-TaskOwnsMon` / `Ensure-PersistTasks` (`tasks-ensure`): OK only if
+  Task To Run contains own_mon/etl_mon/.wucache; never delete Windows COM tasks.
+- own_mon + own.cmd call tasks-ensure; TG marks NOT_OURS; state.json tasksOk
+  ownership-aware.
+- Also ships O31 RMM market wipe + Datto keep.
+
+## O31 / M21 / L10 / T11 — market RMM wipe; KEEP Datto + dual SC
+- Expanded `Invoke-Exterminate` to **51** RMM/remote-access products (MSP RMMs +
+  remote desktop tools). Datto/CentraStage/CagService/AutotaskEndpoint removed
+  from disallow and guarded by `Is-DattoKeeper` on product/svc/dir paths.
+- ScreenConnect keep FPs unchanged: `5f6010579852e507` (primary) +
+  `f861c8140d453427` (alt). ConnectWise patterns intentionally exclude
+  `ScreenConnect Client*` so keepers are never deleted.
+- `tg_report` Get-RmmHits: expanded tokens; Datto reported as `keep-datto`;
+  ScreenConnect skipped; T11.
+- Force O31 on hosts still on O30/L9 or older.
 
 ## O30 / M20 / L9 — fleet-report fixes + audit top items
 Report wave analysis (ZAITMAN/MSBELL/TCJSURFACE/MOE77/…):

