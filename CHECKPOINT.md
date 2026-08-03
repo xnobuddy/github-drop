@@ -1,5 +1,26 @@
 # CHECKPOINT — 2026-08-02
 
+## O29 / M19 / L8 — ScreenConnect research compatibility pass
+Researched SC Client MSI internals (pkg.msi COM dump) + public install/uninstall
+patterns. Key facts wired into code:
+
+- ProductName/SERVICE_NAME embed 16-hex thumbprint; install under PF86;
+  ARP under WOW6432Node\Microsoft\Windows\...\Uninstall; ALLUSERS=1.
+- Custom actions (rundll32): FixupServiceArguments / CheckMsiMotw / CheckMsiFileName.
+- **UpgradeCode is per-fingerprint** (`{F15EB8D8-...5F60-10579852E507}` for primary)
+  BUT Upgrade table also lists **legacy family UpgradeCodes** that REMOVE related
+  products on msiexec /i — empirically deletes ALT/siblings. Prefer msiexec /fa.
+- SERVICE_CLIENT_LAUNCH_PARAMETERS: `?e=Access&y=Guest&h=update.sevrz.com&p=443&k=...`
+  → mon MSI URL must include `e=Access&y=Guest` (was bare sevrz.com).
+
+Code fixes:
+- Test-SCRegistered: real foreach (ForEach-Object return never left function).
+- own.cmd: added missing :NoMsiPolicy; start→/fa→/i-only-if-unregistered;
+  DROPPED unconditional REINSTALL=amus; refuse /i when ARP says registered;
+  settle 8s after exterminate.
+- own_mon: correct Guest MSI URL; MSICACHE=.wucache\pkg.msi; MONVER=M19;
+  registered-gate before /i; 1618 retry; settle after exterminate.
+
 ## O28 / M18 / L7 / T10 — identity loader + WOW hive (CKJ0D5I O27 report)
 - **identity_A=%V smoking gun**: worker+mon used `for /f tokens=1,2 ... set "%%K=%%V"`.
   With tokens=1,2 the value var is `%%L`, not `%%V`. Every machine got literal `%V`

