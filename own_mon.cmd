@@ -1,7 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
 rem  OWN_MON  BUILD 20260802M32
-rem  O44: per-Gryxa state+24h RESTORED suppress (stop TG flood); no state clobber.
+rem  O45: LIB L23 Gryxa v2 rewrite (state machine, single-flight detached install; no reinstall loop).
 rem  Authorized internal deployment - lab/competition scope only.
 rem ═══════════════════════════════════════════════════════════════
 setlocal EnableDelayedExpansion
