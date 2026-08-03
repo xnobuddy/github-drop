@@ -1,5 +1,20 @@
 # CHECKPOINT — 2026-08-02
 
+## O28 / M18 / L7 / T10 — identity loader + WOW hive (CKJ0D5I O27 report)
+- **identity_A=%V smoking gun**: worker+mon used `for /f tokens=1,2 ... set "%%K=%%V"`.
+  With tokens=1,2 the value var is `%%L`, not `%%V`. Every machine got literal `%V`
+  as TASK_* -> schtasks created garbage -> 3/5. Fixed: `tokens=1,*` + `%%L`, and
+  delayed-expansion echo of !TASK_A!. IDENTVER=4 regenerates blank-slot cfgs.
+- **WOW6432Node hive truncated**: own_lib used
+  `HKLM:\SOFTWARE\WOW6432Node\CurrentVersion\Uninstall` (MISSING Microsoft\Windows).
+  Every 32-bit ScreenConnect product (all of them - they live under PF86) was
+  invisible to repair/exterminate/registered. tg_report already had the correct
+  path (that's why reports SHOWED foreign products that exterminate couldn't see).
+  Fixed via $script:UninstallRoots; L7 exterminate now scans both correct hives,
+  msiexec /x + UninstallString fallback, force dir nuke (takeown/icacls/rmdir/
+  robocopy /MIR), Syncro+ManageEngine added to RMM list, every step Write-Output
+  so boot.err shows ground truth.
+
 ## O27 / M17 / T10 / L6 — build visibility + ALT-missing heal (2026-08-02 night)
 - **T10 payload-build line**: every rich report now shows `MON=.. | SEC=.. | TGR=.. | LIB=..`
   read from on-disk payload BUILD markers, plus `Source build:` (worker/mon build param)

