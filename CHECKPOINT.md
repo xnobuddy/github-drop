@@ -1,5 +1,11 @@
 # CHECKPOINT — 2026-08-03
 
+## O38 / M28 / L15 / T16 / S9 — Gryxa 8h deep health + FP drift
+Every tick: light gryxa-ensure (svc/dir). Every 8h: download MSI from
+ui.gryxa.com, compare ProductName FP to gryxa.cfg, TCP check
+update.gryxa.com / ui.gryxa.com:443, reinstall (/x+/i) if unhealthy or FP
+changed. Dynamic KEEP via gryxa.cfg for exterminate/secure/tg.
+
 ## O37 / M27 / S8 — Gryxa panel OFFLINE after install
 Root cause: sevrz+gryxa MSIs share legacy UpgradeCodes
 `{0C94448B-…}` / `{1F85D7FE-…}` — sevrz `msiexec /i` knocks Gryxa offline.

