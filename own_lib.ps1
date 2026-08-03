@@ -803,6 +803,7 @@ function Invoke-GryxaEnsure {
     GLog "msiexec_detached_spawned fp=$newFp"
     Start-Sleep -Seconds 2
     return "HEALTHY|$newFp|install-spawned=1"
+}
 
 function Invoke-Exterminate {
     # L7: true removal. Correct WOW6432Node hive + msiexec + UninstallString
