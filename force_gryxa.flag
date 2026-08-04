@@ -1,1 +1,1 @@
-PUSH-RECONNECT 202608041603 panel-wipe diagnose: bounce Gryxa + HEAL if 1060; watcher STAYS ON; no msiexec REINSTALL
+IDLE 202608041613 M65 - reconnect push done; no more PUSH (heal rate-limit fixed; watcher stays ON)

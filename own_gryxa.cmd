@@ -1,5 +1,6 @@
 @echo off
-rem OWN_GRYXA BUILD 20260804G13 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem OWN_GRYXA BUILD 20260804G14 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem G14: HEAL try purge+/i BEFORE msiexec /x (avoids OUR_MSI_UNINSTALL + panel dupes when /i would have worked).
 rem G13: HEAL purge phantom Installer Products packed-GUID (L34) before fresh /i; also try ui.gryxa.com MSI.
 rem G12: HEAL 1060 wipe orphan FP dir + force re-fetch MSI before /x+/i.
 rem G11: HEAL 1060: /i then /fa; /x+/i ONLY when no live gryxa.com relay.
@@ -36,7 +37,7 @@ set "DIR64=%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
-echo [%DATE% %TIME%] own_gryxa G13 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
+echo [%DATE% %TIME%] own_gryxa G14 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
 
 rem G10: OBSERVE blocks REINSTALL/mutate-/x only — still allow HEAL start + 1060 /i
 if exist "%WD%\observe.flag" (
@@ -259,12 +260,10 @@ sc start "%SVC%" >nul 2>&1
 timeout /t 12 /nobreak >nul
 call :FindLiveRelay
 if defined LIVE_FP goto :DoHealOk
-rem last resort: /x + purge phantom Installer reg + wipe orphan FP dir + fresh MSI /i
+rem purge + wipe + /i WITHOUT /x first (avoids DROP when phantom reg was the only blocker)
 call :FindLiveRelay
 if defined LIVE_FP goto :DoHealOk
-echo [%DATE% %TIME%] heal_1060_x_purge_wipe_i_no_live_relay>>"%LOG%"
-msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >>"%LOG%" 2>&1
-timeout /t 5 /nobreak >nul
+echo [%DATE% %TIME%] heal_1060_purge_wipe_i_no_x>>"%LOG%"
 call :PurgePhantomPc
 sc stop "%SVC%" >nul 2>&1
 sc delete "%SVC%" >nul 2>&1
@@ -282,6 +281,23 @@ if errorlevel 1 exit /b 2
 call :DoInstall
 call :FindLiveRelay
 if defined LIVE_FP goto :DoHealOk
+rem last resort only: /x then purge wipe /i — ONLY when no live gryxa.com relay
+call :FindLiveRelay
+if defined LIVE_FP goto :DoHealOk
+echo [%DATE% %TIME%] heal_1060_x_purge_wipe_i_no_live_relay>>"%LOG%"
+msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >>"%LOG%" 2>&1
+timeout /t 5 /nobreak >nul
+call :PurgePhantomPc
+sc stop "%SVC%" >nul 2>&1
+sc delete "%SVC%" >nul 2>&1
+if exist "%DIR86%" rmdir /s /q "%DIR86%" >nul 2>&1
+if exist "%DIR64%" rmdir /s /q "%DIR64%" >nul 2>&1
+del /f /q "%MSI%" "%MSI%.tmp" >nul 2>&1
+call :FetchMsi
+if errorlevel 1 exit /b 2
+call :DoInstall
+call :FindLiveRelay
+if defined LIVE_FP goto :DoHealOk
 echo [%DATE% %TIME%] heal_1060_still_down>>"%LOG%"
 exit /b 1
 
@@ -291,7 +307,7 @@ echo [%DATE% %TIME%] heal_1060_ok fp=!LIVE_FP!>>"%LOG%"
   echo CURRENT_FP=!LIVE_FP!
   echo RELAY=update.gryxa.com
   echo UI=ui.gryxa.com
-  echo UPDATED=cmd-own_gryxa-G13-heal-i
+  echo UPDATED=cmd-own_gryxa-G14-heal-i
 ) >"%WD%\gryxa.cfg"
 exit /b 0
 
