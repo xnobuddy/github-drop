@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M49
+rem  OWN_MON  BUILD 20260804M50
+rem  M50: hash-mismatch → BUILD fallback (unstick CDN-stale main).
 rem  M49: FREEZE - no auto Gryxa msiexec from mon; start-only; manual force only.
 rem  M48: HANDS-OFF all SC interrupt — only Gryxa install-if-absent. No exterminate/sevrz /i/sc delete.
 rem  M47: HARD stop Gryxa interrupts — no raw sevrz /i; detect any non-sevrz SC; adopt live FP.
@@ -48,7 +49,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M49"
+set "MONVER=M50"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -135,6 +136,10 @@ if /I "!VRES!"=="ok" (
   set "UPD_OK=fallback"
 ) else if /I "!VRES:~0,10!"=="not-in-man" (
   set "UPD_OK=fallback"
+) else if /I "!VRES:~0,13!"=="hash-mismatch" (
+  rem M50: CDN may serve stale main while manifest is fresh — never refuse-all (that stuck fleet on M48).
+  set "UPD_OK=fallback"
+  echo update_hash_mismatch_fallback_!VRES!>>"%LOG%"
 ) else (
   echo update_refused_!VRES!>>"%LOG%"
 )
