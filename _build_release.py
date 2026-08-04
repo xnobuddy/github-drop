@@ -222,12 +222,12 @@ def reembed_own_cmd() -> None:
     # bump O build marker
     text = re.sub(
         r"REM OWN BUILD 202608\d+O\d+",
-        "REM OWN BUILD 20260804O52",
+        "REM OWN BUILD 20260804O53",
         text,
         count=1,
     )
     own.write_text(text, encoding="utf-8", newline="\n")
-    print("own.cmd embeds refreshed (O52)")
+    print("own.cmd embeds refreshed (O53)")
 
 
 def bump_force_flag() -> None:
@@ -256,20 +256,7 @@ def main() -> None:
     print("--- embed pubkey ---")
     embed_pubkey_into_lib()
     print("--- re-embed own.cmd ---")
-    # bump lib build header lightly for L40 sibling-safe + manifest
-    lib = ROOT / "own_lib.ps1"
-    lt = lib.read_text(encoding="utf-8")
-    lt = lt.replace("OWN_LIB  BUILD 20260804L39", "OWN_LIB  BUILD 20260804L40", 1)
-    if "OWN_LIB  BUILD 20260804L40" not in lt:
-        lt = re.sub(r"OWN_LIB  BUILD 202608\d+L\d+", "OWN_LIB  BUILD 20260804L40", lt, count=1)
-    lib.write_text(lt, encoding="utf-8", newline="\n")
-    mon = ROOT / "own_mon.cmd"
-    mt = mon.read_text(encoding="utf-8")
-    # keep whatever MONVER is already set by hand (M48+); only bump if still M47
-    if 'set "MONVER=M47"' in mt:
-        mt = mt.replace('set "MONVER=M47"', 'set "MONVER=M48"', 1)
-        mt = mt.replace("OWN_MON  BUILD 20260804M47", "OWN_MON  BUILD 20260804M48", 1)
-        mon.write_text(mt, encoding="utf-8", newline="\n")
+    # Do NOT rewrite OWN_LIB / MONVER here — keep hand-set L46/M49 freeze markers.
     bump_force_flag()
     reembed_own_cmd()
     print("--- signed manifest ---")

