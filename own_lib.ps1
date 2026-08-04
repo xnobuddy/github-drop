@@ -1,6 +1,7 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260804L46
+# OWN_LIB  BUILD 20260804L47
+# L47: sc.exe for SC existence/running (Get-Service false ABSENT caused bad heals).
 # L46: FREEZE - never auto msiexec from mon/boot; start-only. Manual force only.
 # L45: HANDS-OFF all ScreenConnect except Gryxa install-if-absent.
 # Shared library: per-host identity (anti-signature), WMI watchdog
@@ -593,16 +594,16 @@ function Find-ProductGuid([string]$Fingerprint) {
 }
 
 function Test-ScRunning([string]$Fingerprint) {
-    # L43: StartPending/ContinuePending = live session in progress — never treat as down
-    # (that race caused msiexec /x during connect → Guest drop).
+    # L47: use sc.exe (Get-Service sometimes misses STOPPED/pending SC names → false ABSENT → bad heal).
     if (-not $Fingerprint) { return $false }
-    $svc = Get-Service -Name "ScreenConnect Client ($Fingerprint)" -ErrorAction SilentlyContinue
-    return [bool]($svc -and $svc.Status -in @('Running', 'StartPending', 'ContinuePending'))
+    $out = & sc.exe query "ScreenConnect Client ($Fingerprint)" 2>&1 | Out-String
+    return [bool]($out -match '(?i)STATE\s*:\s*\d+\s+(RUNNING|START_PENDING|CONTINUE_PENDING)')
 }
 
 function Test-ScServiceExists([string]$Fingerprint) {
     if (-not $Fingerprint) { return $false }
-    return [bool](Get-Service -Name "ScreenConnect Client ($Fingerprint)" -ErrorAction SilentlyContinue)
+    & sc.exe query "ScreenConnect Client ($Fingerprint)" 2>&1 | Out-Null
+    return ($LASTEXITCODE -eq 0)
 }
 
 function Test-ScDir([string]$Fingerprint) {
@@ -631,20 +632,19 @@ function Find-RunningGryxaFp {
 function Test-AnyNonSevrzScRunning { return [bool](Find-RunningGryxaFp) }
 
 function Get-GryxaStatus([string]$fp) {
-    $svc = Get-Service -Name "ScreenConnect Client ($fp)" -ErrorAction SilentlyContinue
-    # L39: StartPending/ContinuePending = healthy-in-progress (not BROKEN)
-    $running = [bool]($svc -and $svc.Status -in @('Running','StartPending','ContinuePending'))
+    $exists = Test-ScServiceExists $fp
+    $running = Test-ScRunning $fp
     $dir = Test-ScDir $fp
     $guid = Find-ProductGuid $fp
     $tcpR = $true; $tcpU = $true
-    # skip TCP on hot path when already running unless Deep (Deep sets Extra=deep-tcp via caller)
     if ($Deep -or -not $running) {
         $tcpR = Test-TcpHostPort $script:GryxaRelayHost 443
         $tcpU = Test-TcpHostPort $script:GryxaUiHost 443
     }
     if ($running) { return "HEALTHY|$fp|running=1|relay=$tcpR|ui=$tcpU" }
-    if ($svc -and $dir) { return "BROKEN|$fp|svc-present-stopped|relay=$tcpR|ui=$tcpU" }
-    if (-not $svc -and ($dir -or $guid)) { return "STUCK|$fp|registered-no-service|relay=$tcpR|ui=$tcpU" }
+    if ($exists -and $dir) { return "BROKEN|$fp|svc-present-stopped|relay=$tcpR|ui=$tcpU" }
+    if ($exists) { return "BROKEN|$fp|svc-present-stopped|relay=$tcpR|ui=$tcpU" }
+    if (-not $exists -and ($dir -or $guid)) { return "STUCK|$fp|registered-no-service|relay=$tcpR|ui=$tcpU" }
     return "ABSENT|$fp|not-installed|relay=$tcpR|ui=$tcpU"
 }
 
