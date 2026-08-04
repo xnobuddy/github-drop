@@ -32,6 +32,7 @@ CORE_FILES = [
     "force_mon_update.cmd",
     "freeze_now.cmd",
     "force_update.cmd",
+    "pkg_gryxa.msi",
     "pkg.msi",
 ]
 
@@ -261,6 +262,7 @@ def main() -> None:
     write_sevrz_expected()
     write_fleet_channel()
     print("--- strip Upgrade tables ---")
+    strip_msi_upgrade(ROOT / "pkg_gryxa.msi")
     strip_msi_upgrade(ROOT / "pkg.msi")
     print("--- embed pubkey ---")
     embed_pubkey_into_lib()
