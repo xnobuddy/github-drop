@@ -1,1 +1,1 @@
-OBSERVE 202608041448 M60 - fleet observe-only: no heal/force/reinstall (prove if drops are us)
+OBSERVE 202608041603 keep watcher forever; allow PUSH-RECONNECT bounce/heal only; block REINSTALL

