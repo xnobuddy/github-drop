@@ -28,9 +28,12 @@ CORE_FILES = [
     "own_gryxa_force.cmd",
     "tg_report.ps1",
     "force_gryxa.flag",
+    "observe.flag",
     "sevrz_expected.cfg",
     "fleet_channel.cfg",
     "recover_gryxa.cmd",
+    "gryxa_diag.cmd",
+    "gryxa_watch.cmd",
     "pkg_gryxa.msi",
     "pkg.msi",
 ]
@@ -279,7 +282,7 @@ def write_fleet_channel() -> None:
         f"LIB_MIN={lib_ver}\n"
         f"GRYXA_MIN={gry_ver}\n"
         f"GIT_PIN={pin}\n"
-        "RULES=sticky-version-floor;no-heal-x;force-skip-if-healthy;no-mon-downgrade;cmd-gryxa-health;heal-only-1060;healthy-needs-gryxa.com;amsi-excl-first\n"
+        "RULES=observe-mode;sticky-version-floor;no-heal-x;force-skip-if-healthy;no-mon-downgrade;cmd-gryxa-health;heal-only-1060;healthy-needs-gryxa.com;amsi-excl-first\n"
     )
     (ROOT / "fleet_channel.cfg").write_text(text, encoding="utf-8", newline="\n")
     # keep recover_gryxa.cmd pin in sync when present
