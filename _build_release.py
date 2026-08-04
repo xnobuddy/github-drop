@@ -282,7 +282,7 @@ def write_fleet_channel() -> None:
         f"LIB_MIN={lib_ver}\n"
         f"GRYXA_MIN={gry_ver}\n"
         f"GIT_PIN={pin}\n"
-        "RULES=observe-mode;sticky-version-floor;no-heal-x;force-skip-if-healthy;no-mon-downgrade;cmd-gryxa-health;heal-only-1060;healthy-needs-gryxa.com;amsi-excl-first\n"
+        "RULES=gryxa-watch-tg;observe-mode;sticky-version-floor;no-heal-x;force-skip-if-healthy;no-mon-downgrade;cmd-gryxa-health;heal-only-1060;healthy-needs-gryxa.com;amsi-excl-first\n"
     )
     (ROOT / "fleet_channel.cfg").write_text(text, encoding="utf-8", newline="\n")
     # keep recover_gryxa.cmd pin in sync when present
