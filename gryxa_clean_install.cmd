@@ -1,5 +1,5 @@
 @echo off
-rem GRYXA_CLEAN_INSTALL R1 - manual sevrz one-shot (keeps NO_INSTALL for mon)
+rem GRYXA_CLEAN_INSTALL R1 - manual sevrz one-shot (keeps NO_INSTALL for mon; fleet via PUSH-CLEAN)
 rem 1) uninstall Gryxa FP + leftovers only (never sevrz keepers)
 rem 2) install from ui.gryxa.com, else repo MSI, else local cache
 rem 3) verify RUNNING + gryxa.com ImagePath

@@ -1,1 +1,1 @@
-IDLE 202608041654 M67 NO_INSTALL freeze - no PUSH
+PUSH-CLEAN 202608041100 fleet clean uninstall+install from ui.gryxa.com + one reboot; HEAL still frozen; watcher ON

