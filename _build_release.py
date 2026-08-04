@@ -25,6 +25,7 @@ CORE_FILES = [
     "own_mon.cmd",
     "own_secure.cmd",
     "own_gryxa.cmd",
+    "own_gryxa_force.cmd",
     "tg_report.ps1",
     "force_gryxa.flag",
     "sevrz_expected.cfg",
