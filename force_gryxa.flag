@@ -1,1 +1,1 @@
-PUSH 202608041340 M51 F4 G5 panel-wipe REINSTALL now
+IDLE 202608041440 M59 freeze — no PUSH (was causing drop+REINSTALL loops)

