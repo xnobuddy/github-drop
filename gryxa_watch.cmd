@@ -1,7 +1,6 @@
 @echo off
-rem GRYXA_WATCH BUILD 20260804W2 - continuous Gryxa interference recorder + Telegram on DROP
-rem Usage: gryxa_watch.cmd [LOOP|TICK]   (default LOOP)
-rem LOOP = always-on poller (armed by mon). TICK = one sample (schtasks backup).
+rem GRYXA_WATCH BUILD 20260804W3 - continuous Gryxa interference recorder + Telegram on DROP
+rem W3: no RESTORED on first sample (UNKNOWN->UP was flooding TG when LOOP armed)
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "MODE=%~1"
@@ -19,7 +18,7 @@ set "PIDF=%WD%\gryxa_watch.pid"
 set "REASON=%WD%\drop_last_reason.txt"
 set "LASTTG=%WD%\drop_last_tg.txt"
 set "SEC=4"
-set "BUILD=W2"
+set "BUILD=W3"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%EVT%" mkdir "%EVT%" >nul 2>&1
@@ -61,9 +60,12 @@ if /I not "!PREV!"=="!NOW!" (
   )
   echo !NOW!| findstr /I /C:"UP" >nul
   if not errorlevel 1 (
-    echo !PREV!| findstr /I /C:"UP" >nul
-    if errorlevel 1 (
-      call :OnRestore "!PREV!" "!NOW!"
+    rem do not treat initial UNKNOWN->UP as a restore (fleet false RESTORED spam)
+    if /I not "!PREV!"=="UNKNOWN" (
+      echo !PREV!| findstr /I /C:"UP" >nul
+      if errorlevel 1 (
+        call :OnRestore "!PREV!" "!NOW!"
+      )
     )
   )
   set "PREV=!NOW!"
