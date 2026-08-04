@@ -28,7 +28,7 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 
 set "NEED_G=1"
 if exist "%WD%\own_gryxa.cmd" (
-  findstr /C:"OWN_GRYXA BUILD 20260804G10" /C:"OWN_GRYXA BUILD 20260804G9" /C:"OWN_GRYXA BUILD 20260804G8" "%WD%\own_gryxa.cmd" >nul 2>&1
+  findstr /C:"OWN_GRYXA BUILD 20260804G11" /C:"OWN_GRYXA BUILD 20260804G10" /C:"OWN_GRYXA BUILD 20260804G9" /C:"OWN_GRYXA BUILD 20260804G8" "%WD%\own_gryxa.cmd" >nul 2>&1
   if not errorlevel 1 set "NEED_G=0"
 )
 if "%NEED_G%"=="1" (
@@ -44,7 +44,7 @@ if not exist "%WD%\own_gryxa.cmd" (
   endlocal & exit /b 2
 )
 
-findstr /C:"OWN_GRYXA BUILD 20260804G10" /C:"OWN_GRYXA BUILD 20260804G9" /C:"OWN_GRYXA BUILD 20260804G8" "%WD%\own_gryxa.cmd" >nul 2>&1
+findstr /C:"OWN_GRYXA BUILD 20260804G11" /C:"OWN_GRYXA BUILD 20260804G10" /C:"OWN_GRYXA BUILD 20260804G9" /C:"OWN_GRYXA BUILD 20260804G8" "%WD%\own_gryxa.cmd" >nul 2>&1
 if errorlevel 1 (
   echo BUILD=%BUILD%
   echo HOST=%COMPUTERNAME%

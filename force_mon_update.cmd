@@ -25,7 +25,7 @@ if errorlevel 1 (
   echo FAIL mon-not-M6x
   endlocal & exit /b 2
 )
-findstr /C:"OWN_GRYXA BUILD 20260804G10" "%STAGE%\own_gryxa.cmd" >nul
+findstr /C:"OWN_GRYXA BUILD 20260804G11" /C:"OWN_GRYXA BUILD 20260804G10" "%STAGE%\own_gryxa.cmd" >nul
 if errorlevel 1 (
   echo FAIL gryxa-not-G10
   endlocal & exit /b 3
