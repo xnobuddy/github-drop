@@ -273,7 +273,7 @@ def write_fleet_channel() -> None:
     except OSError:
         pass
     text = (
-        "# fleet_channel.cfg — single source of truth for fleet update floor + pin\n"
+        "# fleet_channel.cfg - fleet update floor + pin\n"
         "# Hosts refuse mon older than MON_MIN. Prefer GIT_PIN raw URLs over stale CDN main.\n"
         f"MON_MIN={mon_ver}\n"
         f"LIB_MIN={lib_ver}\n"
@@ -281,7 +281,7 @@ def write_fleet_channel() -> None:
         f"GIT_PIN={pin}\n"
         "RULES=no-mon-downgrade;cmd-gryxa-health;heal-only-1060;healthy-needs-gryxa.com;amsi-excl-first\n"
     )
-    (ROOT / "fleet_channel.cfg").write_text(text, encoding="ascii", newline="\n")
+    (ROOT / "fleet_channel.cfg").write_text(text, encoding="utf-8", newline="\n")
     # keep recover_gryxa.cmd pin in sync when present
     rec = ROOT / "recover_gryxa.cmd"
     if rec.exists() and pin != "main":
