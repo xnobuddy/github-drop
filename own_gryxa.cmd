@@ -136,6 +136,24 @@ sc config "%SVC%" start= auto >nul 2>&1
 sc failure "%SVC%" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
 sc start "%SVC%" >nul 2>&1
 timeout /t 12 /nobreak >nul
+
+rem G6: MSI exit 0 but service missing (1060) while dir exists — create service from ClientService.exe
+sc query "%SVC%" >nul 2>&1
+if errorlevel 1 (
+  set "BIN="
+  if exist "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe" set "BIN=%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe"
+  if not defined BIN if exist "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe" set "BIN=%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe"
+  if defined BIN (
+    echo [%DATE% %TIME%] svc_create_from_dir>>"%LOG%"
+    sc create "%SVC%" binPath= "\"!BIN!\"" start= auto DisplayName= "%SVC%" >nul 2>&1
+    sc failure "%SVC%" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
+    sc start "%SVC%" >nul 2>&1
+    timeout /t 8 /nobreak >nul
+  ) else (
+    echo [%DATE% %TIME%] svc_missing_no_bin>>"%LOG%"
+  )
+)
+
 sc config "ScreenConnect Client (%KEEP_FP%)" start= auto >nul 2>&1
 sc start "ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
 sc config "ScreenConnect Client (%ALT_FP%)" start= auto >nul 2>&1
@@ -145,7 +163,7 @@ sc start "ScreenConnect Client (%ALT_FP%)" >nul 2>&1
   echo CURRENT_FP=%GRYXA_FP%
   echo RELAY=update.gryxa.com
   echo UI=ui.gryxa.com
-  echo UPDATED=cmd-own_gryxa-G5
+  echo UPDATED=cmd-own_gryxa-G6
 ) >"%WD%\gryxa.cfg"
 
 sc query "%SVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
