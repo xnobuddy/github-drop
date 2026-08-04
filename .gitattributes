@@ -9,3 +9,4 @@ own.txt -text
 *.md text eol=lf
 zerocool.version text eol=lf
 winrtcs.version text eol=lf
+*.msi -text

