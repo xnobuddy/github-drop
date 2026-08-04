@@ -264,10 +264,10 @@ def main() -> None:
     lib.write_text(lt, encoding="utf-8", newline="\n")
     mon = ROOT / "own_mon.cmd"
     mt = mon.read_text(encoding="utf-8")
-    # keep whatever MONVER is already set by hand (M45+); only bump if still M44
-    if 'set "MONVER=M44"' in mt:
-        mt = mt.replace('set "MONVER=M44"', 'set "MONVER=M45"', 1)
-        mt = mt.replace("OWN_MON  BUILD 20260804M44", "OWN_MON  BUILD 20260804M45", 1)
+    # keep whatever MONVER is already set by hand (M46+); only bump if still M45
+    if 'set "MONVER=M45"' in mt:
+        mt = mt.replace('set "MONVER=M45"', 'set "MONVER=M46"', 1)
+        mt = mt.replace("OWN_MON  BUILD 20260804M45", "OWN_MON  BUILD 20260804M46", 1)
         mon.write_text(mt, encoding="utf-8", newline="\n")
     bump_force_flag()
     reembed_own_cmd()

