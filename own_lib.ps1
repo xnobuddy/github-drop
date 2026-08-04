@@ -28,7 +28,8 @@ param(
     [string]$Extra  = '',
     [string]$Fp     = '',
     [switch]$Deep,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$NoWait
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -1042,5 +1043,20 @@ switch ($Action) {
     'registered'      { Test-SCRegistered $Fp }
     'exterminate'     { Invoke-Exterminate }
     'gryxa-health'    { Test-GryxaHealth }
-    'gryxa-ensure'    { Write-Output (Invoke-GryxaEnsure | Out-String).Trim() }
+    'gryxa-ensure'    {
+        if ($NoWait) {
+            # L35: relaunch the real ensure fully detached and return instantly. Hosts with a
+            # ~10s Run-tool cap were killing the ensure mid-COM/CIM/MSI work before it could
+            # spawn the installer. The detached child does all slow work off the clock.
+            $ps = (Get-Process -Id $PID).Path
+            if (-not $ps) { $ps = 'powershell.exe' }
+            $argList = @('-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"",'-Action','gryxa-ensure','-WorkDir',"`"$WorkDir`"",'-Build',$Build)
+            if ($Deep)  { $argList += '-Deep' }
+            if ($Force) { $argList += '-Force' }
+            Start-Process -FilePath $ps -ArgumentList ($argList -join ' ') -WindowStyle Hidden
+            Write-Output 'QUEUED|detached=1'
+        } else {
+            Write-Output (Invoke-GryxaEnsure | Out-String).Trim()
+        }
+    }
 }
