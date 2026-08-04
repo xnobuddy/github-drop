@@ -35,7 +35,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M38"
+set "MONVER=M40"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -546,7 +546,10 @@ call :RestoreAlt
 rem O37: sevrz /i shares legacy UpgradeCodes with gryxa — always re-ensure Gryxa after
 call :EnsureGryxaMust
 exit /b 0
+
+:RepairRegistered
 rem %1=fingerprint - service deleted but product registered: repair by GUID.
+rem M40: label was amputated (body sat after InstallMsi exit /b) so primary heal never ran.
 sc query "ScreenConnect Client (%~1)" >nul 2>&1
 if not errorlevel 1 exit /b 0
 if not exist "%WD%\own_lib.ps1" exit /b 1
