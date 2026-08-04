@@ -22,7 +22,7 @@ findstr /C:"OWN_GRYXA_FORCE BUILD" "%WD%\own_gryxa_force.cmd" >>"%OUT%" 2>nul
 
 >>"%OUT%" echo.
 >>"%OUT%" echo --- all ScreenConnect services ---
-sc query state= all | findstr /I "ScreenConnect SERVICE_NAME STATE" >>"%OUT%" 2>nul
+sc query state= all | findstr /C:"ScreenConnect Client" >>"%OUT%" 2>nul
 
 >>"%OUT%" echo.
 >>"%OUT%" echo --- gryxa svc detail ---
