@@ -1,6 +1,7 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260804L47
+# OWN_LIB  BUILD 20260804L48
+# L48: HEALTHY requires gryxa.com ImagePath (bare sc create was false HEALTHY → HEAL /x killed Guests).
 # L47: sc.exe for SC existence/running (Get-Service false ABSENT caused bad heals).
 # L46: FREEZE - never auto msiexec from mon/boot; start-only. Manual force only.
 # L45: HANDS-OFF all ScreenConnect except Gryxa install-if-absent.
@@ -593,8 +594,21 @@ function Find-ProductGuid([string]$Fingerprint) {
     return $null
 }
 
+function Get-ScImagePath([string]$Fingerprint) {
+    if (-not $Fingerprint) { return '' }
+    $p = "HKLM:\SYSTEM\CurrentControlSet\Services\ScreenConnect Client ($Fingerprint)"
+    try {
+        return [string](Get-ItemProperty -LiteralPath $p -Name ImagePath -ErrorAction Stop).ImagePath
+    } catch { return '' }
+}
+
+function Test-ScHasGryxaRelay([string]$Fingerprint) {
+    $img = Get-ScImagePath $Fingerprint
+    return [bool]($img -match '(?i)gryxa\.com')
+}
+
 function Test-ScRunning([string]$Fingerprint) {
-    # L47: use sc.exe (Get-Service sometimes misses STOPPED/pending SC names → false ABSENT → bad heal).
+    # L48: sc.exe + require running state
     if (-not $Fingerprint) { return $false }
     $out = & sc.exe query "ScreenConnect Client ($Fingerprint)" 2>&1 | Out-String
     return [bool]($out -match '(?i)STATE\s*:\s*\d+\s+(RUNNING|START_PENDING|CONTINUE_PENDING)')
@@ -614,16 +628,20 @@ function Test-ScDir([string]$Fingerprint) {
 }
 
 function Find-RunningGryxaFp {
-    # L46: ANY non-sevrz Running/Pending SC is live - never install over it.
+    # L48: ONLY non-sevrz Running/Pending WITH gryxa.com ImagePath (bare sc create is NOT healthy).
     $cfg = Get-GryxaFp
-    if ($cfg -and (Test-ScRunning $cfg) -and ($cfg -notin $script:SevrzKeep)) { return $cfg.ToLower() }
-    if ($script:GryxaExpectedFp -and (Test-ScRunning $script:GryxaExpectedFp)) { return $script:GryxaExpectedFp.ToLower() }
+    if ($cfg -and (Test-ScRunning $cfg) -and (Test-ScHasGryxaRelay $cfg) -and ($cfg -notin $script:SevrzKeep)) {
+        return $cfg.ToLower()
+    }
+    if ($script:GryxaExpectedFp -and (Test-ScRunning $script:GryxaExpectedFp) -and (Test-ScHasGryxaRelay $script:GryxaExpectedFp)) {
+        return $script:GryxaExpectedFp.ToLower()
+    }
     foreach ($svc in (Get-Service -Name 'ScreenConnect Client*' -ErrorAction SilentlyContinue)) {
         if ($svc.Status -notin @('Running','StartPending','ContinuePending')) { continue }
         if ($svc.Name -match '\(([0-9a-f]{16})\)') {
             $fp = $matches[1].ToLower()
             if ($fp -in $script:SevrzKeep) { continue }
-            return $fp
+            if (Test-ScHasGryxaRelay $fp) { return $fp }
         }
     }
     return $null
@@ -634,15 +652,18 @@ function Test-AnyNonSevrzScRunning { return [bool](Find-RunningGryxaFp) }
 function Get-GryxaStatus([string]$fp) {
     $exists = Test-ScServiceExists $fp
     $running = Test-ScRunning $fp
+    $relay = Test-ScHasGryxaRelay $fp
     $dir = Test-ScDir $fp
     $guid = Find-ProductGuid $fp
     $tcpR = $true; $tcpU = $true
-    if ($Deep -or -not $running) {
+    if ($Deep -or -not ($running -and $relay)) {
         $tcpR = Test-TcpHostPort $script:GryxaRelayHost 443
         $tcpU = Test-TcpHostPort $script:GryxaUiHost 443
     }
-    if ($running) { return "HEALTHY|$fp|running=1|relay=$tcpR|ui=$tcpU" }
-    if ($exists -and $dir) { return "BROKEN|$fp|svc-present-stopped|relay=$tcpR|ui=$tcpU" }
+    # L48: HEALTHY only when running AND ImagePath has gryxa.com
+    if ($running -and $relay) { return "HEALTHY|$fp|running=1|relay=$tcpR|ui=$tcpU" }
+    if ($running -and -not $relay) { return "BROKEN|$fp|running-no-relay|relay=$tcpR|ui=$tcpU" }
+    if ($exists -and $relay) { return "BROKEN|$fp|svc-present-stopped|relay=$tcpR|ui=$tcpU" }
     if ($exists) { return "BROKEN|$fp|svc-present-stopped|relay=$tcpR|ui=$tcpU" }
     if (-not $exists -and ($dir -or $guid)) { return "STUCK|$fp|registered-no-service|relay=$tcpR|ui=$tcpU" }
     return "ABSENT|$fp|not-installed|relay=$tcpR|ui=$tcpU"

