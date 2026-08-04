@@ -18,3 +18,14 @@ pkg_gryxa_dl.msi
 _parse*.ps1
 _parse_out.txt
 _commitmsg.txt
+
+# local scratch
+_bump_*.py
+_check_remote.py
+_dbg_mon.py
+_fix_*.py
+_patch_*.py
+_tmp_*
+_verify_*.py
+._parse.ps1
+
