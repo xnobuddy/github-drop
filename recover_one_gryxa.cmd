@@ -4,7 +4,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "WD=C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache"
 set "STAGE=%SystemRoot%\Temp\.upd"
 set "CURL=%SystemRoot%\System32\curl.exe"
-set "PIN=main"
+set "PIN=e578c92"
 set "FP=36e506ff016b2151"
 set "KEEP=5f6010579852e507"
 set "ALT=f861c8140d453427"
