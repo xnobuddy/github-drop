@@ -32,6 +32,7 @@ CORE_FILES = [
     "sevrz_expected.cfg",
     "fleet_channel.cfg",
     "recover_gryxa.cmd",
+    "recover_one_gryxa.cmd",
     "gryxa_diag.cmd",
     "gryxa_diag_fast.cmd",
     "gryxa_watch.cmd",

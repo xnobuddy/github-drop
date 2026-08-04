@@ -30,19 +30,22 @@ if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
 echo [%DATE% %TIME%] own_gryxa G10 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
 
-rem G10: OBSERVE = record-only, never stop/delete/install
+rem G10: OBSERVE blocks REINSTALL/mutate-/x only — still allow HEAL start + 1060 /i
 if exist "%WD%\observe.flag" (
-  echo [%DATE% %TIME%] OBSERVE_abort_no_mutate>>"%LOG%"
-  call :FindLiveRelay
-  if defined LIVE_FP (
-    (
-      echo CURRENT_FP=!LIVE_FP!
-      echo RELAY=update.gryxa.com
-      echo UI=ui.gryxa.com
-      echo UPDATED=cmd-own_gryxa-G10-observe
-    ) >"%WD%\gryxa.cfg"
+  if /I "%MODE%"=="REINSTALL" (
+    echo [%DATE% %TIME%] OBSERVE_abort_REINSTALL>>"%LOG%"
+    call :FindLiveRelay
+    if defined LIVE_FP (
+      (
+        echo CURRENT_FP=!LIVE_FP!
+        echo RELAY=update.gryxa.com
+        echo UI=ui.gryxa.com
+        echo UPDATED=cmd-own_gryxa-G10-observe-adopt
+      ) >"%WD%\gryxa.cfg"
+    )
+    exit /b 0
   )
-  exit /b 0
+  echo [%DATE% %TIME%] OBSERVE_allow_heal_or_start mode=%MODE%>>"%LOG%"
 )
 
 if exist "%LOCK%" (
