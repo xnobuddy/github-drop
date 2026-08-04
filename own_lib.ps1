@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
 # OWN_LIB  BUILD 20260804L50
-# L50: Gryxa stack removed — sevrz-only keepers/tasks/state/MSI helpers.
+# L50: sevrz-only keepers/tasks/state/MSI helpers.
 # Shared library: per-host identity, WMI watchdog, campaign state, SC repair.
 # Authorized internal deployment - lab/competition scope only.
 # ═══════════════════════════════════════════════════════════════

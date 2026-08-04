@@ -1,7 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
 rem  OWN_MON  BUILD 20260804M70
-rem  M70: Gryxa stack removed — sevrz-only monitor/heal/TG/self-update.
+rem  M70: sevrz-only monitor/heal/TG/self-update.
 rem  M69: GIT_PIN=main always pulls tip every tick.
 rem  M58: sticky version_floor.cfg — never apply older mon/lib.
 rem  M57: fleet_channel.cfg pin+floor; no downgrade.
