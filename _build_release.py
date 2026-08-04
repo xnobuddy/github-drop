@@ -27,6 +27,8 @@ CORE_FILES = [
     "tg_report.ps1",
     "sevrz_expected.cfg",
     "fleet_channel.cfg",
+    "fleet_campaign.cfg",
+    "campaign_clean_gryxa.cmd",
     "force_mon_update.cmd",
     "freeze_now.cmd",
     "force_update.cmd",
