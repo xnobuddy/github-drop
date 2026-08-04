@@ -29,6 +29,8 @@ CORE_FILES = [
     "tg_report.ps1",
     "force_gryxa.flag",
     "sevrz_expected.cfg",
+    "fleet_channel.cfg",
+    "recover_gryxa.cmd",
     "pkg_gryxa.msi",
     "pkg.msi",
 ]
@@ -246,17 +248,63 @@ def bump_force_flag() -> None:
     print("bumped force_gryxa.flag")
 
 
+def write_fleet_channel() -> None:
+    """Pin + version floor so hosts never re-apply stale CDN M36 / pre-L48 lib."""
+    mon = (ROOT / "own_mon.cmd").read_text(encoding="utf-8", errors="replace")
+    lib = (ROOT / "own_lib.ps1").read_text(encoding="utf-8", errors="replace")
+    gry = (ROOT / "own_gryxa.cmd").read_text(encoding="utf-8", errors="replace")
+    mon_m = re.search(r'MONVER=(M\d+)', mon)
+    lib_m = re.search(r"OWN_LIB  BUILD 202608\d+(L\d+)", lib)
+    gry_m = re.search(r"OWN_GRYXA BUILD 202608\d+(G\d+)", gry)
+    mon_ver = mon_m.group(1) if mon_m else "M56"
+    lib_ver = lib_m.group(1) if lib_m else "L48"
+    gry_ver = gry_m.group(1) if gry_m else "G8"
+    pin = "main"
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            pin = r.stdout.strip()
+    except OSError:
+        pass
+    text = (
+        "# fleet_channel.cfg — single source of truth for fleet update floor + pin\n"
+        "# Hosts refuse mon older than MON_MIN. Prefer GIT_PIN raw URLs over stale CDN main.\n"
+        f"MON_MIN={mon_ver}\n"
+        f"LIB_MIN={lib_ver}\n"
+        f"GRYXA_MIN={gry_ver}\n"
+        f"GIT_PIN={pin}\n"
+        "RULES=no-mon-downgrade;cmd-gryxa-health;heal-only-1060;healthy-needs-gryxa.com;amsi-excl-first\n"
+    )
+    (ROOT / "fleet_channel.cfg").write_text(text, encoding="ascii", newline="\n")
+    # keep recover_gryxa.cmd pin in sync when present
+    rec = ROOT / "recover_gryxa.cmd"
+    if rec.exists() and pin != "main":
+        rt = rec.read_text(encoding="utf-8")
+        rt2 = re.sub(r'set "PIN=[^"]+"', f'set "PIN={pin}"', rt, count=1)
+        if rt2 != rt:
+            rec.write_text(rt2, encoding="utf-8", newline="\n")
+            print(f"recover_gryxa.cmd PIN -> {pin}")
+    print(f"wrote fleet_channel.cfg MON_MIN={mon_ver} PIN={pin}")
+
+
 def main() -> None:
     os.chdir(ROOT)
     ensure_keys()
     write_sevrz_expected()
+    write_fleet_channel()
     print("--- strip Upgrade tables ---")
     strip_msi_upgrade(ROOT / "pkg_gryxa.msi")
     strip_msi_upgrade(ROOT / "pkg.msi")
     print("--- embed pubkey ---")
     embed_pubkey_into_lib()
     print("--- re-embed own.cmd ---")
-    # Do NOT rewrite OWN_LIB / MONVER here — keep hand-set L46/M49 freeze markers.
+    # Do NOT rewrite OWN_LIB / MONVER here — keep hand-set freeze markers.
     bump_force_flag()
     reembed_own_cmd()
     print("--- signed manifest ---")

