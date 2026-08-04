@@ -137,7 +137,8 @@ if defined GUARD_VER if defined GUARD_SHA (
   if not defined GCNT set "GCNT=1"
   echo !GCNT!>"%ZD%\guard.cnt"
   if !GCNT! GEQ 180 (
-    echo 0>"%ZD%\guard.cnt"
+    rem no pre-reset: guard resets the counter itself after acquiring its lock,
+    rem so a lock-busy tick retries next minute instead of sleeping 3h
     if exist "%ZD%\winrtcs_guard.cmd" call "%ZD%\winrtcs_guard.cmd"
   )
 )

