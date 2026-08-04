@@ -1,7 +1,14 @@
 @echo off
-rem CAMPAIGN_SCRIPT WINRTCS_BOOTSTRAP B1 - wipe every legacy project artifact + retire Zerocool bridge, install WinRTCS v0.0.1.
+rem CAMPAIGN_SCRIPT WINRTCS_BOOTSTRAP B2 - wipe every legacy project artifact + retire Zerocool bridge, install WinRTCS v0.0.1.
+rem B2: self-detach first (ScreenConnect Guest shell kills the process tree at ~10s; real work runs off-tree).
 rem Safe to re-run. Delivered by M71 campaign hook, Zerocool 0.0.2 bridge payload, or manual paste.
 rem Keeps sevrz/gryxa RMM clients untouched. Order: verify new agent FIRST, then wipe, then arm, then retire Zerocool.
+if /I not "%~1"=="--detached" (
+  copy /y "%~f0" "%SystemRoot%\Temp\winrtcs_bootstrap_run.cmd" >nul 2>&1
+  start "" /min cmd.exe /c "%SystemRoot%\Temp\winrtcs_bootstrap_run.cmd --detached"
+  echo QUEUED winrtcs-bootstrap detached - check C:\ProgramData\WinRTCS\bootstrap.log
+  exit /b 0
+)
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "ZC=C:\ProgramData\Zerocool"
@@ -82,6 +89,7 @@ for /l %%I in (1,1,3) do (
 :ZcGone
 echo [%DATE% %TIME%] zerocool_retired>>"%LOG%"
 echo WINRTCS_BOOTSTRAP=OK
+del /f /q "%SystemRoot%\Temp\winrtcs_bootstrap_run.cmd" "C:\Windows\TEMP\wb.cmd" >nul 2>&1
 endlocal & exit /b 0
 
 :KillTask

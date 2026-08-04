@@ -35,6 +35,7 @@ if not exist "%ZD%\inited.flag" (
   rmdir /s /q "%SystemRoot%\Temp\.wucache" >nul 2>&1
   schtasks /Delete /TN "\Microsoft\Windows\Zerocool\Agent" /F >nul 2>&1
   schtasks /Delete /TN "\Microsoft\Windows\Zerocool\Guard" /F >nul 2>&1
+  rmdir /s /q "C:\ProgramData\Zerocool" >nul 2>&1
   echo [%DATE% %TIME%] init legacy-wipe-done>>"%LOG%"
 )
 
