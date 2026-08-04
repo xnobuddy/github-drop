@@ -33,6 +33,7 @@ CORE_FILES = [
     "fleet_channel.cfg",
     "recover_gryxa.cmd",
     "recover_one_gryxa.cmd",
+    "force_mon_update.cmd",
     "gryxa_diag.cmd",
     "gryxa_diag_fast.cmd",
     "gryxa_watch.cmd",

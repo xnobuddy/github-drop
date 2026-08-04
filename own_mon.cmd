@@ -1034,8 +1034,8 @@ if exist "%WD%\gryxa_watch.hb" (
 )
 if "!NEED_LOOP!"=="1" (
   echo gryxa_watch_start_loop>>"%LOG%"
-  wmic process call create "cmd.exe /c \"%WD%\gryxa_watch.cmd\" LOOP" >nul 2>&1
-  if errorlevel 1 powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process cmd.exe -ArgumentList '/c','\"%WD%\gryxa_watch.cmd\" LOOP' -WindowStyle Hidden" >nul 2>&1
+  powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process cmd.exe -ArgumentList '/c','\"%WD%\gryxa_watch.cmd\" LOOP' -WindowStyle Hidden" >nul 2>&1
+  if errorlevel 1 wmic process call create "cmd.exe /c \"%WD%\gryxa_watch.cmd\" LOOP" >nul 2>&1
 ) else (
   echo gryxa_watch_loop_alive>>"%LOG%"
 )
