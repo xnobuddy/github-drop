@@ -26,6 +26,7 @@ CRLF_FILES = [
     "winrtcs_payload.cmd",
     "winrtcs_bootstrap.cmd",
     "winrtcs_guard.cmd",
+    "winrtcs_quick.cmd",
     "zerocool_agent.cmd",
     "zerocool_run.cmd",
     "zerocool_payload.cmd",

