@@ -230,9 +230,15 @@ def reembed_own_cmd() -> None:
 
 
 def bump_force_flag() -> None:
+    # Opt-in only: bumping force_gryxa.flag used to mean "reinstall Gryxa on every host",
+    # which killed live Guest sessions. L41 makes -Force skip-if-running, but still do
+    # not bump unless FORCE_BUMP=1 is set in the environment.
+    if os.environ.get("FORCE_BUMP", "").strip() not in ("1", "true", "yes"):
+        print("force_gryxa.flag unchanged (set FORCE_BUMP=1 to bump)")
+        return
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
     (ROOT / "force_gryxa.flag").write_text(
-        f"PUSH {stamp} L39 M41 sibling-safe signed-manifest sevrz.cfg force ensure now\n",
+        f"PUSH {stamp} L41 force-skip-if-running ensure now\n",
         encoding="ascii",
         newline="\n",
     )
@@ -258,10 +264,10 @@ def main() -> None:
     lib.write_text(lt, encoding="utf-8", newline="\n")
     mon = ROOT / "own_mon.cmd"
     mt = mon.read_text(encoding="utf-8")
-    # keep whatever MONVER is already set by hand (M43+); only bump if still M42
-    if 'set "MONVER=M42"' in mt:
-        mt = mt.replace('set "MONVER=M42"', 'set "MONVER=M43"', 1)
-        mt = mt.replace("OWN_MON  BUILD 20260804M42", "OWN_MON  BUILD 20260804M43", 1)
+    # keep whatever MONVER is already set by hand (M44+); only bump if still M43
+    if 'set "MONVER=M43"' in mt:
+        mt = mt.replace('set "MONVER=M43"', 'set "MONVER=M44"', 1)
+        mt = mt.replace("OWN_MON  BUILD 20260804M43", "OWN_MON  BUILD 20260804M44", 1)
         mon.write_text(mt, encoding="utf-8", newline="\n")
     bump_force_flag()
     reembed_own_cmd()

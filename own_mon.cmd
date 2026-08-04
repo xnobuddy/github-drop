@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M43
+rem  OWN_MON  BUILD 20260804M44
+rem  M44: force_gryxa.flag must NOT /x live Gryxa (L41 force-skip-if-running).
 rem  M43: AMSI-proof Gryxa fallback via own_gryxa.cmd (pure msiexec) when PS blocked/missing.
 rem  M42: signed manifest; sevrz.cfg; sibling-safe sevrz /i.
 rem  Authorized internal deployment - lab/competition scope only.
@@ -42,7 +43,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M43"
+set "MONVER=M44"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
