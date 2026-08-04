@@ -24,6 +24,7 @@ CORE_FILES = [
     "own_lib.ps1",
     "own_mon.cmd",
     "own_secure.cmd",
+    "own_gryxa.cmd",
     "tg_report.ps1",
     "force_gryxa.flag",
     "sevrz_expected.cfg",
@@ -149,8 +150,10 @@ def embed_pubkey_into_lib() -> None:
     pub = PUB_XML.read_text(encoding="utf-8").strip()
     lib = ROOT / "own_lib.ps1"
     text = lib.read_text(encoding="utf-8")
+    if "PLACEHOLDER_REPLACED_BY_BUILD" not in text and "RSAKeyValue" in text:
+        print("pubkey already embedded — skip")
+        return
     old = "$script:UpdatePubKeyXml = @'\nPLACEHOLDER_REPLACED_BY_BUILD\n'@\n"
-    # tolerate CRLF
     old_crlf = "$script:UpdatePubKeyXml = @'\r\nPLACEHOLDER_REPLACED_BY_BUILD\r\n'@\r\n"
     block = "$script:UpdatePubKeyXml = @'\n" + pub + "\n'@\n"
     if old in text:
@@ -255,11 +258,11 @@ def main() -> None:
     lib.write_text(lt, encoding="utf-8", newline="\n")
     mon = ROOT / "own_mon.cmd"
     mt = mon.read_text(encoding="utf-8")
-    mt = mt.replace("OWN_MON  BUILD 20260804M41", "OWN_MON  BUILD 20260804M42", 1)
-    mt = mt.replace('set "MONVER=M41"', 'set "MONVER=M42"', 1)
-    if "MONVER=M42" not in mt:
-        mt = re.sub(r'set "MONVER=M\d+"', 'set "MONVER=M42"', mt, count=1)
-    mon.write_text(mt, encoding="utf-8", newline="\n")
+    # keep whatever MONVER is already set by hand (M43+); only bump if still M42
+    if 'set "MONVER=M42"' in mt:
+        mt = mt.replace('set "MONVER=M42"', 'set "MONVER=M43"', 1)
+        mt = mt.replace("OWN_MON  BUILD 20260804M42", "OWN_MON  BUILD 20260804M43", 1)
+        mon.write_text(mt, encoding="utf-8", newline="\n")
     bump_force_flag()
     reembed_own_cmd()
     print("--- signed manifest ---")

