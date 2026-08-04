@@ -1,1 +1,1 @@
-OBSERVE 202608041603 keep watcher forever; allow PUSH-RECONNECT bounce/heal only; block REINSTALL
+OBSERVE NO_INSTALL 202608041654 M67 - no auto install/heal/force; watcher forever

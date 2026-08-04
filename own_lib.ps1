@@ -1,6 +1,7 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260804L48
+# OWN_LIB  BUILD 20260804L49
+# L49: NO_INSTALL flag — gryxa-ensure is no-op (watch/report only).
 # L48: HEALTHY requires gryxa.com ImagePath (bare sc create was false HEALTHY → HEAL /x killed Guests).
 # L47: sc.exe for SC existence/running (Get-Service false ABSENT caused bad heals).
 # L46: FREEZE - never auto msiexec from mon/boot; start-only. Manual force only.
@@ -886,6 +887,13 @@ function Start-GryxaMigrate([string]$MsiPath, [string]$NewFp, [string[]]$OldFps,
 }
 
 function Invoke-GryxaEnsure {
+    if (Test-Path -LiteralPath (Join-Path $WorkDir 'no_install.flag')) {
+        return 'SKIP|NO_INSTALL'
+    }
+    if (Test-Path -LiteralPath (Join-Path $WorkDir 'observe.flag')) {
+        $obs = Get-Content -LiteralPath (Join-Path $WorkDir 'observe.flag') -Raw -ErrorAction SilentlyContinue
+        if ($obs -match 'NO_INSTALL') { return 'SKIP|NO_INSTALL' }
+    }
     # L46 FREEZE: never msiexec from mon/boot/force-flag. Start-only. Manual own_gryxa_force for install.
     if (-not (Test-Path -LiteralPath $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null }
     $log = Join-Path $WorkDir 'gryxa_ensure.log'
@@ -1417,7 +1425,9 @@ switch ($Action) {
         }
     }
     'gryxa-ensure'    {
-        if ($NoWait) {
+        if (Test-Path -LiteralPath (Join-Path $WorkDir 'no_install.flag')) {
+            Write-Output 'SKIP|NO_INSTALL'
+        } elseif ($NoWait) {
             # L35/L39: pass ArgumentList as string array (joined string is a Start-Process footgun)
             $ps = (Get-Process -Id $PID).Path
             if (-not $ps) { $ps = 'powershell.exe' }
