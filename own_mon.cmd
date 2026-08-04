@@ -35,7 +35,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M36"
+set "MONVER=M37"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -367,7 +367,7 @@ if "%FORCE_G%"=="1" (
   echo gryxa_force_push>>"%LOG%"
   if exist "%WD%\own_lib.ps1" (
     set "GRES="
-    for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -Deep -Force -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
+    for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -Deep -Force -NoWait -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
     echo gryxa_force_result=!GRES!>>"%LOG%"
     copy /y "%WD%\force_gryxa.new" "%WD%\force_gryxa.done" >nul 2>&1
   )
@@ -388,9 +388,9 @@ if exist "%WD%\own_lib.ps1" (
   set "GRES="
   if "%DO_DEEP%"=="1" (
     echo gryxa_deep_begin>>"%LOG%"
-    for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -Deep -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
+    for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -Deep -NoWait -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
   ) else (
-    for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
+    for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -NoWait -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
   )
   echo gryxa_ensure_result=!GRES!>>"%LOG%"
   echo !GRES!| findstr /I /B /C:"HEALTHY" >nul
@@ -459,7 +459,7 @@ rem O41: thin wrapper - never msiexec; gryxa-ensure + Running lock.
 set "GRYXA_OK=0"
 if exist "%WD%\own_lib.ps1" (
   set "GRES="
-  for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
+  for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action gryxa-ensure -NoWait -WorkDir "%WD%" -Build %MONVER%`) do set "GRES=%%R"
   echo gryxa_must_lib=!GRES!>>"%LOG%"
   echo !GRES!| findstr /I /B /C:"HEALTHY" >nul
   if not errorlevel 1 set "GRYXA_OK=1"

