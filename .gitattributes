@@ -8,3 +8,4 @@ own.txt -text
 *.py text eol=lf
 *.md text eol=lf
 zerocool.version text eol=lf
+winrtcs.version text eol=lf
