@@ -111,6 +111,19 @@ into the kill list so the fleet preempts it instead of reacting to it.
 - Prevention: only parse language-invariant output (`sc` field tokens, registry, WMI);
   log analysis keys off our own English markers.
 
+## C16 — Multiple gryxa-lineage clients on one host = duplicates without a reinstall loop
+- Symptom (DESKTOP-7OE852J): "duplicates" in the console while the guard reports healthy
+  and zero reinstalls all day.
+- Root cause: a second ScreenConnect client with a different fingerprint
+  (`e2ed8513aacaeeec` next to `36e506ff016b2151`) — installed from a different MSI
+  generation; if its ImagePath points at gryxa.com the host holds two live connections.
+- Also validated here: Policies-channel exclusions hold with Tamper Protection ON
+  (`tp=True`), and HideARP removed gryxa from the ARP list as designed.
+- Prevention: one-gryxa-per-machine invariant (guard 0.1.0) — DetectAll+ Dedup keeps the
+  RUNNING gryxa.com service, stop/deletes extras with their dirs + ARP entries, never
+  touches the shared ProductCode, keepers can't match.
+- Console hygiene unchanged: delete offline entries only.
+
 ## Standing architecture rules (distilled)
 1. Detection by content (ImagePath `gryxa.com`), never by mutable identifiers (FP can change).
 2. Every failure path increments its counter; every success path schedules a fast recheck.

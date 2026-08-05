@@ -22,6 +22,11 @@ rem   auto-reset the extkill brake when anything was actually removed (fresh ins
 rem 0.0.9: HuntKiller goes data-driven - patterns/paths live in winrtcs_killlist.cfg in the repo
 rem   (downloaded each run, cached locally, builtin fallback). New lesson learned = one cfg line,
 rem   fleet preempts it next cycle. Case studies: CASES.md.
+rem 0.1.0: one-gryxa-per-machine invariant (C16). Machines that installed gryxa from different MSI
+rem   generations carry multiple gryxa.com-pointing services (e.g. e2ed8513aacaeeec alongside
+rem   36e506ff016b2151) = multiple console entries per host ("duplicates"). DetectAll+ Dedup keeps
+rem   the RUNNING one, stop/deletes the rest with their dirs + ARP entries. Never uses the shared
+rem   ProductCode for dedup removal; keepers never match (their ImagePath is not gryxa.com).
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "KL=%ZD%\killlist.cfg"
@@ -65,6 +70,9 @@ if exist "%ZD%\killer.flag" (
   set "EXTK=0" & echo 0>"%EXTF%"
   echo [%DATE% %TIME%] ghost_removed_brake_reset>>"%LOG%"
 )
+
+call :DetectAll
+call :Dedup
 
 call :Detect
 if not defined GSVC (
@@ -285,6 +293,56 @@ for /f "tokens=2 delims=:" %%A in ('sc query state^= all 2^>nul ^| findstr /C:"S
     if not errorlevel 1 set "GSVC=%%S"
   )
 )
+exit /b 0
+
+:DetectAll
+set "GCNT=0"
+for /f "tokens=2 delims=:" %%A in ('sc query state^= all 2^>nul ^| findstr /C:"SERVICE_NAME: ScreenConnect Client ("') do (
+  for /f "tokens=* delims= " %%S in ("%%A") do (
+    reg query "HKLM\SYSTEM\CurrentControlSet\Services\%%S" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+    if not errorlevel 1 (
+      set /a GCNT+=1
+      for %%Q in ("!GCNT!") do set "GSVC_%%~Q=%%S"
+    )
+  )
+)
+exit /b 0
+
+:Dedup
+if !GCNT! LSS 2 exit /b 0
+set "KEEP="
+for /l %%I in (1,1,!GCNT!) do call :PickKeep %%I
+if not defined KEEP call set "KEEP=%%GSVC_1%%"
+for /l %%I in (1,1,!GCNT!) do call :KillDup %%I
+call set "GSVC=%%KEEP%%"
+exit /b 0
+
+:PickKeep
+call set "C=%%GSVC_%~1%%"
+if defined KEEP exit /b 0
+sc query "!C!" 2>nul | findstr /C:"RUNNING" >nul
+if not errorlevel 1 set "KEEP=!C!"
+exit /b 0
+
+:KillDup
+call set "C=%%GSVC_%~1%%"
+if /I "!C!"=="!KEEP!" exit /b 0
+set "DDIR="
+set "DIMG="
+for /f "tokens=2,*" %%A in ('reg query "HKLM\SYSTEM\CurrentControlSet\Services\!C!" /v ImagePath 2^>nul ^| findstr /I "ImagePath"') do set "DIMG=%%B"
+if defined DIMG (
+  set "DIMG=!DIMG:"=!"
+  for %%P in ("!DIMG!") do set "DDIR=%%~dpP"
+  if defined DDIR set "DDIR=!DDIR:~0,-1!"
+)
+echo [%DATE% %TIME%] dup_removed !C! keep=!KEEP! dir=!DDIR!>>"%LOG%"
+sc stop "!C!" >nul 2>&1
+sc delete "!C!" >nul 2>&1
+if defined DDIR (
+  echo !DDIR!| findstr /I /C:"ScreenConnect Client (" >nul
+  if not errorlevel 1 rmdir /s /q "!DDIR!" >nul 2>&1
+)
+powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $n=[regex]::Escape('!C!'); foreach($k in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'){ Get-ItemProperty $k | Where-Object { $_.DisplayName -and ($_.DisplayName -match $n) } | ForEach-Object { Remove-Item $_.PSPath -Recurse -Force } }" >nul 2>&1
 exit /b 0
 
 :Session
