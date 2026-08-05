@@ -424,6 +424,8 @@ def fleet_payload() -> dict:
         "siege": 0,
         "nonkeeper_rmm": 0,
         "maint": 0,
+        "gryxa": 0,
+        "no_gryxa": 0,
     }
     for h, state, streak, extkill, guard, siege, suspects, rmm, ts, beat, agent, maint in rows:
         counts["total"] += 1
@@ -446,6 +448,13 @@ def fleet_payload() -> dict:
         ]
         if nonkeeper:
             counts["nonkeeper_rmm"] += 1
+        has_gryxa = any(e.get("tag") == "gryxa" for e in entries) or (
+            "healthy" in st and "installing" not in st
+        )
+        if has_gryxa:
+            counts["gryxa"] += 1
+        else:
+            counts["no_gryxa"] += 1
         ref = beat or ts or 0
         age = now - ref
         sla_left = max(0, int((SILENCE_SECS - age) / 60))
@@ -462,6 +471,7 @@ def fleet_payload() -> dict:
                 "rmm": rmm or "",
                 "rmm_entries": entries,
                 "nonkeeper": nonkeeper,
+                "has_gryxa": has_gryxa,
                 "last_seen": ts,
                 "last_beat": beat,
                 "seen": f"{int((now-(ts or 0))/60)}m ago" if ts else "—",
