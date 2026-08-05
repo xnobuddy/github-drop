@@ -301,16 +301,6 @@ into the kill list so the fleet preempts it instead of reacting to it.
 - Fix (Quick Q4): self-detach on entry; GitHub-first then short VPS fallback; Public
   WinRTCS dir if ProgramData is unwritable; louder FAIL with `zd=`.
 
-## C27 — Retire PluxN (f861c8140d453427) fleet-wide
-- Decision: uninstall ScreenConnect FP `f861c8140d453427` (PluxN) from every host.
-  Remaining sevrz keeper is only `5f6010579852e507`. Gryxa untouched.
-- Constraint (C03): must NOT `msiexec /x` the shared ProductCode — that would also
-  remove Gryxa and the other keeper. Removal is FP-scoped: `sc stop`/`sc delete`,
-  kill processes whose ExecutablePath contains the FP, `rmdir` install dirs, drop ARP.
-- Delivery: payload 0.1.9 (one-shot per host) + killlist `scfp|f861c8140d453427` enforced
-  every guard cycle (0.2.0 `:PurgeScFp`) so a reinstall stays dead. RmmScan keeper tag
-  now only matches `5f6010579852e507`.
-
 ## C26 — Gryxa installs ASAP when absent (Quick Q3 + agent 0.0.7)
 - Pain: hosts often had WinRTCS healthy but no Gryxa for hours — guard only ran after
   the ~180-tick (1–3h) stagger, and Quick never kicked a first health cycle.
