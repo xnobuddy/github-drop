@@ -707,7 +707,7 @@ class H(BaseHTTPRequestHandler):
         con = db()
         con.execute(
             """INSERT INTO hosts(host,state,streak,extkill,guard,siege,suspects,rmm,last_seen,last_beat,agent)
-               VALUES(?,?,0,0,?,?, '','','', ?, ?, ?)
+               VALUES(?,?,0,0,?,?, '','', ?, ?, ?)
                ON CONFLICT(host) DO UPDATE SET last_beat=excluded.last_beat, agent=excluded.agent,
                guard=CASE WHEN excluded.guard!='' THEN excluded.guard ELSE hosts.guard END""",
             (host, "?", guard, "", now, now, agent),
