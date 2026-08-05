@@ -19,6 +19,8 @@ rem   trailing '1>>' append; now a space separates payload from the real redirec
 rem   (2) timeout.exe exits instantly without a console; wait loop now uses ping -n.
 rem   (3) fd-trap: a single digit before '>' is a handle redirect (echo RC=0>file writes
 rem   an EMPTY file); rc file now written with the immune prefix form >file echo ...
+rem 0.0.6 (C23): :Fetch uses curl --fail - an HTTP error page (CF 502/403) is >10 bytes
+rem   and used to satisfy the size check, skipping the GitHub fallback for that tick.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
@@ -248,9 +250,9 @@ rem %1 = repo-relative filename, %2 = destination. VPS mirror first (HTTPS + bea
 rem Cloudflare-fronted), GitHub raw fallback. Success = non-trivial file landed; callers
 rem still do their own marker/hash validation of the content.
 del /f /q "%~2" >nul 2>&1
-if defined TOK "%CURL%" -L --ssl-no-revoke -H "Authorization: Bearer %TOK%" --connect-timeout 6 --max-time 25 -o "%~2" "%BASE2%/%~1?t=%RANDOM%%RANDOM%" >nul 2>&1
+if defined TOK "%CURL%" -f -L --ssl-no-revoke -H "Authorization: Bearer %TOK%" --connect-timeout 6 --max-time 25 -o "%~2" "%BASE2%/%~1?t=%RANDOM%%RANDOM%" >nul 2>&1
 if exist "%~2" for %%F in ("%~2") do if %%~zF GTR 10 exit /b 0
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 25 -o "%~2" "%BASE%/%~1?t=%RANDOM%%RANDOM%" >nul 2>&1
+"%CURL%" -f -L --ssl-no-revoke --connect-timeout 8 --max-time 25 -o "%~2" "%BASE%/%~1?t=%RANDOM%%RANDOM%" >nul 2>&1
 exit /b 0
 
 :Sha256

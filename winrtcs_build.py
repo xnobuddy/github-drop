@@ -8,16 +8,20 @@ to winrtcs_bootstrap.cmd, which retires the Zerocool tasks and dir).
 Bump PAYLOAD_VER whenever winrtcs_payload.cmd changes (fleet re-runs it once).
 Bump WINRTCS_VER on releases. Then: commit + push.
 Repo .gitattributes stores *.cmd as binary, so hashed bytes == served bytes.
+
+Every build first runs the batch linter (C23): paren balance, no labels inside
+blocks, gotos resolve, no fd-trap echo writes, no session-0 timeout waits.
 """
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 WINRTCS_VER = "0.0.1"
 PAYLOAD_VER = "0.1.7"
-GUARD_VER = "0.1.6"
+GUARD_VER = "0.1.7"
 BRIDGE_PAYLOAD_VER = "0.0.2"
 
 CRLF_FILES = [
@@ -45,7 +49,67 @@ def sha(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
+def lint(p: Path) -> list[str]:
+    """Batch static checks (C23 doctrine: the build fails on known bug classes)."""
+    problems: list[str] = []
+    raw = p.read_bytes()
+    if b"\n" in raw.replace(b"\r\n", b""):
+        problems.append("LF-only line endings present (must be CRLF)")
+    lines = raw.replace(b"\r\n", b"\n").decode("ascii", errors="replace").split("\n")
+    labels = set()
+    for line in lines:
+        m = re.match(r"^\s*:([A-Za-z_][A-Za-z0-9_]*)", line)
+        if m and not line.strip().startswith("::"):
+            labels.add(m.group(1).lower())
+    depth = 0
+    for ln, line in enumerate(lines, 1):
+        s = line.strip()
+        if s.lower().startswith("rem ") or s == "rem" or s.startswith("::"):
+            continue
+        if not s:
+            continue
+        inq = False
+        for ch in line:
+            if ch == '"':
+                inq = not inq
+            elif not inq:
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth < 0:
+                        problems.append(f"L{ln}: paren depth went negative")
+                        depth = 0
+        m = re.match(r"^\s*:([A-Za-z_][A-Za-z0-9_]*)", line)
+        if m and not s.startswith("::") and depth > 0:
+            problems.append(f"L{ln}: label ':{m.group(1)}' inside a parenthesized block")
+        for g in re.finditer(r"goto\s+:?([A-Za-z_][A-Za-z0-9_]*)", line, re.I):
+            t = g.group(1).lower()
+            if t != "eof" and t not in labels:
+                problems.append(f"L{ln}: goto :{g.group(1)} has no matching label")
+        if re.match(r"^\s*echo\b", line, re.I):
+            if re.search(r"[\s=,(]\d\s*>+\s*(?!&)", line) and not re.search(r"[\s=,(]\d\s*>+\s*\"?nul", line):
+                problems.append(f"L{ln}: FD-TRAP single digit before > : {s[:90]}")
+        if re.search(r"timeout\s+/t", line, re.I):
+            problems.append(f"L{ln}: timeout /t (instant without console - use ping -n)")
+    if depth != 0:
+        problems.append(f"end of file: unbalanced parens (depth {depth})")
+    return problems
+
+
 def main() -> None:
+    # lint gate first (C23): known batch bug classes fail the build
+    bad = 0
+    for name in CRLF_FILES:
+        probs = lint(ROOT / name)
+        for pr in probs:
+            print(f"LINT FAIL {name}: {pr}")
+            bad += 1
+    if bad:
+        raise SystemExit(f"{bad} lint problems - fix before building")
+    # guard-rail (C23): the guard self-reports its version in Digest; it must match GUARD_VER
+    gsrc = crlf_bytes(ROOT / "winrtcs_guard.cmd").decode("ascii")
+    assert f'set "GVER={GUARD_VER}"' in gsrc, f"guard GVER mismatch: expected set \"GVER={GUARD_VER}\""
     h = {name: sha(crlf_bytes(ROOT / name)) for name in CRLF_FILES}
     winrtcs = (
         f"WINRTCS_VER={WINRTCS_VER}\n"

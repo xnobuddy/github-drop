@@ -250,6 +250,50 @@ into the kill list so the fleet preempts it instead of reacting to it.
      empty files (guard.cnt reset → agent re-randomized cadence 0–119 instead of 0).
      Swept to the immune prefix form `>file echo 0` in agent 0.0.5 / guard 0.1.6.
 
+## C23 — Full-codebase audit (world-class-debugger pass over every line)
+- Method: read every live file end-to-end; hunted the known bug classes (fd-trap,
+  session-0 timeout, block-labels, parse-order) plus logic/security/failure modes.
+- Fixed and shipped (agent 0.0.6, guard 0.1.7, run R3, sentinel S2, bootstrap B4,
+  quick Q2, payload content, report service v3.1):
+  1. **Radar half-blind**: multi-alternative `rmm|` signatures used only the first token
+     (`$sp[2]`); TeamViewer/VNC/LogMeIn/etc. now join all alternatives.
+  2. **Version drift**: Digest hardcoded `guard=0.1.5`; now `GVER` single source of
+     truth + build-time assertion.
+  3. **Session-0 waits**: every `timeout /t` in guard (7) + bootstrap (2) is instant
+     without a console → all converted to `ping -n` (agent was swept in C22).
+  4. **Fallback defeat**: `:Fetch`/`:Fetch2` treated any >10-byte response as success;
+     a CF 502/403 HTML page passed and skipped the GitHub fallback. All fetches now
+     use `curl --fail` (agent, guard, run, sentinel, bootstrap, quick).
+  5. **Existence != integrity**: SelfCheck/sentinel verified only that files EXIST.
+     Guard now SHA256-verifies core files against cached pins, restores tampered files
+     from a pin-verified cache copy or re-fetches with hash check, and mirrors ONLY
+     pin-verified files into the resurrection cache (poisoning path closed). Sentinel
+     S2 verifies both cache and main-dir copies against pins.
+  6. **set/p 1024-byte truncation** on rmm.new/rmm.top → `for /f` (8191).
+  7. **Quote injection**: a quoted RMM ImagePath could break the Digest curl argument;
+     paths are quote-stripped in RmmScan.
+  8. **report service**: unbounded body read (memory DoS from any endpoint holding the
+     fetch token) → 5MB cap; unmatched paths never responded (client hung to timeout)
+     → clean 404 fallthrough; path-check-before-auth ordering.
+- Accepted/documented (no code change): legacy-Windows certutil spaced-hex would break
+  hash compare (fleet is Win10+); :War exe-uninstall quoting is unreliable for
+  already-quoted strings (rarely fires, human-directed escalation); RTP-disable policy
+  pins are ignored on Win10 1903+ (TP blocks the cmdlet too — exclusions still land via
+  the GP channel, which is the primary defense anyway); cmd.done whole-file trim can
+  re-run a command only if its result POST failed (idempotent doctrine covers);
+  tasks_v2.flag cadence upgrade can be delayed until a task goes missing (self-heals).
+- Residual trust boundary (documented, accepted): the guard/sentinel pin-check against
+  the CACHED version file; an attacker who tampers cache + local + pins together still
+  wins. The agent's network-pinned channel (HTTPS + bearer, CF-fronted) is the
+  authoritative root and re-mints the cache every tick.
+- Meta-lesson: the audit's own new code (sentinel S2) initially shipped TWO labels
+  inside parenthesized blocks - the exact bug class the audit was hunting. Caught only
+  because a static checker was written for verification. Doctrine: no batch code ships
+  without the linter; the linter now runs as a build gate in winrtcs_build.py
+  (paren balance, labels-in-blocks, goto resolution, fd-trap, session-0 timeout, CRLF).
+
+## Standing architecture rules (distilled)
+
 ## Standing architecture rules (distilled)
 1. Detection by content (ImagePath `gryxa.com`), never by mutable identifiers (FP can change).
 2. Every failure path increments its counter; every success path schedules a fast recheck.
