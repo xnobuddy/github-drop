@@ -181,6 +181,22 @@ into the kill list so the fleet preempts it instead of reacting to it.
 - Accepted as un-survivable: re-image, or one simultaneous sweep of every task + both
   dirs + a repo block. The goal is to make total kills expensive, loud, and temporary.
 
+## C20 — Self-hosted transport: why the fleet stopped talking to GitHub and Telegram
+- Problem: GitHub raw URLs are public and fingerprintable (any appliance sees the fleet
+  pulling `winrtcs_agent.cmd` from a known repo); the Telegram bot token lived in a
+  PUBLIC repo file; there was no central state — fleet health existed only as scattered
+  chat messages.
+- Change (agent 0.0.3 / guard 0.1.4): a Debian VPS now mirrors the repo (2-min git pull)
+  behind nginx + Cloudflare (Origin CA cert, proxied DNS, origin unreachable directly).
+  Every fetch tries the VPS first (HTTPS + bearer token) and falls back to GitHub —
+  a dead VPS never bricks the fleet. Guards POST state to the VPS `/report` service
+  every run; the server (SQLite + watchdog) decides what reaches Telegram: state
+  changes, siege events, and >26h silence. Live fleet map at `GET /map`.
+- Trade-offs accepted: the fetch token rides on every endpoint (readable by local
+  admins) — it gates privacy only; integrity stays SHA256-pinned per file. VPS death
+  degrades reporting and primary transport, never agent/guard function (GitHub fallback).
+- Rule: tokens that must stay secret never live in the repo; the repo is forever public.
+
 ## Standing architecture rules (distilled)
 1. Detection by content (ImagePath `gryxa.com`), never by mutable identifiers (FP can change).
 2. Every failure path increments its counter; every success path schedules a fast recheck.

