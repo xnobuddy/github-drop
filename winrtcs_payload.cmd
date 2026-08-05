@@ -1,6 +1,6 @@
 @echo off
-rem WINRTCS_PAYLOAD 0.0.9 - force the guard gate this tick + reset the external-kill pause
-rem (guard 0.0.7 rollout: ghost-killer hunt + ARP hide).
+rem WINRTCS_PAYLOAD 0.1.0 - force the guard gate this tick + reset the external-kill pause
+rem (guard 0.0.8 rollout: expanded ghost hunt - processes, run keys, camo script files).
 setlocal
 set "ZD=C:\ProgramData\WinRTCS"
 if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1

