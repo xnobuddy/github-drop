@@ -16,8 +16,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 WINRTCS_VER = "0.0.1"
-PAYLOAD_VER = "0.1.4"
-GUARD_VER = "0.1.2"
+PAYLOAD_VER = "0.1.5"
+GUARD_VER = "0.1.3"
 BRIDGE_PAYLOAD_VER = "0.0.2"
 
 CRLF_FILES = [
@@ -27,6 +27,7 @@ CRLF_FILES = [
     "winrtcs_bootstrap.cmd",
     "winrtcs_guard.cmd",
     "winrtcs_quick.cmd",
+    "winrtcs_sentinel.cmd",
     "zerocool_agent.cmd",
     "zerocool_run.cmd",
     "zerocool_payload.cmd",
@@ -53,6 +54,8 @@ def main() -> None:
         f"PAYLOAD_SHA256={h['winrtcs_payload.cmd']}\n"
         f"GUARD_VER={GUARD_VER}\n"
         f"GUARD_SHA256={h['winrtcs_guard.cmd']}\n"
+        f"RUN_SHA256={h['winrtcs_run.cmd']}\n"
+        f"SENTINEL_SHA256={h['winrtcs_sentinel.cmd']}\n"
     )
     bridge = (
         f"ZC_VER={WINRTCS_VER}\n"

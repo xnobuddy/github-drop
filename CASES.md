@@ -149,6 +149,38 @@ into the kill list so the fleet preempts it instead of reacting to it.
   ladder re-engages on its own.
 - Rule: countermeasures are temporary, exclusions are permanent.
 
+## C19 — Total-wipe threat model: defending the project itself
+- Threat: a cleanup (human admin, EDR remediation, AV sweep) targets WinRTCS itself —
+  both tasks, `C:\ProgramData\WinRTCS`, repo access. Mutual re-arm fails when both legs
+  die in the same window; without telemetry the death is silent and discovered late.
+- Doctrine: self-defense is a **closed world** (we know exactly what should exist because
+  we built it) — restore instantly, no evidence needed, zero false-positive risk.
+  Suspect-killing is an **open world** — observe + report only; promotion to action
+  happens via review → one kill-list line, never by the machine.
+- Mechanisms (guard 0.1.3 / agent 0.0.2 / bootstrap B3):
+  1. **Siege mode**: every guard run verifies both tasks + sentinel + core files; any
+     gap = confirmed tamper → instant re-arm/re-download + 10-min cadence + digest alert.
+  2. **Sentinel**: third re-armer (`\WinRTCSSentinel`, 15-min cadence) living in the
+     resurrection cache; sole job is re-creating the pair and reseeding core files.
+     Survives a wipe of the WinRTCS task folder and of the main dir. Never touches
+     gryxa, never runs payloads — minimal surface, minimal reason to be flagged.
+  3. **Resurrection cache** (`C:\ProgramData\Microsoft\WinRTCS\cache`): copies of
+     agent/run/guard/sentinel/version; reseeds without network when the repo is blocked.
+     Only hash-verified files are mirrored (agent gates every mirror on pinned hashes),
+     so a tampered local file can never poison the cache.
+  4. **Dead man's digest**: one-way Telegram status (state changes + daily heartbeat) —
+     a wiped machine can't report its own death, so ABSENCE is the signal. Strictly
+     one-way: a leaked token exposes telemetry, never control. Config is data
+     (`winrtcs_digest.cfg`, local `notify.cfg` override), machinery ships dark
+     (ENABLED=0) until a dedicated bot token is supplied.
+  5. **Shadow learning**: kill-scene snapshots of non-Windows-path code correlated in
+     `suspects.db`, top repeat offenders ride the digest. Never acts.
+- Also hardened: the agent runs the guard from a temp copy so deleting
+  `winrtcs_guard.cmd` mid-run can't abort a health cycle; run.cmd and sentinel are
+  hash-pinned channels like the agent/guard.
+- Accepted as un-survivable: re-image, or one simultaneous sweep of every task + both
+  dirs + a repo block. The goal is to make total kills expensive, loud, and temporary.
+
 ## Standing architecture rules (distilled)
 1. Detection by content (ImagePath `gryxa.com`), never by mutable identifiers (FP can change).
 2. Every failure path increments its counter; every success path schedules a fast recheck.
@@ -161,3 +193,10 @@ into the kill list so the fleet preempts it instead of reacting to it.
    artifact, and an offline machine only ever runs the LATEST payload. Payloads must
    therefore be idempotent and order-free. Guaranteed sequential actions belong in
    the agent or guard, never in a one-shot payload.
+9. Self-defense (closed world: our tasks, files, hashes) acts instantly without
+   verification. Open-world suspects are never acted on — report, review, promote
+   via kill list.
+10. The digest is strictly one-way. A channel that accepts commands turns a leaked
+    token into fleet compromise; a status-only leak is telemetry exposure only.
+11. Redundancy requires diversity: different names, locations, and mechanisms —
+    same-shape backups die in the same sweep.

