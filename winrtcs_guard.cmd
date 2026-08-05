@@ -45,6 +45,13 @@ rem 0.1.4: VPS era (C20). All repo fetches go dual-URL (VPS mirror primary via H
 rem   GitHub fallback); Digest no longer touches Telegram - it POSTs state to the VPS report
 rem   service every run and the SERVER decides what reaches Telegram (state changes, siege,
 rem   silence). The bot token leaves the repo and lives only on the VPS.
+rem 0.1.5: RMM radar (C21). RmmScan fingerprints EVERY ScreenConnect instance (FP, relay
+rem   host:port parsed from the service's own launch args with user.config fallback, state,
+rem   start mode, binary version, tagged gryxa / keeper-sevrz / UNKNOWN) and matches services
+rem   + processes against data-driven rmm| signatures from the kill list. Diff vs rmm.db is
+rem   on STABLE identity (relay/ver/path - state flapping never re-alerts); new or changed
+rem   entries ride the digest as rmm_new and the VPS batches them into one Telegram alert.
+rem   REPORT ONLY - open world, rule 9: the machine never acts on what it finds.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
@@ -106,6 +113,7 @@ if exist "%ZD%\killer.flag" (
   echo [%DATE% %TIME%] ghost_removed_brake_reset>>"%LOG%"
 )
 
+call :RmmScan
 call :DetectAll
 call :Dedup
 
@@ -497,17 +505,32 @@ if exist "%ZD%\suspects.top" (
 )
 exit /b 0
 
+:RmmScan
+rem --- RMM radar (C21): fingerprint every ScreenConnect instance (FP, relay from launch
+rem --- args with user.config fallback, state, version, gryxa/keeper/UNKNOWN tag) + match
+rem --- services/processes against rmm| signatures from the kill list. Diff on STABLE
+rem --- identity (relay/ver/path) so service state flapping never re-alerts. New/changed
+rem --- entries go to rmm.new (single alert line); summary goes to rmm.top for the map.
+rem --- REPORT ONLY. NOTE: no double-quote chars in the PS line below (cmd quoting rule).
+powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $sigs=@(); if(Test-Path '%KL%'){ foreach($l in Get-Content '%KL%'){ $t=$l.Trim(); if(-not $t -or $t.StartsWith('#')){ continue }; $sp=$t -split '\|'; if($sp[0] -eq 'rmm' -and $sp[1] -and $sp[2]){ $sigs+=,@($sp[1],$sp[2]) } } }; if(-not $sigs){ $sigs=@(@('AnyDesk','anydesk'),@('TeamViewer','teamviewer'),@('RustDesk','rustdesk'),@('VNC','winvnc|tvnserver|vncserver'),@('MeshCentral','meshagent')) }; $svcs=Get-CimInstance Win32_Service; $procs=Get-CimInstance Win32_Process; $full=@{}; $cmp=@{}; $short=@(); foreach($s in ($svcs | Where-Object { $_.Name -match '^ScreenConnect Client \(' })){ $fp=[regex]::Match($s.Name,'\(([0-9A-Fa-f]+)\)').Groups[1].Value; $img=$s.PathName; $h='';$pt='';$md=''; if($img -match '[?&]h=([^&\s]+)'){ $h=$Matches[1] }; if($img -match '[?&]p=(\d+)'){ $pt=$Matches[1] }; if($img -match '[?&]e=(\w+)'){ $md=$Matches[1] }; $exe=''; if($img -match '([A-Za-z]:\\[^?]+?\.exe)'){ $exe=$Matches[1] }; $dir=''; if($exe){ $dir=Split-Path $exe -Parent }; if(-not $h -and $dir -and (Test-Path (Join-Path $dir 'user.config'))){ $uc=(Get-Content (Join-Path $dir 'user.config') -Raw); if($uc -match 'key=.Host.\s+value=.([^\s/>]+)'){ $h=$Matches[1] }; if($uc -match 'key=.Port.\s+value=.(\d+)'){ $pt=$Matches[1] } }; $ver=''; if($exe -and (Test-Path $exe)){ $ver=(Get-Item $exe).VersionInfo.FileVersion }; $tag='UNKNOWN'; if($img -match 'gryxa\.com'){ $tag='gryxa' } elseif($fp -eq '5f6010579852e507' -or $fp -eq 'f861c8140d453427'){ $tag='keeper-sevrz' }; $stable=('relay='+$h+':'+$pt+' mode='+$md+' ver='+$ver+' ['+$tag+']'); $k='sc:'+$fp; $cmp[$k]=$stable; $full[$k]=('ScreenConnect FP='+$fp+' '+$stable+' state='+$s.State+' start='+$s.StartMode); $short+=('SC:'+$fp.Substring(0,[Math]::Min(8,$fp.Length))+'@'+$h+':'+$pt+'['+$tag+']') }; foreach($sig in $sigs){ $nm=$sig[0]; $pat=$sig[1]; $hs=$svcs | Where-Object { $_.Name -notmatch 'ScreenConnect' -and ($_.Name -match $pat -or $_.DisplayName -match $pat -or $_.PathName -match $pat) } | Select-Object -First 1; $hp=$null; if(-not $hs){ $hp=$procs | Where-Object { $_.Name -match $pat -or $_.Path -match $pat } | Select-Object -First 1 }; if($hs -or $hp){ $det=''; $pth=''; if($hs){ $pth=$hs.PathName; $det=('svc='+$hs.Name+' state='+$hs.State) } else { $pth=$hp.Path; $det=('proc='+$hp.Name) }; $ex2=''; if($pth -and ($pth -match '([A-Za-z]:\\[^?]+?\.exe)')){ $ex2=$Matches[1] }; $vr=''; if($ex2 -and (Test-Path $ex2)){ $vr=(Get-Item $ex2).VersionInfo.FileVersion }; if($pth){ $pth=($pth -replace '\s+',' ').Trim() }; $stable=('ver='+$vr+' :: '+$pth); $k='rmm:'+$nm; $cmp[$k]=$stable; $full[$k]=($nm+' '+$det+' '+$stable); $short+=($nm) } }; $top=(($short | Sort-Object -Unique) -join ';'); if(-not $top){ $top='none' }; $top | Set-Content -Path '%ZD%\rmm.top' -Encoding ASCII; $old=@{}; if(Test-Path '%ZD%\rmm.db'){ foreach($l in Get-Content '%ZD%\rmm.db'){ $pp=$l -split '\|'; if($pp.Count -ge 2){ $old[$pp[0]]=$pp[1] } } }; $news=@(); foreach($k in $cmp.Keys){ if(-not $old.ContainsKey($k) -or $old[$k] -ne $cmp[$k]){ $news+=$full[$k] } }; if($news){ ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.new' -Encoding ASCII; ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.last' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.new' -Force }; $lines=@(); foreach($k in $cmp.Keys){ $lines+=($k+'|'+$cmp[$k]) }; if($lines){ $lines | Set-Content -Path '%ZD%\rmm.db' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.db' -Force }" >nul 2>&1
+if exist "%ZD%\rmm.new" ( set /p "RMMNEW=" <"%ZD%\rmm.new" & echo [%DATE% %TIME%] rmm_new !RMMNEW!>>"%LOG%" )
+exit /b 0
+
 :Digest
-rem --- fleet report (C20): POST state to the VPS every guard run. Fire-and-forget
+rem --- fleet report (C20/C21): POST state to the VPS every guard run. Fire-and-forget
 rem --- (detached curl, hard 8s cap) so a blocked/slow network can never stall the health
 rem --- loop. The server holds the Telegram token and decides what reaches the chat:
-rem --- state changes, siege, silence. One-way as ever: status OUT, nothing IN. ---
+rem --- state changes, siege, silence, new/changed RMM. One-way: status OUT, nothing IN. ---
 if not defined TOK exit /b 0
 set "DSUS=none"
 if defined SUSREP if /I not "!SUSREP!"=="" set "DSUS=!SUSREP!"
 set "DSIEGE="
 if defined SIEGE_ACT set "DSIEGE=!SIEGE!"
-start "" /min "%CURL%" -s -o nul --ssl-no-revoke --connect-timeout 4 --max-time 8 -X POST -H "Authorization: Bearer %TOK%" --data-urlencode "host=%COMPUTERNAME%" --data-urlencode "state=!GSTATE!" --data-urlencode "streak=!STREAK!" --data-urlencode "extkill=!EXTK!" --data-urlencode "guard=0.1.4" --data-urlencode "siege=!DSIEGE!" --data-urlencode "suspects=!DSUS!" "%REPORT%" >nul 2>&1
+set "DRMM="
+if exist "%ZD%\rmm.top" set /p "DRMM=" <"%ZD%\rmm.top"
+set "DRMMNEW="
+if exist "%ZD%\rmm.new" set /p "DRMMNEW=" <"%ZD%\rmm.new"
+start "" /min "%CURL%" -s -o nul --ssl-no-revoke --connect-timeout 4 --max-time 8 -X POST -H "Authorization: Bearer %TOK%" --data-urlencode "host=%COMPUTERNAME%" --data-urlencode "state=!GSTATE!" --data-urlencode "streak=!STREAK!" --data-urlencode "extkill=!EXTK!" --data-urlencode "guard=0.1.5" --data-urlencode "siege=!DSIEGE!" --data-urlencode "suspects=!DSUS!" --data-urlencode "rmm=!DRMM!" --data-urlencode "rmm_new=!DRMMNEW!" "%REPORT%" >nul 2>&1
 exit /b 0
 
 :Fetch2

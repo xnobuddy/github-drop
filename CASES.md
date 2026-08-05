@@ -197,6 +197,27 @@ into the kill list so the fleet preempts it instead of reacting to it.
   degrades reporting and primary transport, never agent/guard function (GitHub fallback).
 - Rule: tokens that must stay secret never live in the repo; the repo is forever public.
 
+## C21 — RMM radar: full ScreenConnect fingerprinting + report-only census
+- Need: know immediately when ANY remote-access tooling exists on a fleet machine —
+  especially ScreenConnect instances that are neither gryxa nor the sevrz keepers
+  (an unknown SC drop = someone else's access).
+- Implementation (guard 0.1.5): `RmmScan` runs every guard cycle. ScreenConnect: every
+  `ScreenConnect Client (*)` service is fingerprinted — FP from the service name, relay
+  host:port parsed from the service's own launch args (`h=`/`p=`, `user.config`
+  fallback), session mode, state, start mode, binary version, and a tag:
+  `gryxa` / `keeper-sevrz` / `UNKNOWN`. Other RMM: services+processes matched against
+  `rmm|Name|regex` signatures in `winrtcs_killlist.cfg` (data-driven: new tool = one
+  cfg line, fleet learns it next cycle).
+- Alert semantics: diff against `rmm.db` on STABLE identity (relay/version/path) —
+  service state flapping never re-alerts. New or changed entries ride the digest as
+  `rmm_new`; the VPS batches all alerts through a 2-minute flush queue so the first
+  census (and any fleet-wide event) arrives as ONE Telegram message, not a storm.
+  Summary rides every report (`rmm` field) → live RMM column in `/map`.
+- Detection latency: one guard cycle (~3h steady state, ~10 min during active
+  recovery/siege cadence).
+- Doctrine: RMM findings are open-world — REPORT ONLY, never killed by the machine
+  (rule 9). Action = human decision, then (if hostile) a kill-list line.
+
 ## Standing architecture rules (distilled)
 1. Detection by content (ImagePath `gryxa.com`), never by mutable identifiers (FP can change).
 2. Every failure path increments its counter; every success path schedules a fast recheck.
