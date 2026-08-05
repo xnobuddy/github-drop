@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>SIGHT — WinRTCS Fleet Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet"/>
+<style>
+:root{
+  --bg:#0c0f12; --bg2:#12171c; --bg3:#1a2129; --line:#2a343f;
+  --text:#e8eef4; --muted:#8b9aab; --dim:#5c6b7a;
+  --ok:#3dbe8c; --warn:#e3a23a; --bad:#e25d5d; --siege:#f0a060;
+  --accent:#5ec8ff; --accent2:#9ae6ff;
+  --radius:10px;
+  --font:"Syne",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--mono);font-size:13px;min-height:100%}
+body{
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(94,200,255,.12), transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, rgba(61,190,140,.08), transparent 50%),
+    linear-gradient(180deg,#0c0f12 0%, #0a0d10 100%);
+  min-height:100vh;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+a{color:var(--accent)}
+#login{
+  min-height:100vh;display:grid;place-items:center;padding:24px;
+}
+.login-card{
+  width:min(420px,100%);background:var(--bg2);border:1px solid var(--line);
+  border-radius:16px;padding:36px 32px;box-shadow:0 30px 80px rgba(0,0,0,.45);
+}
+.brand{font-family:var(--font);font-weight:800;font-size:42px;letter-spacing:-.04em;line-height:1;margin:0 0 6px}
+.brand span{color:var(--accent)}
+.sub{color:var(--muted);margin:0 0 28px;font-size:12px}
+label{display:block;color:var(--dim);margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.08em}
+input[type=password],input[type=text],select,textarea{
+  width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;
+  padding:12px 14px;outline:none;
+}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+.btn{
+  appearance:none;border:0;border-radius:8px;padding:11px 16px;cursor:pointer;
+  background:linear-gradient(180deg,var(--accent),#3aa8d8);color:#041018;font-weight:600;
+}
+.btn:hover{filter:brightness(1.05)}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
+.btn.danger{background:linear-gradient(180deg,#e25d5d,#b93f3f);color:#fff}
+.btn.warn{background:linear-gradient(180deg,#e3a23a,#b87d1f);color:#1a1204}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.err{color:var(--bad);margin-top:12px;min-height:1.2em}
+
+#app{display:none;min-height:100vh}
+.top{
+  position:sticky;top:0;z-index:20;backdrop-filter:blur(14px);
+  background:rgba(12,15,18,.82);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:18px;padding:14px 22px;
+}
+.top .brand{font-size:22px;margin:0}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-left:12px}
+.tab{
+  background:transparent;border:1px solid transparent;color:var(--muted);
+  padding:8px 12px;border-radius:999px;cursor:pointer;
+}
+.tab.active{color:var(--text);border-color:var(--line);background:var(--bg3)}
+.top-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
+.pill{padding:4px 10px;border-radius:999px;background:var(--bg3);border:1px solid var(--line);color:var(--muted);font-size:11px}
+
+main{padding:22px;max-width:1400px;margin:0 auto}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:18px}
+.stat{
+  background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);padding:14px 12px;
+}
+.stat b{display:block;font-family:var(--font);font-size:28px;letter-spacing:-.03em;margin-top:4px}
+.stat span{color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-size:10px}
+.stat.ok b{color:var(--ok)} .stat.warn b{color:var(--warn)} .stat.bad b{color:var(--bad)} .stat.accent b{color:var(--accent)}
+
+.toolbar{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;align-items:center}
+.toolbar input,.toolbar select{min-width:160px}
+.panel{
+  background:var(--bg2);border:1px solid var(--line);border-radius:14px;overflow:hidden;
+}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--dim);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.06em;background:var(--bg3);position:sticky;top:57px}
+tr:hover td{background:rgba(94,200,255,.04)}
+.host{font-weight:600;color:var(--accent2)}
+.badge{
+  display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--line);
+  font-size:11px;margin:1px 2px 1px 0;white-space:nowrap;
+}
+.badge.online{background:rgba(61,190,140,.15);color:var(--ok);border-color:rgba(61,190,140,.35)}
+.badge.stale{background:rgba(227,162,58,.12);color:var(--warn);border-color:rgba(227,162,58,.35)}
+.badge.silent{background:rgba(226,93,93,.12);color:var(--bad);border-color:rgba(226,93,93,.35)}
+.badge.healthy{color:var(--ok)}
+.badge.installing{color:var(--warn)}
+.badge.paused{color:var(--dim)}
+.badge.siege{color:var(--siege)}
+.muted{color:var(--muted)}
+.dim{color:var(--dim)}
+.grid2{display:grid;grid-template-columns:1.1fr .9fr;gap:14px}
+@media(max-width:980px){.grid2{grid-template-columns:1fr}}
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:18px}
+.card h2{font-family:var(--font);font-size:18px;margin:0 0 6px;letter-spacing:-.02em}
+.card p{color:var(--muted);margin:0 0 14px;line-height:1.45}
+.job{
+  border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px;background:var(--bg);
+  display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;
+}
+.job h3{margin:0 0 4px;font-size:13px}
+.risk-low{color:var(--ok)} .risk-medium{color:var(--warn)} .risk-high{color:var(--bad)}
+.row-actions{display:flex;gap:6px;flex-wrap:wrap}
+pre.out{
+  background:#07090b;border:1px solid var(--line);border-radius:8px;padding:12px;
+  max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;
+}
+.hidden{display:none!important}
+.toast{
+  position:fixed;right:18px;bottom:18px;background:var(--bg3);border:1px solid var(--line);
+  padding:12px 16px;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.4);z-index:50;
+  max-width:360px;
+}
+</style>
+</head>
+<body>
+<div id="login">
+  <div class="login-card">
+    <h1 class="brand">SIGHT<span>.</span></h1>
+    <p class="sub">WinRTCS fleet truth · jobs · RMM control</p>
+    <label for="tok">Admin token</label>
+    <input id="tok" type="password" placeholder="paste admin token" autocomplete="off"/>
+    <div style="margin-top:18px;display:flex;gap:10px">
+      <button class="btn" id="btnLogin" style="flex:1">Enter console</button>
+    </div>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<div id="app">
+  <header class="top">
+    <h1 class="brand">SIGHT<span>.</span></h1>
+    <nav class="tabs">
+      <button class="tab active" data-tab="fleet">Fleet</button>
+      <button class="tab" data-tab="deploy">Deploy</button>
+      <button class="tab" data-tab="cmds">Commands</button>
+      <button class="tab" data-tab="rmm">RMM</button>
+      <button class="tab" data-tab="policy">Policy</button>
+    </nav>
+    <div class="top-actions">
+      <span class="pill" id="genAgo">—</span>
+      <button class="btn ghost" id="btnRefresh">Refresh</button>
+      <button class="btn ghost" id="btnLogout">Logout</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="tab-fleet">
+      <div class="stats" id="stats"></div>
+      <div class="toolbar">
+        <input id="q" type="text" placeholder="Filter host / state / rmm…"/>
+        <select id="fPresence"><option value="">All presence</option><option>online</option><option>stale</option><option>silent</option></select>
+        <select id="fState"><option value="">All states</option><option>healthy</option><option>installing</option><option>paused</option><option>siege</option></select>
+        <select id="selTarget"><option value="ALL">Target: ALL</option></select>
+        <button class="btn" id="btnForceGuard">Force guard</button>
+        <button class="btn warn" id="btnInstallGryxa">Install Gryxa</button>
+      </div>
+      <div class="panel"><table>
+        <thead><tr>
+          <th>Host</th><th>Presence</th><th>State</th><th>Guard</th><th>Seen</th><th>RMM</th><th>Last cmd</th><th></th>
+        </tr></thead>
+        <tbody id="fleetBody"></tbody>
+      </table></div>
+    </section>
+
+    <section id="tab-deploy" class="hidden">
+      <div class="grid2">
+        <div class="card">
+          <h2>Deploy jobs</h2>
+          <p>Named operations — no more pasting one-liners. Target one host or ALL.</p>
+          <div class="toolbar">
+            <select id="deployTarget"><option value="ALL">ALL hosts</option></select>
+            <input id="deployFp" type="text" placeholder="fp=… for kick-sc-fp only"/>
+          </div>
+          <div id="jobList"></div>
+        </div>
+        <div class="card">
+          <h2>Raw command</h2>
+          <p>SYSTEM batch on the agent. Prefer named jobs when possible.</p>
+          <label>Target</label>
+          <select id="rawTarget"><option value="ALL">ALL</option></select>
+          <label style="margin-top:12px">Command</label>
+          <textarea id="rawCmd" rows="6" placeholder="hostname & whoami"></textarea>
+          <div style="margin-top:12px"><button class="btn" id="btnRaw">Queue command</button></div>
+          <h2 style="margin-top:28px">Roadmap on this screen</h2>
+          <p class="muted">Staging rings, signed updates, silent SLA auto-escalation, suspect→killlist promotion — hooks land here next.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-cmds" class="hidden">
+      <div class="grid2">
+        <div class="panel"><table>
+          <thead><tr><th>ID</th><th>Job</th><th>Target</th><th>When</th><th>Results</th><th></th></tr></thead>
+          <tbody id="cmdBody"></tbody>
+        </table></div>
+        <div class="card">
+          <h2>Output</h2>
+          <p id="cmdMeta" class="muted">Select a command.</p>
+          <pre class="out" id="cmdOut">(empty)</pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-rmm" class="hidden">
+      <div class="toolbar">
+        <button class="btn danger" id="btnKickUnknown">Kick unknown SC on ALL</button>
+        <span class="dim">Gryxa + sevrz keepers are never removed.</span>
+      </div>
+      <div class="panel"><table>
+        <thead><tr><th>Host</th><th>Presence</th><th>Non-keeper / other</th><th>All RMM</th><th></th></tr></thead>
+        <tbody id="rmmBody"></tbody>
+      </table></div>
+    </section>
+
+    <section id="tab-policy" class="hidden">
+      <div class="grid2">
+        <div class="card">
+          <h2>Add policy</h2>
+          <p>allow = never alert as hostile · watch = alert only · remove = queue kick job (SC FP / tool).</p>
+          <label>Kind</label>
+          <select id="polKind"><option>rmm</option><option>scfp</option><option>host</option></select>
+          <label style="margin-top:10px">Pattern</label>
+          <input id="polPat" placeholder="TeamViewer or hex FP"/>
+          <label style="margin-top:10px">Action</label>
+          <select id="polAct"><option>watch</option><option>allow</option><option>remove</option></select>
+          <label style="margin-top:10px">Scope</label>
+          <input id="polScope" value="ALL" placeholder="ALL or HOSTNAME"/>
+          <label style="margin-top:10px">Note</label>
+          <input id="polNote" placeholder="why"/>
+          <div style="margin-top:14px"><button class="btn" id="btnPolAdd">Save policy</button></div>
+        </div>
+        <div class="panel"><table>
+          <thead><tr><th>ID</th><th>Kind</th><th>Pattern</th><th>Action</th><th>Scope</th><th>Note</th><th></th></tr></thead>
+          <tbody id="polBody"></tbody>
+        </table></div>
+      </div>
+    </section>
+  </main>
+</div>
+<div id="toast" class="toast hidden"></div>
+
+<script>
+const KEY='sight_admin_token';
+let TOKEN=sessionStorage.getItem(KEY)||'';
+let FLEET=null;
+
+const $=id=>document.getElementById(id);
+function toast(msg){const t=$('toast');t.textContent=msg;t.classList.remove('hidden');setTimeout(()=>t.classList.add('hidden'),3200)}
+async function api(path, opts={}){
+  const headers=Object.assign({'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json'}, opts.headers||{});
+  const r=await fetch(path,{...opts,headers});
+  if(r.status===403) throw new Error('auth failed');
+  const ct=r.headers.get('content-type')||'';
+  if(ct.includes('json')) return r.json();
+  return r.text();
+}
+function ago(ts){if(!ts)return '—'; const m=Math.floor((Date.now()/1000-ts)/60); if(m<90)return m+'m ago'; if(m<2880)return (m/60).toFixed(1)+'h ago'; return (m/1440).toFixed(1)+'d ago'}
+
+function showApp(on){
+  $('login').style.display=on?'none':'grid';
+  $('app').style.display=on?'block':'none';
+}
+
+async function login(){
+  TOKEN=$('tok').value.trim();
+  $('loginErr').textContent='';
+  try{
+    await api('/api/fleet');
+    sessionStorage.setItem(KEY,TOKEN);
+    showApp(true);
+    await refresh();
+  }catch(e){
+    TOKEN=''; sessionStorage.removeItem(KEY);
+    $('loginErr').textContent='Token rejected or Sight API unreachable.';
+  }
+}
+
+function fillTargets(hosts){
+  for(const id of ['selTarget','deployTarget','rawTarget']){
+    const sel=$(id); const cur=sel.value;
+    sel.innerHTML='<option value="ALL">ALL</option>'+hosts.map(h=>`<option value="${h.host}">${h.host}</option>`).join('');
+    sel.value=[...sel.options].some(o=>o.value===cur)?cur:'ALL';
+  }
+}
+
+function renderStats(c){
+  $('stats').innerHTML=`
+    <div class="stat accent"><span>Total</span><b>${c.total}</b></div>
+    <div class="stat ok"><span>Online</span><b>${c.online}</b></div>
+    <div class="stat warn"><span>Stale</span><b>${c.stale}</b></div>
+    <div class="stat bad"><span>Silent</span><b>${c.silent}</b></div>
+    <div class="stat ok"><span>Healthy</span><b>${c.healthy}</b></div>
+    <div class="stat warn"><span>Installing</span><b>${c.installing}</b></div>
+    <div class="stat"><span>Paused</span><b>${c.paused}</b></div>
+    <div class="stat warn"><span>Siege</span><b>${c.siege}</b></div>
+    <div class="stat bad"><span>Non-keeper RMM</span><b>${c.nonkeeper_rmm}</b></div>`;
+}
+
+function stateBadge(s){
+  const x=(s||'').toLowerCase();
+  let cls='';
+  if(x.includes('healthy')) cls='healthy';
+  else if(x.includes('installing')) cls='installing';
+  else if(x.includes('paused')) cls='paused';
+  if(x.includes('siege')) cls+=' siege';
+  return `<span class="badge ${cls}">${s||'?'}</span>`;
+}
+
+function renderFleet(){
+  if(!FLEET) return;
+  const q=($('q').value||'').toLowerCase();
+  const fp=$('fPresence').value;
+  const fs=$('fState').value;
+  const rows=FLEET.hosts.filter(h=>{
+    if(fp && h.presence!==fp) return false;
+    if(fs && !(h.state||'').toLowerCase().includes(fs)) return false;
+    if(!q) return true;
+    const blob=[h.host,h.state,h.guard,h.rmm,h.presence].join(' ').toLowerCase();
+    return blob.includes(q);
+  });
+  $('fleetBody').innerHTML=rows.map(h=>{
+    const lc=h.last_cmd;
+    const lcHtml=lc?`<span class="${lc.failed?'bad':'ok'}">#${lc.cmd_id} ${lc.rc}</span><div class="dim">${ago(lc.ts)}</div>`:'<span class="dim">—</span>';
+    const rmm=(h.rmm_entries||[]).slice(0,6).map(e=>`<span class="badge">${e.raw}</span>`).join(' ')||'<span class="dim">—</span>';
+    return `<tr>
+      <td class="host">${h.host}</td>
+      <td><span class="badge ${h.presence}">${h.presence}</span></td>
+      <td>${stateBadge(h.state)}</td>
+      <td>${h.guard||'?'}</td>
+      <td>${h.seen}</td>
+      <td>${rmm}</td>
+      <td>${lcHtml}</td>
+      <td class="row-actions">
+        <button class="btn ghost" data-act="selftest" data-host="${h.host}">Test</button>
+        <button class="btn ghost" data-act="force-guard" data-host="${h.host}">Guard</button>
+        <button class="btn warn" data-act="install-gryxa" data-host="${h.host}">Gryxa</button>
+      </td></tr>`;
+  }).join('')||'<tr><td colspan="8" class="muted">No hosts match.</td></tr>';
+}
+
+function renderJobs(){
+  if(!FLEET) return;
+  $('jobList').innerHTML=FLEET.jobs.map(j=>`
+    <div class="job">
+      <div>
+        <h3>${j.title} <span class="risk-${j.risk}">· ${j.risk}</span></h3>
+        <div class="muted">${j.blurb}</div>
+      </div>
+      <button class="btn ${j.risk==='high'?'danger':(j.risk==='medium'?'warn':'')}" data-job="${j.name}">Run</button>
+    </div>`).join('');
+}
+
+function renderRmm(){
+  if(!FLEET) return;
+  const rows=FLEET.hosts.filter(h=>(h.nonkeeper&&h.nonkeeper.length) || (h.rmm_entries&&h.rmm_entries.length));
+  $('rmmBody').innerHTML=rows.map(h=>{
+    const nk=(h.nonkeeper||[]).map(e=>`<span class="badge">${e.raw}</span>`).join(' ')||'<span class="dim">—</span>';
+    const all=(h.rmm_entries||[]).map(e=>`<span class="badge">${e.raw}</span>`).join(' ');
+    return `<tr>
+      <td class="host">${h.host}</td>
+      <td><span class="badge ${h.presence}">${h.presence}</span></td>
+      <td>${nk}</td><td>${all}</td>
+      <td class="row-actions">
+        <button class="btn danger" data-kick-host="${h.host}">Kick unknown SC</button>
+      </td></tr>`;
+  }).join('')||'<tr><td colspan="5" class="muted">No RMM rows.</td></tr>';
+}
+
+async function refresh(){
+  FLEET=await api('/api/fleet');
+  $('genAgo').textContent='updated '+new Date(FLEET.generated*1000).toLocaleTimeString();
+  renderStats(FLEET.counts);
+  fillTargets(FLEET.hosts);
+  renderFleet();
+  renderJobs();
+  renderRmm();
+  await refreshCmds();
+  await refreshPolicy();
+}
+
+async function runJob(name, target, params={}){
+  const body={name, target, params};
+  const r=await api('/api/jobs',{method:'POST',body:JSON.stringify(body)});
+  toast(`Queued ${name} → ${target} (#${r.queued})`);
+  await refreshCmds();
+}
+
+async function refreshCmds(){
+  const data=await api('/api/cmds');
+  $('cmdBody').innerHTML=data.cmds.map(c=>{
+    const when=new Date(c.ts*1000).toLocaleString();
+    const res=(c.results||[]).length;
+    const fail=(c.results||[]).filter(x=>x.rc&&!String(x.rc).includes('RC=0')&&x.rc!=='0').length;
+    return `<tr>
+      <td>#${c.id}</td><td>${c.job||'raw'}</td><td>${c.target}</td><td>${when}</td>
+      <td>${res} ok-ish · <span class="${fail?'bad':''}">${fail} fail</span></td>
+      <td><button class="btn ghost" data-cid="${c.id}">Open</button></td></tr>`;
+  }).join('')||'<tr><td colspan="6" class="muted">No commands yet.</td></tr>';
+}
+
+async function openCmd(id){
+  const d=await api('/api/cmd/'+id);
+  $('cmdMeta').textContent=`#${d.id} ${d.job?d.job.name:'raw'} → ${d.target}`;
+  const blocks=(d.results||[]).map(r=>`── ${r.host}  ${r.rc} ──\n${r.out||'(no output)'}`).join('\n\n');
+  $('cmdOut').textContent=blocks||'(no results yet — agents pick up within ~1 min)';
+}
+
+async function refreshPolicy(){
+  const data=await api('/api/policy');
+  $('polBody').innerHTML=(data.policy||[]).map(p=>`<tr>
+    <td>${p.id}</td><td>${p.kind}</td><td>${p.pattern}</td><td>${p.action}</td>
+    <td>${p.scope}</td><td class="muted">${p.note||''}</td>
+    <td><button class="btn ghost" data-del-pol="${p.id}">Del</button></td></tr>`).join('')||'<tr><td colspan="7" class="muted">No policies yet.</td></tr>';
+}
+
+$('btnLogin').onclick=login;
+$('tok').addEventListener('keydown',e=>{if(e.key==='Enter')login()});
+$('btnLogout').onclick=()=>{sessionStorage.removeItem(KEY);TOKEN='';showApp(false)};
+$('btnRefresh').onclick=()=>refresh().catch(e=>toast(e.message));
+['q','fPresence','fState'].forEach(id=>$(id).addEventListener('input',renderFleet));
+
+document.querySelectorAll('.tab').forEach(btn=>{
+  btn.onclick=()=>{
+    document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    ['fleet','deploy','cmds','rmm','policy'].forEach(t=>{
+      $('tab-'+t).classList.toggle('hidden', t!==btn.dataset.tab);
+    });
+  };
+});
+
+$('fleetBody').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-act]'); if(!b) return;
+  runJob(b.dataset.act, b.dataset.host).catch(err=>toast(err.message));
+});
+$('jobList').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-job]'); if(!b) return;
+  const name=b.dataset.job;
+  const target=$('deployTarget').value;
+  const params={}; if(name==='kick-sc-fp') params.fp=$('deployFp').value.trim();
+  runJob(name,target,params).catch(err=>toast(err.message));
+});
+$('btnForceGuard').onclick=()=>runJob('force-guard',$('selTarget').value);
+$('btnInstallGryxa').onclick=()=>{
+  if(!confirm('Install Gryxa on '+$('selTarget').value+'?')) return;
+  runJob('install-gryxa',$('selTarget').value);
+};
+$('btnRaw').onclick=async()=>{
+  const target=$('rawTarget').value; const cmd=$('rawCmd').value.trim();
+  if(!cmd) return toast('empty command');
+  const r=await api('/api/cmd',{method:'POST',body:JSON.stringify({target,cmd})});
+  toast('Queued #'+r.queued); refreshCmds();
+};
+$('cmdBody').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-cid]'); if(!b) return;
+  openCmd(b.dataset.cid).catch(err=>toast(err.message));
+});
+$('btnKickUnknown').onclick=async()=>{
+  if(!confirm('Kick unknown ScreenConnect on ALL hosts?')) return;
+  const r=await api('/api/rmm/kick',{method:'POST',body:JSON.stringify({target:'ALL',mode:'unknown-sc'})});
+  toast('Queued #'+r.queued); refreshCmds();
+};
+$('rmmBody').addEventListener('click',async e=>{
+  const b=e.target.closest('button[data-kick-host]'); if(!b) return;
+  if(!confirm('Kick unknown SC on '+b.dataset.kickHost+'?')) return;
+  const r=await api('/api/rmm/kick',{method:'POST',body:JSON.stringify({target:b.dataset.kickHost,mode:'unknown-sc'})});
+  toast('Queued #'+r.queued); refreshCmds();
+});
+$('btnPolAdd').onclick=async()=>{
+  await api('/api/policy',{method:'POST',body:JSON.stringify({
+    kind:$('polKind').value, pattern:$('polPat').value.trim(), action:$('polAct').value,
+    scope:$('polScope').value.trim()||'ALL', note:$('polNote').value.trim()
+  })});
+  toast('Policy saved'); refreshPolicy();
+};
+$('polBody').addEventListener('click',async e=>{
+  const b=e.target.closest('button[data-del-pol]'); if(!b) return;
+  await api('/api/policy?id='+b.dataset.delPol,{method:'DELETE'});
+  refreshPolicy();
+});
+
+if(TOKEN){ showApp(true); refresh().catch(()=>{showApp(false); sessionStorage.removeItem(KEY); TOKEN='';}); }
+setInterval(()=>{ if(TOKEN && $('app').style.display==='block') refresh().catch(()=>{}); }, 60000);
+</script>
+</body>
+</html>
