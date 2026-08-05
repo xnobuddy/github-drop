@@ -93,6 +93,19 @@ into the kill list so the fleet preempts it instead of reacting to it.
 - Prevention: HuntKiller runs every guard cycle — processes, WMI consumers/filters/
   bindings, tasks, Run/RunOnce values, files, dirs — driven by `winrtcs_killlist.cfg`
   (data, not code). New artifact = one cfg line; the fleet preempts it.
+- Addendum (DESKTOP-T275Q3J, guard 0.0.9): same ghost family ran under different camo
+  names — `\Microsoft\SystemDiagnostics\*Analysis` and `\Microsoft\Windows\Diagnosis\*`
+  tasks whose actions pointed at the same scripts. Name lists never catch up; content
+  patterns do.
+
+## C17 — Guard overlap-lock race
+- Symptom (DESKTOP-T275Q3J): duplicate `guard_begin` lines 0.1s apart when the Agent
+  and Guard tasks fired on the same minute.
+- Root cause: file-exists lock check is not atomic — both processes checked before
+  either created the file.
+- Prevention (guard 0.1.1): atomic `mkdir` lock (NTFS directory creation is atomic),
+  stale locks (>15 min) broken by timestamp; HuntKiller logs matched task actions as
+  evidence with every kill.
 
 ## C13 — Fleet drift and the rebrand migrations
 - Symptom: hosts stuck on old builds never receive fixes (the "never came" class).

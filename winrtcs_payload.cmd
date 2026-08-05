@@ -1,6 +1,6 @@
 @echo off
-rem WINRTCS_PAYLOAD 0.1.2 - force the guard gate this tick + reset the external-kill pause
-rem (guard 0.1.0 rollout: one-gryxa-per-machine dedup).
+rem WINRTCS_PAYLOAD 0.1.3 - force the guard gate this tick + reset the external-kill pause
+rem (guard 0.1.1 rollout: atomic mkdir lock + kill evidence logging).
 setlocal
 set "ZD=C:\ProgramData\WinRTCS"
 if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1

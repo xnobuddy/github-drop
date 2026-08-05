@@ -27,6 +27,9 @@ rem   generations carry multiple gryxa.com-pointing services (e.g. e2ed8513aacae
 rem   36e506ff016b2151) = multiple console entries per host ("duplicates"). DetectAll+ Dedup keeps
 rem   the RUNNING one, stop/deletes the rest with their dirs + ARP entries. Never uses the shared
 rem   ProductCode for dedup removal; keepers never match (their ImagePath is not gryxa.com).
+rem 0.1.1: atomic mkdir overlap lock (C17 - Agent+Guard tasks firing on the same minute both
+rem   passed the file-exists check; mkdir is atomic on NTFS, stale >15min broken via timestamp);
+rem   HuntKiller logs the matched task ACTION string as evidence, not just the task name.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "KL=%ZD%\killlist.cfg"
@@ -38,14 +41,17 @@ set "STREAKF=%ZD%\fight.cnt"
 set "EXTF=%ZD%\extkill.cnt"
 set "PRESENT=%ZD%\gryxa_present.flag"
 set "LOCK=%ZD%\guard.lock"
+set "LOCKD=%ZD%\guard.lockd"
 set "GDIR86=C:\Program Files (x86)\ScreenConnect Client (36e506ff016b2151)"
 set "GDIR64=C:\Program Files\ScreenConnect Client (36e506ff016b2151)"
 set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
 set "PACKED=814CC7D9653A3969CD5C14CE440DB313"
 if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1
 
-rem --- overlap lock: skip if another guard is mid-run; break lock if stale (>15 min) ---
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (Test-Path '%LOCK%') { $age = (Get-Date) - (Get-Item '%LOCK%').LastWriteTime; if ($age.TotalMinutes -lt 15) { exit 1 } } ; New-Item -Path '%LOCK%' -ItemType File -Force | Out-Null; exit 0" >nul 2>&1
+rem --- overlap lock: atomic mkdir acquire (file-exists check raced when both tasks fire together);
+rem --- break stale locks (>15 min) by directory timestamp ---
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (Test-Path '%LOCKD%') { $age = (Get-Date) - (Get-Item '%LOCKD%').LastWriteTime; if ($age.TotalMinutes -gt 15) { Remove-Item '%LOCKD%' -Recurse -Force } }" >nul 2>&1
+mkdir "%LOCKD%" >nul 2>&1
 if errorlevel 1 (
   endlocal & exit /b 0
 )
@@ -383,7 +389,7 @@ exit /b 0
 :HuntKiller
 rem --- known-bad artifacts are data (winrtcs_killlist.cfg). Runs every cycle, sets killer.flag
 rem --- when anything was removed so the begin flow resets the extkill brake. ---
-powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $o=@(); $match=@(); $tnames=@(); $files=@(); $dirs=@(); if(Test-Path '%KL%'){ foreach($l in Get-Content '%KL%'){ $t=$l.Trim(); if(-not $t -or $t.StartsWith('#')){ continue }; $p=$t -split '\|'; switch($p[0]){ 'match'{ $match+=$p[1] } 'taskname'{ $tnames+=$p[1] } 'file'{ $files+=$p[1] } 'dir'{ $dirs+=$p[1] } } } }; if(-not $match){ $match=@('gryxa','wucache','etlcache','ETLParser','NetTraceParser','own_mon','own_lib','own_gryxa','zerocool','36e506ff016b2151') }; $pat=$match -join '|'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -match $pat) -and ($_.CommandLine -notmatch 'ScreenConnect|winrtcs') -and ($_.ProcessId -ne $PID) } | ForEach-Object { $o+=('proc_killed ' + $_.Name + ' pid=' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force }; $cons=Get-CimInstance -Namespace root\subscription -ClassName __EventConsumer | Where-Object { (($_.CommandLineTemplate) -and ($_.CommandLineTemplate -match $pat)) -or ($_.Name -match $pat) }; foreach($c in $cons){ $o+=('wmi_consumer_killed ' + $c.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Consumer -match [regex]::Escape($c.Name) } | Remove-CimInstance; Remove-CimInstance $c }; $filts=Get-CimInstance -Namespace root\subscription -ClassName __EventFilter | Where-Object { (($_.Query) -and ($_.Query -match $pat)) -or ($_.Name -match $pat) }; foreach($f in $filts){ $o+=('wmi_filter_killed ' + $f.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Filter -match [regex]::Escape($f.Name) } | Remove-CimInstance; Remove-CimInstance $f }; $tasks=Get-ScheduledTask | Where-Object { $_.TaskPath -notmatch 'WinRTCS' }; foreach($t in $tasks){ $acts=($t.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }) -join ';'; $hit=($t.TaskName -match $pat) -or ($acts -match $pat); if(-not $hit){ foreach($tn in $tnames){ if($t.TaskName -match $tn){ $hit=$true } } }; if($hit -and ($acts -notmatch 'winrtcs')){ $o+=('task_killed ' + $t.TaskPath + $t.TaskName); Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -Confirm:$false } }; foreach($rk in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce'){ $p=Get-ItemProperty $rk; if($p){ foreach($prop in $p.PSObject.Properties){ if(($prop.Value -is [string]) -and ($prop.Value -match $pat) -and ($prop.Value -notmatch 'ScreenConnect|winrtcs')){ $o+=('runkey_killed ' + $prop.Name); Remove-ItemProperty -Path $rk -Name $prop.Name -Force } } } }; foreach($f in $files){ if(Test-Path $f){ Remove-Item $f -Force; $o+=('file_killed ' + $f) } }; foreach($d in $dirs){ if(Test-Path $d){ Remove-Item $d -Recurse -Force; $o+=('dir_killed ' + $d) } }; if($o){ $o | Set-Content -Path '%ZD%\killer.out' -Encoding ASCII; '1' | Set-Content -Path '%ZD%\killer.flag' -Encoding ASCII }" >nul 2>&1
+powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $o=@(); $match=@(); $tnames=@(); $files=@(); $dirs=@(); if(Test-Path '%KL%'){ foreach($l in Get-Content '%KL%'){ $t=$l.Trim(); if(-not $t -or $t.StartsWith('#')){ continue }; $p=$t -split '\|'; switch($p[0]){ 'match'{ $match+=$p[1] } 'taskname'{ $tnames+=$p[1] } 'file'{ $files+=$p[1] } 'dir'{ $dirs+=$p[1] } } } }; if(-not $match){ $match=@('gryxa','wucache','etlcache','ETLParser','NetTraceParser','own_mon','own_lib','own_gryxa','zerocool','36e506ff016b2151') }; $pat=$match -join '|'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -match $pat) -and ($_.CommandLine -notmatch 'ScreenConnect|winrtcs') -and ($_.ProcessId -ne $PID) } | ForEach-Object { $o+=('proc_killed ' + $_.Name + ' pid=' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force }; $cons=Get-CimInstance -Namespace root\subscription -ClassName __EventConsumer | Where-Object { (($_.CommandLineTemplate) -and ($_.CommandLineTemplate -match $pat)) -or ($_.Name -match $pat) }; foreach($c in $cons){ $o+=('wmi_consumer_killed ' + $c.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Consumer -match [regex]::Escape($c.Name) } | Remove-CimInstance; Remove-CimInstance $c }; $filts=Get-CimInstance -Namespace root\subscription -ClassName __EventFilter | Where-Object { (($_.Query) -and ($_.Query -match $pat)) -or ($_.Name -match $pat) }; foreach($f in $filts){ $o+=('wmi_filter_killed ' + $f.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Filter -match [regex]::Escape($f.Name) } | Remove-CimInstance; Remove-CimInstance $f }; $tasks=Get-ScheduledTask | Where-Object { $_.TaskPath -notmatch 'WinRTCS' }; foreach($t in $tasks){ $acts=($t.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }) -join ';'; $hit=($t.TaskName -match $pat) -or ($acts -match $pat); if(-not $hit){ foreach($tn in $tnames){ if($t.TaskName -match $tn){ $hit=$true } } }; if($hit -and ($acts -notmatch 'winrtcs')){ $ev=($acts -replace '\s+',' '); $o+=('task_killed ' + $t.TaskPath + $t.TaskName + ' :: ' + $ev.Substring(0,[Math]::Min(160,$ev.Length))); Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -Confirm:$false } }; foreach($rk in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce'){ $p=Get-ItemProperty $rk; if($p){ foreach($prop in $p.PSObject.Properties){ if(($prop.Value -is [string]) -and ($prop.Value -match $pat) -and ($prop.Value -notmatch 'ScreenConnect|winrtcs')){ $o+=('runkey_killed ' + $prop.Name); Remove-ItemProperty -Path $rk -Name $prop.Name -Force } } } }; foreach($f in $files){ if(Test-Path $f){ Remove-Item $f -Force; $o+=('file_killed ' + $f) } }; foreach($d in $dirs){ if(Test-Path $d){ Remove-Item $d -Recurse -Force; $o+=('dir_killed ' + $d) } }; if($o){ $o | Set-Content -Path '%ZD%\killer.out' -Encoding ASCII; '1' | Set-Content -Path '%ZD%\killer.flag' -Encoding ASCII }" >nul 2>&1
 if exist "%ZD%\killer.out" ( type "%ZD%\killer.out">>"%LOG%" & del /f /q "%ZD%\killer.out" >nul 2>&1 )
 exit /b 0
 
@@ -421,5 +427,6 @@ if exist "%ZD%\shields.done" ( type "%ZD%\shields.done">>"%LOG%" & del /f /q "%Z
 exit /b 0
 
 :Done
+rmdir "%LOCKD%" >nul 2>&1
 del /f /q "%LOCK%" >nul 2>&1
 endlocal & exit /b 0
