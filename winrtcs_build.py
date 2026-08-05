@@ -16,8 +16,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 WINRTCS_VER = "0.0.1"
-PAYLOAD_VER = "0.0.6"
-GUARD_VER = "0.0.4"
+PAYLOAD_VER = "0.0.7"
+GUARD_VER = "0.0.5"
 BRIDGE_PAYLOAD_VER = "0.0.2"
 
 CRLF_FILES = [

