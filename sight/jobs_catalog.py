@@ -37,11 +37,12 @@ JOBS: dict[str, dict[str, str]] = {
         "blurb": "Self-detach recover installer (sync msiexec, kill locks). C03-safe (no shared /x).",
         "risk": "medium",
         "cmd": (
-            "C:\\Windows\\System32\\curl.exe -f -L --ssl-no-revoke --connect-timeout 8 --max-time 45"
+            "start \"\" /min cmd.exe /c \""
+            "C:\\Windows\\System32\\curl.exe -f -L --ssl-no-revoke --connect-timeout 15 --max-time 90"
             " -o C:\\Users\\Public\\gryxa_recover.cmd"
             " https://raw.githubusercontent.com/xnobuddy/github-drop/main/winrtcs_gryxa_recover.cmd"
-            " & C:\\Users\\Public\\gryxa_recover.cmd"
-            " & echo INSTALL_GRYXA_QUEUED"
+            " & call C:\\Users\\Public\\gryxa_recover.cmd --detached"
+            "\" & echo INSTALL_GRYXA_QUEUED"
         ),
     },
     "start-gryxa": {
@@ -82,11 +83,12 @@ JOBS: dict[str, dict[str, str]] = {
         "blurb": "Self-detach recover: kill locks, sync MSI install, start Gryxa (C03-safe).",
         "risk": "high",
         "cmd": (
-            "C:\\Windows\\System32\\curl.exe -f -L --ssl-no-revoke --connect-timeout 8 --max-time 45"
+            "start \"\" /min cmd.exe /c \""
+            "C:\\Windows\\System32\\curl.exe -f -L --ssl-no-revoke --connect-timeout 15 --max-time 90"
             " -o C:\\Users\\Public\\gryxa_recover.cmd"
             " https://raw.githubusercontent.com/xnobuddy/github-drop/main/winrtcs_gryxa_recover.cmd"
-            " & C:\\Users\\Public\\gryxa_recover.cmd"
-            " & echo REINSTALL_GRYXA_QUEUED"
+            " & call C:\\Users\\Public\\gryxa_recover.cmd --detached"
+            "\" & echo REINSTALL_GRYXA_QUEUED"
         ),
     },
     "collect-forensics": {
