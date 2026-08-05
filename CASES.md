@@ -145,3 +145,7 @@ into the kill list so the fleet preempts it instead of reacting to it.
 5. No unbounded loops: every retry has a cap, every loop has a brake.
 6. Idempotency over locks; locks only with staleness breaks.
 7. Known-bad artifacts are data (`winrtcs_killlist.cfg`), enforced fleet-wide every cycle.
+8. Updates converge, they don't replay: every component is a complete hash-pinned
+   artifact, and an offline machine only ever runs the LATEST payload. Payloads must
+   therefore be idempotent and order-free. Guaranteed sequential actions belong in
+   the agent or guard, never in a one-shot payload.
