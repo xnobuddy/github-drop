@@ -292,6 +292,15 @@ into the kill list so the fleet preempts it instead of reacting to it.
   without the linter; the linter now runs as a build gate in winrtcs_build.py
   (paren balance, labels-in-blocks, goto resolution, fd-trap, session-0 timeout, CRLF).
 
+## C28 — Quick FAIL agent-download under Guest (VPS-first + 10s kill)
+- Symptom: `curl ... winrtcs_quick.cmd && wq.cmd` prints `FAIL agent-download` on a
+  live host even though GitHub serves agent fine.
+- Root cause: Q3 fetched VPS first (often 403/hang, up to 6–30s). ScreenConnect Guest
+  kills the foreground tree at ~10s, so the GitHub fallback never landed agent.cmd.
+  Foreground `&& wq.cmd` also kept the whole installer inside the kill window.
+- Fix (Quick Q4): self-detach on entry; GitHub-first then short VPS fallback; Public
+  WinRTCS dir if ProgramData is unwritable; louder FAIL with `zd=`.
+
 ## C27 — Retire PluxN (f861c8140d453427) fleet-wide
 - Decision: uninstall ScreenConnect FP `f861c8140d453427` (PluxN) from every host.
   Remaining sevrz keeper is only `5f6010579852e507`. Gryxa untouched.
