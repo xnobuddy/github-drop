@@ -52,6 +52,10 @@ rem   + processes against data-driven rmm| signatures from the kill list. Diff v
 rem   on STABLE identity (relay/ver/path - state flapping never re-alerts); new or changed
 rem   entries ride the digest as rmm_new and the VPS batches them into one Telegram alert.
 rem   REPORT ONLY - open world, rule 9: the machine never acts on what it finds.
+rem 0.1.6: fd-trap sweep (C22 doctrine) - single-digit-before-> writes (echo 0>file) are
+rem   handle redirects and create EMPTY files; counter resets now use the immune prefix
+rem   form (>file echo 0). Fixes guard.cnt reset landing empty (agent re-randomized the
+rem   cadence instead of a clean 0). !VAR!> writes were always safe (parse-time '!').
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
@@ -89,7 +93,7 @@ if errorlevel 1 (
 )
 
 rem --- gate owns the cadence; we own the reset (lock-busy above leaves counter high -> retry next tick) ---
-echo 0>"%ZD%\guard.cnt"
+>"%ZD%\guard.cnt" echo 0
 set "RI=0"
 set "GSTATE=recovering"
 set "SUSREP="
@@ -109,7 +113,7 @@ call :FetchKL
 call :HuntKiller
 if exist "%ZD%\killer.flag" (
   del /f /q "%ZD%\killer.flag" >nul 2>&1
-  set "EXTK=0" & echo 0>"%EXTF%"
+  set "EXTK=0" & >"%EXTF%" echo 0
   echo [%DATE% %TIME%] ghost_removed_brake_reset>>"%LOG%"
 )
 
@@ -175,8 +179,8 @@ goto :FightThenInstall
 
 :Healthy
 set "GSTATE=healthy"
-echo 0>"%STREAKF%"
-echo 0>"%EXTF%"
+>"%STREAKF%" echo 0
+>"%EXTF%" echo 0
 echo %DATE% %TIME%>"%PRESENT%"
 if exist "%ZD%\defender_countered.flag" call :DefenderRestore
 echo [%DATE% %TIME%] healthy !GSVC!>>"%LOG%"
@@ -335,7 +339,7 @@ timeout /t 5 /nobreak >nul 2>&1
 call :Session
 if defined GUP (
   echo %DATE% %TIME%>"%PRESENT%"
-  echo 0>"%EXTF%"
+  >"%EXTF%" echo 0
   echo [%DATE% %TIME%] installed_verified !GSVC! src=!SRC! recheck=10m>>"%LOG%"
   echo 170>"%ZD%\guard.cnt"
   del /f /q "%MSI%" >nul 2>&1

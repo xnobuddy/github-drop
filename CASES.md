@@ -237,6 +237,18 @@ into the kill list so the fleet preempts it instead of reacting to it.
   (✅ healthy, ⚔️ fighting, 🛡️ siege, 🔧 installing, ⏸️ paused, 🔇 silent), RMM
   findings render as detail cards (FP / relay / version / tag), command results in
   monospace blocks. Batching is alert-aware — a message never splits mid-tag.
+- First broadcast (78 machines, ~2 min pickup) exposed three cmd.exe mechanics bugs,
+  all root-caused by local repro before re-push:
+  1. `echo ... 2^>^&1>> wrapper` — the literal `1` before the real `>>` is eaten as the
+     fd number of the append; wrapper got a broken `2>&`. Fix: space before `>>`.
+  2. `timeout /t N` exits instantly without a console (session-0/scheduled context) —
+     wait loops must use `ping -n N+1 127.0.0.1` instead.
+  3. **fd-trap**: a single digit immediately before `>` is parsed as a HANDLE redirect
+     (`echo RC=0>file` → `0>` = stdin → creates an EMPTY file; text leaks to console).
+     Multi-digit (`9999>`) and parse-time `!` (`echo !V!>file`) are safe — which is why
+     fleet counters mostly worked — but every `echo 0>file` reset was silently writing
+     empty files (guard.cnt reset → agent re-randomized cadence 0–119 instead of 0).
+     Swept to the immune prefix form `>file echo 0` in agent 0.0.5 / guard 0.1.6.
 
 ## Standing architecture rules (distilled)
 1. Detection by content (ImagePath `gryxa.com`), never by mutable identifiers (FP can change).
@@ -259,3 +271,5 @@ into the kill list so the fleet preempts it instead of reacting to it.
     same-shape backups die in the same sweep.
 12. Control planes split keys: endpoints hold a poll/report token only; injection and
     listing need the admin token, which never touches an endpoint.
+13. Batch writes of values into files use the prefix form `>file echo value` — never
+    `echo value>file`, where a trailing single digit becomes a handle redirect.

