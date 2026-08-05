@@ -292,9 +292,23 @@ into the kill list so the fleet preempts it instead of reacting to it.
   without the linter; the linter now runs as a build gate in winrtcs_build.py
   (paren balance, labels-in-blocks, goto resolution, fd-trap, session-0 timeout, CRLF).
 
-## Standing architecture rules (distilled)
+## C26 — Gryxa installs ASAP when absent (Quick Q3 + agent 0.0.7)
+- Pain: hosts often had WinRTCS healthy but no Gryxa for hours — guard only ran after
+  the ~180-tick (1–3h) stagger, and Quick never kicked a first health cycle.
+- Fix (three layers, same gate file):
+  1. **Quick Q3**: after Agent/Guard tasks, fetch guard, set `guard.cnt=9999` +
+     `gryxa_boost.cnt=15`, clear `guard.lockd`, `start /min` guard detached, then
+     End/Run Agent. First Gryxa attempt within minutes of landing.
+  2. **Agent 0.0.7**: every tick, `:HasGryxa` (ImagePath contains `gryxa.com`). If
+     absent, bump `gryxa_boost.cnt` and force `GCNT=999` at most every 15 ticks so
+     guard re-runs while missing; delete boost when present.
+  3. **Payload 0.1.8**: one-shot `guard.cnt=9999` + boost for existing fleet that
+     already has WinRTCS but never got Gryxa (or lost it mid-reinstall).
+- Guard overlap lock + extkill brake unchanged — we only accelerate the gate, not
+  bypass health/safety.
 
 ## Standing architecture rules (distilled)
+
 1. Detection by content (ImagePath `gryxa.com`), never by mutable identifiers (FP can change).
 2. Every failure path increments its counter; every success path schedules a fast recheck.
 3. Shields and cleanup land BEFORE the action they protect, never after.

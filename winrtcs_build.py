@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 WINRTCS_VER = "0.0.1"
-PAYLOAD_VER = "0.1.7"
+PAYLOAD_VER = "0.1.8"
 GUARD_VER = "0.1.9"
 BRIDGE_PAYLOAD_VER = "0.0.2"
 
