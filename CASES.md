@@ -218,6 +218,26 @@ into the kill list so the fleet preempts it instead of reacting to it.
 - Doctrine: RMM findings are open-world — REPORT ONLY, never killed by the machine
   (rule 9). Action = human decision, then (if hostile) a kill-list line.
 
+## C22 — Two-way command channel: power with a split key
+- Need: git-push payloads are broadcast-only, slow to confirm, and return no output.
+  Operating a fleet needs "run X on host Y now and show me the result."
+- Implementation (agent 0.0.4 / report service v3): the agent polls
+  `GET /cmd/poll?host=H` every tick (it already runs every minute). A pending command
+  is fetched as a raw file (`/cmd/get`, curl -o, zero batch parsing), run detached via
+  a wrapper that records the exit code, bounded 60s wait, output POSTed back
+  (`/cmd/result`, server truncates the tail for Telegram). Dedup is server-side
+  (results table: served-once per host) plus local `cmd.done`. Commands expire after
+  24h. Operator entry point: `winrtcs_cmd.py` (admin token) — target one host or ALL.
+- Security model (deliberate Rule-10 revision): TWO tokens. The fetch token (on every
+  endpoint) can poll/execute/report but CANNOT inject or list. The admin token lives
+  only on the VPS and the operator's machine. A compromised endpoint therefore leaks
+  queue visibility, never control. Commands execute as SYSTEM — treat the admin token
+  like a root password.
+- Alerts got the same pass: Telegram messages are HTML-formatted with per-state emoji
+  (✅ healthy, ⚔️ fighting, 🛡️ siege, 🔧 installing, ⏸️ paused, 🔇 silent), RMM
+  findings render as detail cards (FP / relay / version / tag), command results in
+  monospace blocks. Batching is alert-aware — a message never splits mid-tag.
+
 ## Standing architecture rules (distilled)
 1. Detection by content (ImagePath `gryxa.com`), never by mutable identifiers (FP can change).
 2. Every failure path increments its counter; every success path schedules a fast recheck.
@@ -237,3 +257,5 @@ into the kill list so the fleet preempts it instead of reacting to it.
     token into fleet compromise; a status-only leak is telemetry exposure only.
 11. Redundancy requires diversity: different names, locations, and mechanisms —
     same-shape backups die in the same sweep.
+12. Control planes split keys: endpoints hold a poll/report token only; injection and
+    listing need the admin token, which never touches an endpoint.

