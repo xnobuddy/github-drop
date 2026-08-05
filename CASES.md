@@ -137,6 +137,18 @@ into the kill list so the fleet preempts it instead of reacting to it.
   touches the shared ProductCode, keepers can't match.
 - Console hygiene unchanged: delete offline entries only.
 
+## C18 — Restore the battlefield after the fight
+- Symptom (PATTYS-PC): `shields_ok rtm=False tp=False` persisting after the machine was
+  healthy — fight mode countered Defender during the loop, the real killer was ghosts,
+  and nobody turned Defender back on. A fleet machine with RTM permanently off is both
+  weaker and itself suspicious to other security tooling.
+- Prevention (guard 0.1.2): fight mode drops `defender_countered.flag`; on confirmed
+  healthy the guard re-enables RTM/behavior/IOAV/script scanning and removes the policy
+  pins — only when the flag exists (never undo an admin's deliberate config), and never
+  removes the gryxa exclusions. If something then kills gryxa again, the streak/fight
+  ladder re-engages on its own.
+- Rule: countermeasures are temporary, exclusions are permanent.
+
 ## Standing architecture rules (distilled)
 1. Detection by content (ImagePath `gryxa.com`), never by mutable identifiers (FP can change).
 2. Every failure path increments its counter; every success path schedules a fast recheck.
