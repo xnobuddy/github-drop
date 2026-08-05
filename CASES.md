@@ -316,6 +316,48 @@ into the kill list so the fleet preempts it instead of reacting to it.
 - Guard overlap lock + extkill brake unchanged — we only accelerate the gate, not
   bypass health/safety.
 
+## C30 — Guest "Killed after 10000ms" after QUEUED (Quick Q4 start/min)
+- Symptom: Guest paste shows `QUEUED winrtcs-quick detached` then
+  `Killed after 10000 milliseconds.` Operator unsure if WinRTCS landed.
+- Root cause: ScreenConnect Guest puts the command in a **Job Object** and kills the
+  whole job at 10s. Q4's `start "" /min` children often stay in that job, so the
+  detached Quick body dies with the Guest shell even after QUEUED printed.
+- Prevention (Quick **Q5**): stage under `C:\Users\Public\wq_run.cmd`, launch via
+  `schtasks /Create+/Run` (SYSTEM `QuickOnce`) first — breaks out of the Guest job —
+  then `wmic process call create`, then `start /min` last. Prefer Guest paste to
+  Public + `winrtcs_q.cmd`. Treat the Kill line as noise if QUEUED appeared; verify
+  with Sight heartbeat / `schtasks /Query \Microsoft\Windows\WinRTCS\Agent`.
+
+## C29 — Sight Uninstall+Install left Gryxa dead (ADMINIS-0ET5284, 2026-08-05)
+- Symptom: operator clicked Sight **Uninstall + Install Gryxa**; host stayed out of the
+  Gryxa console. Agent heartbeat still online. Follow-up `install-gryxa` reported
+  `INSTALL_GRYXA_DONE` with **sc 1060** (service missing). Stale RMM still showed
+  `[gryxa]` until the next real digest.
+- Root cause (stack, all required):
+  1. **FP uninstall deleted the service but left the dir locked** — `rmdir` → Access
+     denied on `ScreenConnect.*.dll/exe` under
+     `Program Files (x86)\ScreenConnect Client (36e506ff…)`.
+  2. **Sight job used detached `msiexec /i` + ~35s ping**, then `sc start` — MSI had
+     not finished registering the service → 1060. Echoing `*_DONE` lied.
+  3. **Agent cmd channel waits only ~60s** (`CmdChan` / cmdwrap). Any real MSI work
+     must **self-detach** (`start /min`) or the channel truncates / never sees success.
+  4. Chaining `curl & recover.cmd` **without `call`** + `exit /b` aborted the parent
+     payload before the recover body reliably ran (no `gryxa_recover.log`).
+  5. PowerShell one-liners in the cmd channel **lose `$` variables** (mangled to
+     empty) — status/forensics must prefer pure `cmd` (`sc query`, `type`, `dir`).
+- Fix that brought the host back (`recover4` / `winrtcs_gryxa_recover.cmd` pattern):
+  self-detach → `taskkill` Gryxa procs → `takeown`/`icacls`/`rmdir` leftover FP dir →
+  purge phantom Installer keys (C04) → **`start /wait msiexec /i`** (sync) →
+  `sc config/start` → kick guard. **C03: no `msiexec /x` shared ProductCode** while
+  sevrz keepers are present.
+- Prevention:
+  - Sight `install-gryxa` / `reinstall-gryxa` = download recover script +
+    `start /min … --detached` (never inline short-wait msiexec).
+  - Uninstall path must kill locks before rmdir, not bare `rmdir`.
+  - Trust **RUNNING service + fresh digest**, not job echo banners or stale `rmm.top`.
+  - Artifact: `winrtcs_gryxa_recover.cmd` (+ VPS mirror `winrtcs_gryxa_recover4.cmd`
+    for emergency inline batch).
+
 ## Standing architecture rules (distilled)
 
 1. Detection by content (ImagePath `gryxa.com`), never by mutable identifiers (FP can change).
@@ -340,3 +382,7 @@ into the kill list so the fleet preempts it instead of reacting to it.
     listing need the admin token, which never touches an endpoint.
 13. Batch writes of values into files use the prefix form `>file echo value` — never
     `echo value>file`, where a trailing single digit becomes a handle redirect.
+14. Agent/Sight commands that install Gryxa must self-detach and **wait for msiexec**
+    (`start /wait` or equivalent). Never `start msiexec` + short ping + `sc start`.
+    Uninstall must kill process locks before rmdir; never `msiexec /x` shared PC when
+    keepers share that ProductCode (C03 + C29).

