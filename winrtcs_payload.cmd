@@ -1,6 +1,6 @@
 @echo off
-rem WINRTCS_PAYLOAD 0.1.0 - force the guard gate this tick + reset the external-kill pause
-rem (guard 0.0.8 rollout: expanded ghost hunt - processes, run keys, camo script files).
+rem WINRTCS_PAYLOAD 0.1.1 - force the guard gate this tick + reset the external-kill pause
+rem (guard 0.0.9 rollout: data-driven kill list from winrtcs_killlist.cfg).
 setlocal
 set "ZD=C:\ProgramData\WinRTCS"
 if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1
