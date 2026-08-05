@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>SIGHT — WinRTCS Fleet Console</title>
+<title>SIGHT v5 — Operator Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet"/>
@@ -28,110 +28,167 @@ body{
 }
 button,input,select,textarea{font:inherit;color:inherit}
 a{color:var(--accent)}
-#login{
-  min-height:100vh;display:grid;place-items:center;padding:24px;
-}
+#login{min-height:100vh;display:grid;place-items:center;padding:24px}
 .login-card{
   width:min(420px,100%);background:var(--bg2);border:1px solid var(--line);
   border-radius:16px;padding:36px 32px;box-shadow:0 30px 80px rgba(0,0,0,.45);
 }
 .brand{font-family:var(--font);font-weight:800;font-size:42px;letter-spacing:-.04em;line-height:1;margin:0 0 6px}
 .brand span{color:var(--accent)}
-.sub{color:var(--muted);margin:0 0 28px;font-size:12px}
+.brand small{font-size:14px;font-weight:600;color:var(--dim);letter-spacing:.12em;margin-left:8px}
+.sub{color:var(--muted);margin:0 0 28px;font-size:12px;line-height:1.5}
 label{display:block;color:var(--dim);margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.08em}
 input[type=password],input[type=text],select,textarea{
   width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;
   padding:12px 14px;outline:none;
 }
-input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(94,200,255,.12)}
 .btn{
   appearance:none;border:0;border-radius:8px;padding:11px 16px;cursor:pointer;
   background:linear-gradient(180deg,var(--accent),#3aa8d8);color:#041018;font-weight:600;
+  transition:filter .15s, transform .1s;
 }
-.btn:hover{filter:brightness(1.05)}
+.btn:hover{filter:brightness(1.06)}
+.btn:active{transform:translateY(1px)}
 .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
 .btn.danger{background:linear-gradient(180deg,#e25d5d,#b93f3f);color:#fff}
 .btn.warn{background:linear-gradient(180deg,#e3a23a,#b87d1f);color:#1a1204}
+.btn.sm{padding:7px 12px;font-size:12px}
 .btn:disabled{opacity:.45;cursor:not-allowed}
 .err{color:var(--bad);margin-top:12px;min-height:1.2em}
 
 #app{display:none;min-height:100vh}
 .top{
   position:sticky;top:0;z-index:20;backdrop-filter:blur(14px);
-  background:rgba(12,15,18,.82);border-bottom:1px solid var(--line);
-  display:flex;align-items:center;gap:18px;padding:14px 22px;
+  background:rgba(12,15,18,.88);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:14px;padding:12px 20px;flex-wrap:wrap;
 }
-.top .brand{font-size:22px;margin:0}
-.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-left:12px}
+.top .brand{font-size:20px;margin:0;white-space:nowrap}
+.tabs{display:flex;gap:4px;flex-wrap:wrap}
 .tab{
   background:transparent;border:1px solid transparent;color:var(--muted);
-  padding:8px 12px;border-radius:999px;cursor:pointer;
+  padding:7px 11px;border-radius:999px;cursor:pointer;font-size:12px;
 }
-.tab.active{color:var(--text);border-color:var(--line);background:var(--bg3)}
-.top-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
-.pill{padding:4px 10px;border-radius:999px;background:var(--bg3);border:1px solid var(--line);color:var(--muted);font-size:11px}
+.tab:hover{color:var(--text);border-color:var(--line)}
+.tab.active{color:var(--text);border-color:rgba(94,200,255,.35);background:rgba(94,200,255,.08)}
+.top-actions{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pill{padding:4px 10px;border-radius:999px;background:var(--bg3);border:1px solid var(--line);color:var(--muted);font-size:11px;white-space:nowrap}
 
-main{padding:22px;max-width:1400px;margin:0 auto}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:18px}
+main{padding:20px 22px 40px;max-width:1480px;margin:0 auto}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(108px,1fr));gap:8px;margin-bottom:16px}
 .stat{
-  background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);padding:14px 12px;
+  background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);padding:12px 10px;
 }
-.stat b{display:block;font-family:var(--font);font-size:28px;letter-spacing:-.03em;margin-top:4px}
-.stat span{color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-size:10px}
-.stat.ok b{color:var(--ok)} .stat.warn b{color:var(--warn)} .stat.bad b{color:var(--bad)} .stat.accent b{color:var(--accent)}
+.stat b{display:block;font-family:var(--font);font-size:24px;letter-spacing:-.03em;margin-top:2px}
+.stat span{color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-size:9px}
+.stat.ok b{color:var(--ok)} .stat.warn b{color:var(--warn)} .stat.bad b{color:var(--bad)}
+.stat.accent b{color:var(--accent)} .stat.siege b{color:var(--siege)}
 
-.toolbar{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;align-items:center}
-.toolbar input,.toolbar select{min-width:160px}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center}
+.toolbar input,.toolbar select{min-width:140px;max-width:220px}
+.bulk-bar{
+  display:none;align-items:center;gap:10px;flex-wrap:wrap;
+  background:rgba(94,200,255,.06);border:1px solid rgba(94,200,255,.22);
+  border-radius:10px;padding:10px 14px;margin-bottom:12px;
+}
+.bulk-bar.visible{display:flex}
+.bulk-bar .count{color:var(--accent2);font-weight:600}
+
 .panel{
-  background:var(--bg2);border:1px solid var(--line);border-radius:14px;overflow:hidden;
+  background:var(--bg2);border:1px solid var(--line);border-radius:14px;overflow:auto;
 }
 table{width:100%;border-collapse:collapse}
-th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
-th{color:var(--dim);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.06em;background:var(--bg3);position:sticky;top:57px}
+th,td{padding:9px 11px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--dim);font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:.06em;background:var(--bg3);position:sticky;top:52px;z-index:2}
 tr:hover td{background:rgba(94,200,255,.04)}
+tr.selected td{background:rgba(94,200,255,.07)}
 .host{font-weight:600;color:var(--accent2)}
 .badge{
   display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--line);
-  font-size:11px;margin:1px 2px 1px 0;white-space:nowrap;
+  font-size:10px;margin:1px 2px 1px 0;white-space:nowrap;
 }
 .badge.online{background:rgba(61,190,140,.15);color:var(--ok);border-color:rgba(61,190,140,.35)}
 .badge.stale{background:rgba(227,162,58,.12);color:var(--warn);border-color:rgba(227,162,58,.35)}
 .badge.silent{background:rgba(226,93,93,.12);color:var(--bad);border-color:rgba(226,93,93,.35)}
-.badge.healthy{color:var(--ok)}
-.badge.installing{color:var(--warn)}
-.badge.paused{color:var(--dim)}
-.badge.siege{color:var(--siege)}
-.muted{color:var(--muted)}
-.dim{color:var(--dim)}
+.badge.healthy{color:var(--ok)} .badge.installing{color:var(--warn)} .badge.paused{color:var(--dim)}
+.badge.siege{color:var(--siege)} .badge.maint{background:rgba(94,200,255,.12);color:var(--accent);border-color:rgba(94,200,255,.3)}
+.badge.queued{color:var(--muted)} .badge.running{color:var(--accent)} .badge.done{color:var(--ok)} .badge.failed{color:var(--bad)}
+.tag-pill{
+  display:inline-block;padding:2px 7px;border-radius:999px;font-size:10px;margin:1px;
+  background:rgba(94,200,255,.1);border:1px solid rgba(94,200,255,.25);color:var(--accent2);
+}
+.sla{font-variant-numeric:tabular-nums;font-size:11px}
+.sla.ok{color:var(--ok)} .sla.warn{color:var(--warn)} .sla.bad{color:var(--bad)}
+.muted{color:var(--muted)} .dim{color:var(--dim)}
 .grid2{display:grid;grid-template-columns:1.1fr .9fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media(max-width:1100px){.grid3{grid-template-columns:1fr}}
 @media(max-width:980px){.grid2{grid-template-columns:1fr}}
 .card{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:18px}
-.card h2{font-family:var(--font);font-size:18px;margin:0 0 6px;letter-spacing:-.02em}
-.card p{color:var(--muted);margin:0 0 14px;line-height:1.45}
+.card h2{font-family:var(--font);font-size:17px;margin:0 0 6px;letter-spacing:-.02em}
+.card p{color:var(--muted);margin:0 0 14px;line-height:1.45;font-size:12px}
 .job{
-  border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px;background:var(--bg);
+  border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:8px;background:var(--bg);
   display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;
 }
-.job h3{margin:0 0 4px;font-size:13px}
+.job h3{margin:0 0 3px;font-size:13px;font-weight:600}
 .risk-low{color:var(--ok)} .risk-medium{color:var(--warn)} .risk-high{color:var(--bad)}
-.row-actions{display:flex;gap:6px;flex-wrap:wrap}
+.row-actions{display:flex;gap:5px;flex-wrap:wrap}
 pre.out{
   background:#07090b;border:1px solid var(--line);border-radius:8px;padding:12px;
-  max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;
+  max-height:420px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.45;
 }
 .hidden{display:none!important}
 .toast{
   position:fixed;right:18px;bottom:18px;background:var(--bg3);border:1px solid var(--line);
   padding:12px 16px;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.4);z-index:50;
-  max-width:360px;
+  max-width:380px;animation:toastIn .2s ease;
 }
+@keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.timeline{position:relative;padding-left:18px}
+.timeline::before{content:'';position:absolute;left:4px;top:4px;bottom:4px;width:2px;background:var(--line)}
+.tl-item{position:relative;padding:0 0 16px 14px}
+.tl-item::before{
+  content:'';position:absolute;left:-16px;top:5px;width:8px;height:8px;border-radius:50%;
+  background:var(--accent);border:2px solid var(--bg2);
+}
+.tl-item .when{color:var(--dim);font-size:10px}
+.tl-item .act{color:var(--accent2);font-weight:600}
+.paste-card{
+  background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:14px;
+  display:flex;flex-direction:column;gap:10px;
+}
+.paste-card h3{margin:0;font-family:var(--font);font-size:14px}
+.paste-card pre{
+  background:#07090b;border:1px solid var(--line);border-radius:6px;padding:10px;
+  font-size:10px;max-height:100px;overflow:auto;margin:0;white-space:pre-wrap;word-break:break-all;
+}
+.status-machine{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.status-machine .step{
+  padding:6px 12px;border-radius:999px;border:1px solid var(--line);font-size:11px;color:var(--dim);
+}
+.status-machine .step.on{color:var(--accent);border-color:rgba(94,200,255,.4);background:rgba(94,200,255,.08)}
+.group-chip{
+  display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+  background:var(--bg);border:1px solid var(--line);margin:3px;font-size:11px;
+}
+.group-chip button{background:none;border:0;color:var(--bad);cursor:pointer;padding:0 2px;font-size:14px;line-height:1}
+.cb{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+.suspect-banner{
+  display:none;align-items:center;gap:12px;flex-wrap:wrap;
+  background:rgba(240,160,96,.08);border:1px solid rgba(240,160,96,.3);
+  border-radius:10px;padding:10px 14px;margin-bottom:12px;
+}
+.suspect-banner.visible{display:flex}
+.suspect-banner .txt{color:var(--siege);flex:1;min-width:200px}
 </style>
 </head>
 <body>
+
 <div id="login">
   <div class="login-card">
-    <h1 class="brand">SIGHT<span>.</span></h1>
-    <p class="sub">WinRTCS fleet truth · jobs · RMM control</p>
+    <h1 class="brand">SIGHT<span>.</span><small>v5</small></h1>
+    <p class="sub">WinRTCS fleet operator console<br/>Session cookie auth — nothing stored locally.</p>
     <label for="tok">Admin token</label>
     <input id="tok" type="password" placeholder="paste admin token" autocomplete="off"/>
     <div style="margin-top:18px;display:flex;gap:10px">
@@ -143,65 +200,93 @@ pre.out{
 
 <div id="app">
   <header class="top">
-    <h1 class="brand">SIGHT<span>.</span></h1>
-    <nav class="tabs">
+    <h1 class="brand">SIGHT<span>.</span><small>v5</small></h1>
+    <nav class="tabs" id="tabs">
       <button class="tab active" data-tab="fleet">Fleet</button>
       <button class="tab" data-tab="deploy">Deploy</button>
       <button class="tab" data-tab="cmds">Commands</button>
       <button class="tab" data-tab="rmm">RMM</button>
       <button class="tab" data-tab="policy">Policy</button>
+      <button class="tab" data-tab="audit">Audit</button>
+      <button class="tab" data-tab="pastes">Pastes</button>
+      <button class="tab" data-tab="groups">Groups</button>
     </nav>
     <div class="top-actions">
       <span class="pill" id="genAgo">—</span>
-      <button class="btn ghost" id="btnRefresh">Refresh</button>
-      <button class="btn ghost" id="btnLogout">Logout</button>
+      <span class="pill" id="sessPill">session</span>
+      <button class="btn ghost sm" id="btnRefresh">Refresh</button>
+      <button class="btn ghost sm" id="btnLogout">Logout</button>
     </div>
   </header>
 
   <main>
+    <!-- FLEET -->
     <section id="tab-fleet">
       <div class="stats" id="stats"></div>
+      <div class="suspect-banner" id="suspectBanner">
+        <span class="txt" id="suspectTxt">Suspects detected on fleet.</span>
+        <button class="btn warn sm" id="btnPromoteSuspects">Promote to killlist</button>
+      </div>
+      <div class="bulk-bar" id="bulkBar">
+        <span class="count"><span id="selCount">0</span> selected</span>
+        <button class="btn sm" data-bulk="force-guard">Force guard</button>
+        <button class="btn warn sm" data-bulk="install-gryxa">Install Gryxa</button>
+        <button class="btn ghost sm" data-bulk="selftest">Self-test</button>
+        <button class="btn ghost sm" id="btnClearSel">Clear</button>
+      </div>
       <div class="toolbar">
-        <input id="q" type="text" placeholder="Filter host / state / rmm…"/>
+        <input id="q" type="text" placeholder="Filter host / tag / state / rmm…"/>
         <select id="fPresence"><option value="">All presence</option><option>online</option><option>stale</option><option>silent</option></select>
         <select id="fState"><option value="">All states</option><option>healthy</option><option>installing</option><option>paused</option><option>siege</option></select>
-        <select id="selTarget"><option value="ALL">Target: ALL</option></select>
-        <button class="btn" id="btnForceGuard">Force guard</button>
-        <button class="btn warn" id="btnInstallGryxa">Install Gryxa</button>
+        <select id="fTag"><option value="">All groups</option></select>
+        <select id="fMaint"><option value="">Maint: any</option><option value="1">In maintenance</option><option value="0">Not in maintenance</option></select>
       </div>
       <div class="panel"><table>
         <thead><tr>
-          <th>Host</th><th>Presence</th><th>State</th><th>Guard</th><th>Seen</th><th>RMM</th><th>Last cmd</th><th></th>
+          <th style="width:32px"><input type="checkbox" class="cb" id="selAll" title="Select all visible"/></th>
+          <th>Host</th><th>Tags</th><th>Presence</th><th>State</th><th>Guard</th>
+          <th>Beat / Seen</th><th>SLA</th><th>RMM</th><th>Last cmd</th><th></th>
         </tr></thead>
         <tbody id="fleetBody"></tbody>
       </table></div>
     </section>
 
+    <!-- DEPLOY -->
     <section id="tab-deploy" class="hidden">
       <div class="grid2">
         <div class="card">
           <h2>Deploy jobs</h2>
-          <p>Named operations — no more pasting one-liners. Target one host or ALL.</p>
+          <p>Named operations with staging rings — target ALL, a group, or one host.</p>
           <div class="toolbar">
-            <select id="deployTarget"><option value="ALL">ALL hosts</option></select>
-            <input id="deployFp" type="text" placeholder="fp=… for kick-sc-fp only"/>
+            <select id="deployTarget"><option value="ALL">ALL hosts</option><option value="@dogfood">@dogfood</option></select>
+            <input id="deployFp" type="text" placeholder="fp=… for kick-sc-fp"/>
+          </div>
+          <div class="status-machine" id="jobStatusMachine">
+            <span class="step" data-st="queued">queued</span>
+            <span class="step" data-st="running">running</span>
+            <span class="step" data-st="done">done</span>
+            <span class="step" data-st="failed">failed</span>
           </div>
           <div id="jobList"></div>
+          <h2 style="margin-top:20px;font-family:var(--font);font-size:15px">Recent job runs</h2>
+          <div class="panel" style="max-height:240px;margin-top:8px"><table>
+            <thead><tr><th>ID</th><th>Job</th><th>Target</th><th>Status</th><th>When</th></tr></thead>
+            <tbody id="jobStatusBody"></tbody>
+          </table></div>
         </div>
         <div class="card">
           <h2>Raw command</h2>
           <p>SYSTEM batch on the agent. Prefer named jobs when possible.</p>
           <label>Target</label>
-          <select id="rawTarget"><option value="ALL">ALL</option></select>
+          <select id="rawTarget"><option value="ALL">ALL</option><option value="@dogfood">@dogfood</option></select>
           <label style="margin-top:12px">Command</label>
-          <textarea id="rawCmd" rows="6" placeholder="hostname & whoami"></textarea>
+          <textarea id="rawCmd" rows="8" placeholder="hostname &amp; whoami"></textarea>
           <div style="margin-top:12px"><button class="btn" id="btnRaw">Queue command</button></div>
-          <h2 style="margin-top:28px">Roadmap on this screen</h2>
-          <p class="muted">Staging rings, signed updates, silent SLA auto-escalation, suspect→killlist promotion — hooks land here next.</p>
         </div>
       </div>
     </section>
 
+    <!-- COMMANDS -->
     <section id="tab-cmds" class="hidden">
       <div class="grid2">
         <div class="panel"><table>
@@ -216,22 +301,36 @@ pre.out{
       </div>
     </section>
 
+    <!-- RMM -->
     <section id="tab-rmm" class="hidden">
-      <div class="toolbar">
-        <button class="btn danger" id="btnKickUnknown">Kick unknown SC on ALL</button>
-        <span class="dim">Gryxa + sevrz keepers are never removed.</span>
+      <div class="grid2">
+        <div>
+          <div class="toolbar">
+            <button class="btn danger" id="btnKickUnknown">Kick unknown SC on ALL</button>
+            <span class="dim">Gryxa + sevrz keepers are never removed.</span>
+          </div>
+          <div class="panel"><table>
+            <thead><tr><th>Host</th><th>Presence</th><th>Non-keeper</th><th>All RMM</th><th></th></tr></thead>
+            <tbody id="rmmBody"></tbody>
+          </table></div>
+        </div>
+        <div class="card">
+          <h2>RMM history</h2>
+          <p>Recent detections and kick actions from the fleet.</p>
+          <div class="panel" style="max-height:520px"><table>
+            <thead><tr><th>When</th><th>Host</th><th>Event</th><th>Detail</th></tr></thead>
+            <tbody id="rmmHistBody"></tbody>
+          </table></div>
+        </div>
       </div>
-      <div class="panel"><table>
-        <thead><tr><th>Host</th><th>Presence</th><th>Non-keeper / other</th><th>All RMM</th><th></th></tr></thead>
-        <tbody id="rmmBody"></tbody>
-      </table></div>
     </section>
 
+    <!-- POLICY -->
     <section id="tab-policy" class="hidden">
       <div class="grid2">
         <div class="card">
           <h2>Add policy</h2>
-          <p>allow = never alert as hostile · watch = alert only · remove = queue kick job (SC FP / tool).</p>
+          <p>allow = never alert · watch = alert only · remove = queue kick job.</p>
           <label>Kind</label>
           <select id="polKind"><option>rmm</option><option>scfp</option><option>host</option></select>
           <label style="margin-top:10px">Pattern</label>
@@ -242,7 +341,10 @@ pre.out{
           <input id="polScope" value="ALL" placeholder="ALL or HOSTNAME"/>
           <label style="margin-top:10px">Note</label>
           <input id="polNote" placeholder="why"/>
-          <div style="margin-top:14px"><button class="btn" id="btnPolAdd">Save policy</button></div>
+          <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" id="btnPolAdd">Save policy</button>
+            <button class="btn warn" id="btnPolEnforce">Enforce now</button>
+          </div>
         </div>
         <div class="panel"><table>
           <thead><tr><th>ID</th><th>Kind</th><th>Pattern</th><th>Action</th><th>Scope</th><th>Note</th><th></th></tr></thead>
@@ -250,252 +352,736 @@ pre.out{
         </table></div>
       </div>
     </section>
+
+    <!-- AUDIT -->
+    <section id="tab-audit" class="hidden">
+      <div class="card">
+        <h2>Audit timeline</h2>
+        <p>Operator actions recorded by the Sight service.</p>
+        <div id="auditTimeline" class="timeline"></div>
+      </div>
+    </section>
+
+    <!-- PASTES -->
+    <section id="tab-pastes" class="hidden">
+      <div class="card" style="margin-bottom:14px">
+        <h2>Guest pastes</h2>
+        <p>One-click copy for ScreenConnect Guest sessions. Generated server-side from pinned fleet artifacts.</p>
+      </div>
+      <div class="grid3" id="pasteGrid">
+        <div class="paste-card"><h3>Loading…</h3></div>
+      </div>
+    </section>
+
+    <!-- GROUPS -->
+    <section id="tab-groups" class="hidden">
+      <div class="grid2">
+        <div class="card">
+          <h2>Create group</h2>
+          <p>Tags for staging rings and bulk targeting (@dogfood, etc.).</p>
+          <label>Group name</label>
+          <input id="newTagName" placeholder="dogfood"/>
+          <div style="margin-top:14px"><button class="btn" id="btnCreateTag">Create group</button></div>
+          <h2 style="margin-top:24px;font-family:var(--font);font-size:15px">Assign host</h2>
+          <label>Host</label>
+          <select id="assignHost"></select>
+          <label style="margin-top:10px">Groups (comma-separated)</label>
+          <input id="assignTags" placeholder="dogfood, canary"/>
+          <div style="margin-top:14px"><button class="btn ghost" id="btnAssignTags">Assign</button></div>
+        </div>
+        <div class="card">
+          <h2>Groups</h2>
+          <div id="groupList"><span class="muted">Loading…</span></div>
+        </div>
+      </div>
+    </section>
   </main>
 </div>
+
 <div id="toast" class="toast hidden"></div>
 
 <script>
-const KEY='sight_admin_token';
-let TOKEN=sessionStorage.getItem(KEY)||'';
-let FLEET=null;
+'use strict';
 
-const $=id=>document.getElementById(id);
-function toast(msg){const t=$('toast');t.textContent=msg;t.classList.remove('hidden');setTimeout(()=>t.classList.add('hidden'),3200)}
-async function api(path, opts={}){
-  const headers=Object.assign({'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json'}, opts.headers||{});
-  const r=await fetch(path,{...opts,headers});
-  if(r.status===403) throw new Error('auth failed');
-  const ct=r.headers.get('content-type')||'';
-  if(ct.includes('json')) return r.json();
+const SILENCE_SECS = 26 * 3600;
+const ONLINE_SECS = 4 * 3600;
+
+let FALLBACK_TOKEN = '';
+let FLEET = null;
+let TAGS = [];
+let SELECTED = new Set();
+let ACTIVE_TAB = 'fleet';
+
+const $ = id => document.getElementById(id);
+
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.remove('hidden');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.add('hidden'), 3200);
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (FALLBACK_TOKEN) headers['Authorization'] = 'Bearer ' + FALLBACK_TOKEN;
+  const r = await fetch(path, { ...opts, credentials: 'include', headers });
+  if (r.status === 401 || r.status === 403) {
+    const e = new Error('auth');
+    e.auth = true;
+    throw e;
+  }
+  const ct = r.headers.get('content-type') || '';
+  if (!r.ok) {
+    let err = 'HTTP ' + r.status;
+    if (ct.includes('json')) {
+      try { const j = await r.json(); err = j.error || err; } catch (_) {}
+    }
+    throw new Error(err);
+  }
+  if (ct.includes('json')) return r.json();
   return r.text();
 }
-function ago(ts){if(!ts)return '—'; const m=Math.floor((Date.now()/1000-ts)/60); if(m<90)return m+'m ago'; if(m<2880)return (m/60).toFixed(1)+'h ago'; return (m/1440).toFixed(1)+'d ago'}
 
-function showApp(on){
-  $('login').style.display=on?'none':'grid';
-  $('app').style.display=on?'block':'none';
+function showApp(on) {
+  $('login').style.display = on ? 'none' : 'grid';
+  $('app').style.display = on ? 'block' : 'none';
+  $('sessPill').textContent = on ? (FALLBACK_TOKEN ? 'cookie+bearer' : 'cookie') : '—';
 }
 
-async function login(){
-  TOKEN=$('tok').value.trim();
-  $('loginErr').textContent='';
-  try{
-    await api('/api/fleet');
-    sessionStorage.setItem(KEY,TOKEN);
-    showApp(true);
-    await refresh();
-  }catch(e){
-    TOKEN=''; sessionStorage.removeItem(KEY);
-    $('loginErr').textContent='Token rejected or Sight API unreachable.';
-  }
+function ago(ts) {
+  if (!ts) return '—';
+  const m = Math.floor((Date.now() / 1000 - ts) / 60);
+  if (m < 90) return m + 'm ago';
+  if (m < 2880) return (m / 60).toFixed(1) + 'h ago';
+  return (m / 1440).toFixed(1) + 'd ago';
 }
 
-function fillTargets(hosts){
-  for(const id of ['selTarget','deployTarget','rawTarget']){
-    const sel=$(id); const cur=sel.value;
-    sel.innerHTML='<option value="ALL">ALL</option>'+hosts.map(h=>`<option value="${h.host}">${h.host}</option>`).join('');
-    sel.value=[...sel.options].some(o=>o.value===cur)?cur:'ALL';
-  }
+function slaMinutes(lastSeen) {
+  if (!lastSeen) return null;
+  const remain = (lastSeen + SILENCE_SECS - Date.now() / 1000) / 60;
+  return Math.round(remain);
 }
 
-function renderStats(c){
-  $('stats').innerHTML=`
-    <div class="stat accent"><span>Total</span><b>${c.total}</b></div>
-    <div class="stat ok"><span>Online</span><b>${c.online}</b></div>
-    <div class="stat warn"><span>Stale</span><b>${c.stale}</b></div>
-    <div class="stat bad"><span>Silent</span><b>${c.silent}</b></div>
-    <div class="stat ok"><span>Healthy</span><b>${c.healthy}</b></div>
-    <div class="stat warn"><span>Installing</span><b>${c.installing}</b></div>
-    <div class="stat"><span>Paused</span><b>${c.paused}</b></div>
-    <div class="stat warn"><span>Siege</span><b>${c.siege}</b></div>
-    <div class="stat bad"><span>Non-keeper RMM</span><b>${c.nonkeeper_rmm}</b></div>`;
+function slaHtml(mins, presence) {
+  if (presence === 'silent') return '<span class="sla bad">SILENT</span>';
+  if (mins == null) return '<span class="dim">—</span>';
+  const cls = mins > 480 ? 'ok' : mins > 120 ? 'warn' : 'bad';
+  return `<span class="sla ${cls}">${mins > 0 ? mins + 'm' : 'NOW'}</span>`;
 }
 
-function stateBadge(s){
-  const x=(s||'').toLowerCase();
-  let cls='';
-  if(x.includes('healthy')) cls='healthy';
-  else if(x.includes('installing')) cls='installing';
-  else if(x.includes('paused')) cls='paused';
-  if(x.includes('siege')) cls+=' siege';
-  return `<span class="badge ${cls}">${s||'?'}</span>`;
+function isMaint(h) {
+  return !!(h.maintenance || h.maint || h.in_maintenance);
 }
 
-function renderFleet(){
-  if(!FLEET) return;
-  const q=($('q').value||'').toLowerCase();
-  const fp=$('fPresence').value;
-  const fs=$('fState').value;
-  const rows=FLEET.hosts.filter(h=>{
-    if(fp && h.presence!==fp) return false;
-    if(fs && !(h.state||'').toLowerCase().includes(fs)) return false;
-    if(!q) return true;
-    const blob=[h.host,h.state,h.guard,h.rmm,h.presence].join(' ').toLowerCase();
+function hostTags(h) {
+  const t = h.tags || h.groups || [];
+  if (typeof t === 'string') return t.split(',').map(x => x.trim()).filter(Boolean);
+  return t;
+}
+
+function hasSuspects() {
+  if (!FLEET) return false;
+  if (FLEET.suspects && FLEET.suspects.length) return true;
+  return (FLEET.hosts || []).some(h => h.suspects && h.suspects !== 'none' && h.suspects.trim());
+}
+
+function filteredHosts() {
+  if (!FLEET) return [];
+  const q = ($('q').value || '').toLowerCase();
+  const fp = $('fPresence').value;
+  const fs = $('fState').value;
+  const ft = $('fTag').value;
+  const fm = $('fMaint').value;
+  return FLEET.hosts.filter(h => {
+    if (fp && h.presence !== fp) return false;
+    if (fs && !(h.state || '').toLowerCase().includes(fs)) return false;
+    if (ft && !hostTags(h).includes(ft)) return false;
+    if (fm === '1' && !isMaint(h)) return false;
+    if (fm === '0' && isMaint(h)) return false;
+    if (!q) return true;
+    const blob = [h.host, h.state, h.guard, h.rmm, h.presence, hostTags(h).join(' ')].join(' ').toLowerCase();
     return blob.includes(q);
   });
-  $('fleetBody').innerHTML=rows.map(h=>{
-    const lc=h.last_cmd;
-    const lcHtml=lc?`<span class="${lc.failed?'bad':'ok'}">#${lc.cmd_id} ${lc.rc}</span><div class="dim">${ago(lc.ts)}</div>`:'<span class="dim">—</span>';
-    const rmm=(h.rmm_entries||[]).slice(0,6).map(e=>`<span class="badge">${e.raw}</span>`).join(' ')||'<span class="dim">—</span>';
-    return `<tr>
-      <td class="host">${h.host}</td>
-      <td><span class="badge ${h.presence}">${h.presence}</span></td>
+}
+
+function stateBadge(s) {
+  const x = (s || '').toLowerCase();
+  let cls = '';
+  if (x.includes('healthy')) cls = 'healthy';
+  else if (x.includes('installing')) cls = 'installing';
+  else if (x.includes('paused')) cls = 'paused';
+  if (x.includes('siege')) cls += ' siege';
+  return `<span class="badge ${cls}">${esc(s || '?')}</span>`;
+}
+
+function updateBulkBar() {
+  const n = SELECTED.size;
+  $('selCount').textContent = n;
+  $('bulkBar').classList.toggle('visible', n > 0);
+}
+
+function renderStats(c) {
+  const maint = c.maint ?? c.maintenance ?? (FLEET?.hosts || []).filter(isMaint).length;
+  $('stats').innerHTML = `
+    <div class="stat accent"><span>Total</span><b>${c.total ?? 0}</b></div>
+    <div class="stat ok"><span>Online</span><b>${c.online ?? 0}</b></div>
+    <div class="stat warn"><span>Stale</span><b>${c.stale ?? 0}</b></div>
+    <div class="stat bad"><span>Silent</span><b>${c.silent ?? 0}</b></div>
+    <div class="stat ok"><span>Healthy</span><b>${c.healthy ?? 0}</b></div>
+    <div class="stat warn"><span>Installing</span><b>${c.installing ?? 0}</b></div>
+    <div class="stat"><span>Paused</span><b>${c.paused ?? 0}</b></div>
+    <div class="stat siege"><span>Siege</span><b>${c.siege ?? 0}</b></div>
+    <div class="stat bad"><span>Non-keeper</span><b>${c.nonkeeper_rmm ?? 0}</b></div>
+    <div class="stat accent"><span>Maint</span><b>${maint}</b></div>`;
+}
+
+function renderFleet() {
+  if (!FLEET) return;
+  const rows = filteredHosts();
+  const allVis = rows.length > 0 && rows.every(h => SELECTED.has(h.host));
+  $('selAll').checked = allVis;
+
+  $('fleetBody').innerHTML = rows.map(h => {
+    const lc = h.last_cmd;
+    const lcHtml = lc
+      ? `<span class="${lc.failed ? 'bad' : 'ok'}">#${lc.cmd_id} ${esc(lc.rc)}</span><div class="dim">${ago(lc.ts)}</div>`
+      : '<span class="dim">—</span>';
+    const rmm = (h.rmm_entries || []).slice(0, 5).map(e => `<span class="badge">${esc(e.raw)}</span>`).join(' ') || '<span class="dim">—</span>';
+    const tags = hostTags(h).map(t => `<span class="tag-pill">${esc(t)}</span>`).join('') || '<span class="dim">—</span>';
+    const beat = h.last_beat ? ago(h.last_beat) : '<span class="dim">—</span>';
+    const seen = h.seen || ago(h.last_seen);
+    const maint = isMaint(h) ? ' <span class="badge maint">MAINT</span>' : '';
+    const sel = SELECTED.has(h.host) ? ' selected' : '';
+    const sla = slaHtml(h.sla_minutes ?? slaMinutes(h.last_seen), h.presence);
+    return `<tr class="${sel}" data-host="${esc(h.host)}">
+      <td><input type="checkbox" class="cb row-cb" data-host="${esc(h.host)}" ${SELECTED.has(h.host) ? 'checked' : ''}/></td>
+      <td class="host">${esc(h.host)}${maint}</td>
+      <td>${tags}</td>
+      <td><span class="badge ${h.presence}">${esc(h.presence)}</span></td>
       <td>${stateBadge(h.state)}</td>
-      <td>${h.guard||'?'}</td>
-      <td>${h.seen}</td>
+      <td>${esc(h.guard || '?')}</td>
+      <td><div class="dim">beat ${beat}</div><div>seen ${esc(seen)}</div></td>
+      <td>${sla}</td>
       <td>${rmm}</td>
       <td>${lcHtml}</td>
       <td class="row-actions">
-        <button class="btn ghost" data-act="selftest" data-host="${h.host}">Test</button>
-        <button class="btn ghost" data-act="force-guard" data-host="${h.host}">Guard</button>
-        <button class="btn warn" data-act="install-gryxa" data-host="${h.host}">Gryxa</button>
+        <button class="btn ghost sm" data-act="selftest" data-host="${esc(h.host)}">Test</button>
+        <button class="btn ghost sm" data-act="force-guard" data-host="${esc(h.host)}">Guard</button>
+        <button class="btn warn sm" data-act="install-gryxa" data-host="${esc(h.host)}">Gryxa</button>
       </td></tr>`;
-  }).join('')||'<tr><td colspan="8" class="muted">No hosts match.</td></tr>';
+  }).join('') || '<tr><td colspan="11" class="muted">No hosts match.</td></tr>';
+
+  const banner = $('suspectBanner');
+  if (hasSuspects()) {
+    banner.classList.add('visible');
+    const n = (FLEET.hosts || []).filter(h => h.suspects && h.suspects !== 'none').length;
+    $('suspectTxt').textContent = `Suspects reported on ${n} host(s) — review before promoting to killlist.`;
+  } else {
+    banner.classList.remove('visible');
+  }
+  updateBulkBar();
 }
 
-function renderJobs(){
-  if(!FLEET) return;
-  $('jobList').innerHTML=FLEET.jobs.map(j=>`
+function fillTargets(hosts) {
+  const opts = '<option value="ALL">ALL</option><option value="@dogfood">@dogfood</option>'
+    + hosts.map(h => `<option value="${esc(h.host)}">${esc(h.host)}</option>`).join('');
+  for (const id of ['deployTarget', 'rawTarget', 'assignHost']) {
+    const sel = $(id);
+    const cur = sel.value;
+    sel.innerHTML = id === 'assignHost'
+      ? hosts.map(h => `<option value="${esc(h.host)}">${esc(h.host)}</option>`).join('')
+      : opts;
+    if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  }
+  const tagSel = $('fTag');
+  const curTag = tagSel.value;
+  const names = new Set();
+  TAGS.forEach(t => names.add(t.name || t));
+  hosts.forEach(h => hostTags(h).forEach(t => names.add(t)));
+  tagSel.innerHTML = '<option value="">All groups</option>'
+    + [...names].sort().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  if ([...tagSel.options].some(o => o.value === curTag)) tagSel.value = curTag;
+}
+
+function renderJobs() {
+  if (!FLEET) return;
+  $('jobList').innerHTML = (FLEET.jobs || []).map(j => `
     <div class="job">
       <div>
-        <h3>${j.title} <span class="risk-${j.risk}">· ${j.risk}</span></h3>
-        <div class="muted">${j.blurb}</div>
+        <h3>${esc(j.title)} <span class="risk-${j.risk}">· ${esc(j.risk)}</span></h3>
+        <div class="muted">${esc(j.blurb)}</div>
       </div>
-      <button class="btn ${j.risk==='high'?'danger':(j.risk==='medium'?'warn':'')}" data-job="${j.name}">Run</button>
+      <button class="btn sm ${j.risk === 'high' ? 'danger' : j.risk === 'medium' ? 'warn' : ''}" data-job="${esc(j.name)}">Run</button>
     </div>`).join('');
 }
 
-function renderRmm(){
-  if(!FLEET) return;
-  const rows=FLEET.hosts.filter(h=>(h.nonkeeper&&h.nonkeeper.length) || (h.rmm_entries&&h.rmm_entries.length));
-  $('rmmBody').innerHTML=rows.map(h=>{
-    const nk=(h.nonkeeper||[]).map(e=>`<span class="badge">${e.raw}</span>`).join(' ')||'<span class="dim">—</span>';
-    const all=(h.rmm_entries||[]).map(e=>`<span class="badge">${e.raw}</span>`).join(' ');
-    return `<tr>
-      <td class="host">${h.host}</td>
-      <td><span class="badge ${h.presence}">${h.presence}</span></td>
-      <td>${nk}</td><td>${all}</td>
-      <td class="row-actions">
-        <button class="btn danger" data-kick-host="${h.host}">Kick unknown SC</button>
-      </td></tr>`;
-  }).join('')||'<tr><td colspan="5" class="muted">No RMM rows.</td></tr>';
+function renderJobStatus(data) {
+  const jobs = data?.jobs || data?.status || [];
+  const counts = { queued: 0, running: 0, done: 0, failed: 0 };
+  jobs.forEach(j => { if (counts[j.status] != null) counts[j.status]++; });
+  document.querySelectorAll('#jobStatusMachine .step').forEach(el => {
+    const st = el.dataset.st;
+    el.classList.toggle('on', counts[st] > 0);
+    el.textContent = st + (counts[st] ? ` (${counts[st]})` : '');
+  });
+  $('jobStatusBody').innerHTML = jobs.slice(0, 30).map(j => `
+    <tr>
+      <td>#${j.cmd_id ?? j.id ?? '?'}</td>
+      <td>${esc(j.name ?? j.job ?? '?')}</td>
+      <td>${esc(j.target ?? '?')}</td>
+      <td><span class="badge ${esc(j.status || 'queued')}">${esc(j.status || 'queued')}</span></td>
+      <td class="dim">${ago(j.ts)}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">No recent jobs.</td></tr>';
 }
 
-async function refresh(){
-  FLEET=await api('/api/fleet');
-  $('genAgo').textContent='updated '+new Date(FLEET.generated*1000).toLocaleTimeString();
-  renderStats(FLEET.counts);
-  fillTargets(FLEET.hosts);
+function renderRmm() {
+  if (!FLEET) return;
+  const rows = FLEET.hosts.filter(h => (h.nonkeeper && h.nonkeeper.length) || (h.rmm_entries && h.rmm_entries.length));
+  $('rmmBody').innerHTML = rows.map(h => {
+    const nk = (h.nonkeeper || []).map(e => `<span class="badge">${esc(e.raw)}</span>`).join(' ') || '<span class="dim">—</span>';
+    const all = (h.rmm_entries || []).map(e => `<span class="badge">${esc(e.raw)}</span>`).join(' ');
+    return `<tr>
+      <td class="host">${esc(h.host)}</td>
+      <td><span class="badge ${h.presence}">${esc(h.presence)}</span></td>
+      <td>${nk}</td><td>${all}</td>
+      <td class="row-actions">
+        <button class="btn danger sm" data-kick-host="${esc(h.host)}">Kick unknown</button>
+      </td></tr>`;
+  }).join('') || '<tr><td colspan="5" class="muted">No RMM rows.</td></tr>';
+}
+
+function renderRmmHistory(data) {
+  const rows = data?.history || data?.events || [];
+  $('rmmHistBody').innerHTML = rows.map(r => `
+    <tr>
+      <td class="dim">${ago(r.ts)}</td>
+      <td class="host">${esc(r.host || '—')}</td>
+      <td>${esc(r.action || r.event || '?')}</td>
+      <td class="muted">${esc((r.detail || r.raw || '').slice(0, 120))}</td>
+    </tr>`).join('') || '<tr><td colspan="4" class="muted">No RMM history.</td></tr>';
+}
+
+function renderAudit(data) {
+  const rows = data?.audit || [];
+  $('auditTimeline').innerHTML = rows.map(a => `
+    <div class="tl-item">
+      <div class="when">${new Date(a.ts * 1000).toLocaleString()} · ${esc(a.actor)}</div>
+      <div class="act">${esc(a.action)}</div>
+      <div class="muted">${esc(a.detail || '')}</div>
+    </div>`).join('') || '<p class="muted">No audit entries.</p>';
+}
+
+function renderPastes(data) {
+  const items = data?.pastes || [];
+  $('pasteGrid').innerHTML = (items.length ? items : [
+    { name: '(empty)', cmd: 'No pastes from API' },
+  ]).map(it => {
+    const text = it.cmd || '';
+    return `<div class="paste-card">
+      <h3>${esc(it.name || 'Paste')}</h3>
+      <p class="muted">One-click Guest paste</p>
+      <pre>${esc(text)}</pre>
+      <button class="btn sm" data-copy="1">Copy to clipboard</button>
+    </div>`;
+  }).join('');
+}
+
+function renderGroups() {
+  const list = TAGS.length ? TAGS : [];
+  $('groupList').innerHTML = list.map(t => {
+    const name = t.name || t;
+    const hosts = t.hosts || [];
+    return `<div style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <span class="tag-pill">@${esc(name)}</span>
+        <span class="dim">${hosts.length} host(s)</span>
+        <button class="btn ghost sm" data-del-tag="${esc(name)}">Delete</button>
+      </div>
+      <div>${hosts.map(h => `<span class="group-chip">${esc(h)}</span>`).join('') || '<span class="dim">empty</span>'}</div>
+    </div>`;
+  }).join('') || '<span class="muted">No groups yet.</span>';
+}
+
+async function refreshTags() {
+  try {
+    const data = await api('/api/tags');
+    TAGS = data.tags || data.groups || [];
+    renderGroups();
+    if (FLEET) fillTargets(FLEET.hosts);
+  } catch (e) {
+    if (!e.auth) TAGS = [];
+  }
+}
+
+async function refreshFleet() {
+  FLEET = await api('/api/fleet');
+  $('genAgo').textContent = 'updated ' + new Date((FLEET.generated || Date.now() / 1000) * 1000).toLocaleTimeString();
+  renderStats(FLEET.counts || {});
+  fillTargets(FLEET.hosts || []);
   renderFleet();
   renderJobs();
   renderRmm();
+}
+
+async function refreshJobStatus() {
+  try {
+    const data = await api('/api/jobs/status');
+    renderJobStatus(data);
+  } catch (e) {
+    if (!e.auth) renderJobStatus({ jobs: [] });
+  }
+}
+
+async function refreshCmds() {
+  const data = await api('/api/cmds');
+  $('cmdBody').innerHTML = (data.cmds || []).map(c => {
+    const when = new Date(c.ts * 1000).toLocaleString();
+    const res = (c.results || []).length;
+    const fail = (c.results || []).filter(x => x.rc && !String(x.rc).includes('RC=0') && x.rc !== '0').length;
+    return `<tr>
+      <td>#${c.id}</td><td>${esc(c.job || 'raw')}</td><td>${esc(c.target)}</td><td>${when}</td>
+      <td>${res} ok-ish · <span class="${fail ? 'bad' : ''}">${fail} fail</span></td>
+      <td><button class="btn ghost sm" data-cid="${c.id}">Open</button></td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="muted">No commands yet.</td></tr>';
+}
+
+async function refreshPolicy() {
+  const data = await api('/api/policy');
+  $('polBody').innerHTML = (data.policy || []).map(p => `<tr>
+    <td>${p.id}</td><td>${esc(p.kind)}</td><td>${esc(p.pattern)}</td><td>${esc(p.action)}</td>
+    <td>${esc(p.scope)}</td><td class="muted">${esc(p.note || '')}</td>
+    <td><button class="btn ghost sm" data-del-pol="${p.id}">Del</button></td></tr>`).join('')
+    || '<tr><td colspan="7" class="muted">No policies yet.</td></tr>';
+}
+
+async function refreshRmmHistory() {
+  try {
+    const data = await api('/api/rmm/history');
+    renderRmmHistory(data);
+  } catch (e) {
+    if (!e.auth) renderRmmHistory({ history: [] });
+  }
+}
+
+async function refreshAudit() {
+  try {
+    const data = await api('/api/audit');
+    renderAudit(data);
+  } catch (e) {
+    if (!e.auth) renderAudit({ audit: [] });
+  }
+}
+
+async function refreshPastes() {
+  try {
+    const data = await api('/api/pastes');
+    renderPastes(data);
+  } catch (e) {
+    if (!e.auth) renderPastes({});
+  }
+}
+
+async function refreshTab(tab) {
+  if (tab === 'fleet') await refreshFleet();
+  else if (tab === 'deploy') { await refreshFleet(); await refreshJobStatus(); }
+  else if (tab === 'cmds') await refreshCmds();
+  else if (tab === 'rmm') { await refreshFleet(); await refreshRmmHistory(); }
+  else if (tab === 'policy') await refreshPolicy();
+  else if (tab === 'audit') await refreshAudit();
+  else if (tab === 'pastes') await refreshPastes();
+  else if (tab === 'groups') { await refreshFleet(); await refreshTags(); }
+}
+
+async function refresh() {
+  await refreshFleet();
   await refreshCmds();
   await refreshPolicy();
+  if (ACTIVE_TAB === 'deploy') await refreshJobStatus();
+  if (ACTIVE_TAB === 'rmm') await refreshRmmHistory();
+  if (ACTIVE_TAB === 'audit') await refreshAudit();
+  if (ACTIVE_TAB === 'pastes') await refreshPastes();
+  if (ACTIVE_TAB === 'groups') await refreshTags();
 }
 
-async function runJob(name, target, params={}){
-  const body={name, target, params};
-  const r=await api('/api/jobs',{method:'POST',body:JSON.stringify(body)});
+async function runJob(name, target, params = {}) {
+  const body = { name, target, params };
+  const r = await api('/api/jobs', { method: 'POST', body: JSON.stringify(body) });
   toast(`Queued ${name} → ${target} (#${r.queued})`);
   await refreshCmds();
+  await refreshJobStatus();
 }
 
-async function refreshCmds(){
-  const data=await api('/api/cmds');
-  $('cmdBody').innerHTML=data.cmds.map(c=>{
-    const when=new Date(c.ts*1000).toLocaleString();
-    const res=(c.results||[]).length;
-    const fail=(c.results||[]).filter(x=>x.rc&&!String(x.rc).includes('RC=0')&&x.rc!=='0').length;
-    return `<tr>
-      <td>#${c.id}</td><td>${c.job||'raw'}</td><td>${c.target}</td><td>${when}</td>
-      <td>${res} ok-ish · <span class="${fail?'bad':''}">${fail} fail</span></td>
-      <td><button class="btn ghost" data-cid="${c.id}">Open</button></td></tr>`;
-  }).join('')||'<tr><td colspan="6" class="muted">No commands yet.</td></tr>';
+async function runBulk(job) {
+  const hosts = [...SELECTED];
+  if (!hosts.length) return toast('Nothing selected');
+  if (job === 'install-gryxa' && !confirm(`Install Gryxa on ${hosts.length} host(s)?`)) return;
+  let ok = 0;
+  for (const h of hosts) {
+    try { await runJob(job, h); ok++; } catch (e) { toast(`${h}: ${e.message}`); }
+  }
+  if (ok) toast(`Queued ${job} on ${ok} host(s)`);
+  SELECTED.clear();
+  renderFleet();
 }
 
-async function openCmd(id){
-  const d=await api('/api/cmd/'+id);
-  $('cmdMeta').textContent=`#${d.id} ${d.job?d.job.name:'raw'} → ${d.target}`;
-  const blocks=(d.results||[]).map(r=>`── ${r.host}  ${r.rc} ──\n${r.out||'(no output)'}`).join('\n\n');
-  $('cmdOut').textContent=blocks||'(no results yet — agents pick up within ~1 min)';
+async function openCmd(id) {
+  const d = await api('/api/cmd/' + id);
+  $('cmdMeta').textContent = `#${d.id} ${d.job ? d.job.name : 'raw'} → ${d.target}`;
+  const blocks = (d.results || []).map(r => `── ${r.host}  ${r.rc} ──\n${r.out || '(no output)'}`).join('\n\n');
+  $('cmdOut').textContent = blocks || '(no results yet — agents pick up within ~1 min)';
 }
 
-async function refreshPolicy(){
-  const data=await api('/api/policy');
-  $('polBody').innerHTML=(data.policy||[]).map(p=>`<tr>
-    <td>${p.id}</td><td>${p.kind}</td><td>${p.pattern}</td><td>${p.action}</td>
-    <td>${p.scope}</td><td class="muted">${p.note||''}</td>
-    <td><button class="btn ghost" data-del-pol="${p.id}">Del</button></td></tr>`).join('')||'<tr><td colspan="7" class="muted">No policies yet.</td></tr>';
+async function login() {
+  const token = $('tok').value.trim();
+  if (!token) return;
+  $('loginErr').textContent = '';
+  FALLBACK_TOKEN = token;
+  try {
+    await fetch('/api/login', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    }).then(r => { if (r.status === 401 || r.status === 403) throw new Error('auth'); if (!r.ok && r.status !== 404) throw new Error('login failed'); });
+    await api('/api/fleet');
+    FALLBACK_TOKEN = '';
+    showApp(true);
+    await refresh();
+    toast('Session established');
+  } catch (_) {
+    try {
+      await api('/api/fleet');
+      showApp(true);
+      await refresh();
+      toast('Authenticated (bearer fallback)');
+    } catch (e2) {
+      FALLBACK_TOKEN = '';
+      $('loginErr').textContent = 'Token rejected or Sight API unreachable.';
+      showApp(false);
+    }
+  }
 }
 
-$('btnLogin').onclick=login;
-$('tok').addEventListener('keydown',e=>{if(e.key==='Enter')login()});
-$('btnLogout').onclick=()=>{sessionStorage.removeItem(KEY);TOKEN='';showApp(false)};
-$('btnRefresh').onclick=()=>refresh().catch(e=>toast(e.message));
-['q','fPresence','fState'].forEach(id=>$(id).addEventListener('input',renderFleet));
+async function logout() {
+  FALLBACK_TOKEN = '';
+  try {
+    await fetch('/api/logout', { method: 'POST', credentials: 'include' });
+  } catch (_) {}
+  showApp(false);
+  $('tok').value = '';
+  toast('Logged out');
+}
 
-document.querySelectorAll('.tab').forEach(btn=>{
-  btn.onclick=()=>{
-    document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+async function handleAuthError(e) {
+  if (e.auth) {
+    FALLBACK_TOKEN = '';
+    showApp(false);
+    toast('Session expired — log in again');
+  } else {
+    toast(e.message);
+  }
+}
+
+async function promoteSuspects() {
+  if (!confirm('Promote fleet suspects to killlist cfg? This affects the whole fleet.')) return;
+  const suspects = (FLEET?.hosts || [])
+    .filter(h => h.suspects && h.suspects !== 'none')
+    .map(h => ({ host: h.host, suspects: h.suspects }));
+  await api('/api/suspects/promote', { method: 'POST', body: JSON.stringify({ suspects }) });
+  toast('Suspects promoted');
+  await refreshFleet();
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied');
+  } catch (_) {
+    toast('Copy failed — select manually');
+  }
+}
+
+// --- Events ---
+$('btnLogin').onclick = login;
+$('tok').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+$('btnLogout').onclick = logout;
+$('btnRefresh').onclick = () => refresh().catch(handleAuthError);
+$('btnClearSel').onclick = () => { SELECTED.clear(); renderFleet(); };
+$('btnPromoteSuspects').onclick = () => promoteSuspects().catch(handleAuthError);
+
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    ['fleet','deploy','cmds','rmm','policy'].forEach(t=>{
-      $('tab-'+t).classList.toggle('hidden', t!==btn.dataset.tab);
+    ACTIVE_TAB = btn.dataset.tab;
+    ['fleet', 'deploy', 'cmds', 'rmm', 'policy', 'audit', 'pastes', 'groups'].forEach(t => {
+      $('tab-' + t).classList.toggle('hidden', t !== ACTIVE_TAB);
     });
+    refreshTab(ACTIVE_TAB).catch(handleAuthError);
   };
 });
 
-$('fleetBody').addEventListener('click',e=>{
-  const b=e.target.closest('button[data-act]'); if(!b) return;
-  runJob(b.dataset.act, b.dataset.host).catch(err=>toast(err.message));
-});
-$('jobList').addEventListener('click',e=>{
-  const b=e.target.closest('button[data-job]'); if(!b) return;
-  const name=b.dataset.job;
-  const target=$('deployTarget').value;
-  const params={}; if(name==='kick-sc-fp') params.fp=$('deployFp').value.trim();
-  runJob(name,target,params).catch(err=>toast(err.message));
-});
-$('btnForceGuard').onclick=()=>runJob('force-guard',$('selTarget').value);
-$('btnInstallGryxa').onclick=()=>{
-  if(!confirm('Install Gryxa on '+$('selTarget').value+'?')) return;
-  runJob('install-gryxa',$('selTarget').value);
-};
-$('btnRaw').onclick=async()=>{
-  const target=$('rawTarget').value; const cmd=$('rawCmd').value.trim();
-  if(!cmd) return toast('empty command');
-  const r=await api('/api/cmd',{method:'POST',body:JSON.stringify({target,cmd})});
-  toast('Queued #'+r.queued); refreshCmds();
-};
-$('cmdBody').addEventListener('click',e=>{
-  const b=e.target.closest('button[data-cid]'); if(!b) return;
-  openCmd(b.dataset.cid).catch(err=>toast(err.message));
-});
-$('btnKickUnknown').onclick=async()=>{
-  if(!confirm('Kick unknown ScreenConnect on ALL hosts?')) return;
-  const r=await api('/api/rmm/kick',{method:'POST',body:JSON.stringify({target:'ALL',mode:'unknown-sc'})});
-  toast('Queued #'+r.queued); refreshCmds();
-};
-$('rmmBody').addEventListener('click',async e=>{
-  const b=e.target.closest('button[data-kick-host]'); if(!b) return;
-  if(!confirm('Kick unknown SC on '+b.dataset.kickHost+'?')) return;
-  const r=await api('/api/rmm/kick',{method:'POST',body:JSON.stringify({target:b.dataset.kickHost,mode:'unknown-sc'})});
-  toast('Queued #'+r.queued); refreshCmds();
-});
-$('btnPolAdd').onclick=async()=>{
-  await api('/api/policy',{method:'POST',body:JSON.stringify({
-    kind:$('polKind').value, pattern:$('polPat').value.trim(), action:$('polAct').value,
-    scope:$('polScope').value.trim()||'ALL', note:$('polNote').value.trim()
-  })});
-  toast('Policy saved'); refreshPolicy();
-};
-$('polBody').addEventListener('click',async e=>{
-  const b=e.target.closest('button[data-del-pol]'); if(!b) return;
-  await api('/api/policy?id='+b.dataset.delPol,{method:'DELETE'});
-  refreshPolicy();
+['q', 'fPresence', 'fState', 'fTag', 'fMaint'].forEach(id => {
+  $(id).addEventListener('input', renderFleet);
+  $(id).addEventListener('change', renderFleet);
 });
 
-if(TOKEN){ showApp(true); refresh().catch(()=>{showApp(false); sessionStorage.removeItem(KEY); TOKEN='';}); }
-setInterval(()=>{ if(TOKEN && $('app').style.display==='block') refresh().catch(()=>{}); }, 60000);
+$('selAll').onchange = () => {
+  const rows = filteredHosts();
+  if ($('selAll').checked) rows.forEach(h => SELECTED.add(h.host));
+  else rows.forEach(h => SELECTED.delete(h.host));
+  renderFleet();
+};
+
+$('fleetBody').addEventListener('change', e => {
+  const cb = e.target.closest('.row-cb');
+  if (!cb) return;
+  if (cb.checked) SELECTED.add(cb.dataset.host);
+  else SELECTED.delete(cb.dataset.host);
+  updateBulkBar();
+  cb.closest('tr').classList.toggle('selected', cb.checked);
+});
+
+$('fleetBody').addEventListener('click', e => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  runJob(b.dataset.act, b.dataset.host).catch(handleAuthError);
+});
+
+$('bulkBar').addEventListener('click', e => {
+  const b = e.target.closest('button[data-bulk]');
+  if (!b) return;
+  runBulk(b.dataset.bulk).catch(handleAuthError);
+});
+
+$('jobList').addEventListener('click', e => {
+  const b = e.target.closest('button[data-job]');
+  if (!b) return;
+  const name = b.dataset.job;
+  const target = $('deployTarget').value;
+  const params = {};
+  if (name === 'kick-sc-fp') {
+    params.fp = $('deployFp').value.trim();
+    if (!params.fp) return toast('fp required');
+  }
+  if (name === 'install-gryxa' && !confirm(`Install Gryxa on ${target}?`)) return;
+  runJob(name, target, params).catch(handleAuthError);
+});
+
+$('btnRaw').onclick = async () => {
+  const target = $('rawTarget').value;
+  const cmd = $('rawCmd').value.trim();
+  if (!cmd) return toast('empty command');
+  const r = await api('/api/cmd', { method: 'POST', body: JSON.stringify({ target, cmd }) });
+  toast('Queued #' + r.queued);
+  refreshCmds().catch(handleAuthError);
+};
+
+$('cmdBody').addEventListener('click', e => {
+  const b = e.target.closest('button[data-cid]');
+  if (!b) return;
+  openCmd(b.dataset.cid).catch(handleAuthError);
+});
+
+$('btnKickUnknown').onclick = async () => {
+  if (!confirm('Kick unknown ScreenConnect on ALL hosts?')) return;
+  const r = await api('/api/rmm/kick', { method: 'POST', body: JSON.stringify({ target: 'ALL', mode: 'unknown-sc' }) });
+  toast('Queued #' + r.queued);
+  refreshCmds().catch(handleAuthError);
+};
+
+$('rmmBody').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-kick-host]');
+  if (!b) return;
+  if (!confirm('Kick unknown SC on ' + b.dataset.kickHost + '?')) return;
+  const r = await api('/api/rmm/kick', { method: 'POST', body: JSON.stringify({ target: b.dataset.kickHost, mode: 'unknown-sc' }) });
+  toast('Queued #' + r.queued);
+  refreshCmds().catch(handleAuthError);
+});
+
+$('btnPolAdd').onclick = async () => {
+  await api('/api/policy', {
+    method: 'POST',
+    body: JSON.stringify({
+      kind: $('polKind').value,
+      pattern: $('polPat').value.trim(),
+      action: $('polAct').value,
+      scope: $('polScope').value.trim() || 'ALL',
+      note: $('polNote').value.trim(),
+    }),
+  });
+  toast('Policy saved');
+  refreshPolicy().catch(handleAuthError);
+};
+
+$('btnPolEnforce').onclick = async () => {
+  const r = await api('/api/policy/enforce', { method: 'POST', body: '{}' });
+  toast(r.message || 'Policy enforcement queued');
+  refreshCmds().catch(handleAuthError);
+};
+
+$('polBody').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-del-pol]');
+  if (!b) return;
+  await api('/api/policy?id=' + b.dataset.delPol, { method: 'DELETE' });
+  refreshPolicy().catch(handleAuthError);
+});
+
+$('pasteGrid').addEventListener('click', e => {
+  const b = e.target.closest('button[data-copy]');
+  if (!b) return;
+  const pre = b.parentElement.querySelector('pre');
+  copyText(pre ? pre.textContent : '');
+});
+
+$('btnCreateTag').onclick = async () => {
+  const name = $('newTagName').value.trim().replace(/^@/, '');
+  if (!name) return toast('Name required');
+  await api('/api/tags', { method: 'POST', body: JSON.stringify({ name }) });
+  $('newTagName').value = '';
+  toast('Group created');
+  refreshTags().catch(handleAuthError);
+};
+
+$('btnAssignTags').onclick = async () => {
+  const host = $('assignHost').value;
+  const tags = $('assignTags').value.split(',').map(t => t.trim().replace(/^@/, '')).filter(Boolean);
+  if (!host || !tags.length) return toast('Host and tags required');
+  await api('/api/tags', { method: 'POST', body: JSON.stringify({ host, tags, action: 'assign' }) });
+  toast('Tags assigned');
+  refreshTags().catch(handleAuthError);
+  refreshFleet().catch(handleAuthError);
+};
+
+$('groupList').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-del-tag]');
+  if (!b) return;
+  if (!confirm('Delete group @' + b.dataset.delTag + '?')) return;
+  await api('/api/tags?name=' + encodeURIComponent(b.dataset.delTag), { method: 'DELETE' });
+  refreshTags().catch(handleAuthError);
+});
+
+// --- Boot ---
+(async () => {
+  try {
+    await api('/api/fleet');
+    showApp(true);
+    await refresh();
+  } catch (e) {
+    showApp(false);
+  }
+})();
+
+setInterval(() => {
+  if ($('app').style.display === 'block') {
+    refreshFleet().catch(e => { if (e.auth) handleAuthError(e); });
+  }
+}, 60000);
 </script>
 </body>
 </html>

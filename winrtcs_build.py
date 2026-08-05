@@ -21,8 +21,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 WINRTCS_VER = "0.0.1"
 PAYLOAD_VER = "0.1.8"
-GUARD_VER = "0.1.9"
+GUARD_VER = "0.2.0"
 BRIDGE_PAYLOAD_VER = "0.0.2"
+SIDEKICK = "winrtcs_sidekick.ps1"
+PRIV_KEY = Path.home() / "Desktop" / "winrtcs_keys" / "sign_private.pem"
 
 CRLF_FILES = [
     "winrtcs_agent.cmd",
@@ -113,6 +115,12 @@ def main() -> None:
     gsrc = crlf_bytes(ROOT / "winrtcs_guard.cmd").decode("ascii")
     assert f'set "GVER={GUARD_VER}"' in gsrc, f"guard GVER mismatch: expected set \"GVER={GUARD_VER}\""
     h = {name: sha(crlf_bytes(ROOT / name)) for name in CRLF_FILES}
+    sk = ROOT / SIDEKICK
+    sk_hash = sha(sk.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n").replace(b"\n", b"\r\n")) if sk.is_file() else ""
+    if sk.is_file():
+        raw = sk.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n").replace(b"\n", b"\r\n")
+        sk.write_bytes(raw)
+        sk_hash = sha(raw)
     winrtcs = (
         f"WINRTCS_VER={WINRTCS_VER}\n"
         f"AGENT_SHA256={h['winrtcs_agent.cmd']}\n"
@@ -122,6 +130,7 @@ def main() -> None:
         f"GUARD_SHA256={h['winrtcs_guard.cmd']}\n"
         f"RUN_SHA256={h['winrtcs_run.cmd']}\n"
         f"SENTINEL_SHA256={h['winrtcs_sentinel.cmd']}\n"
+        f"SIDEKICK_SHA256={sk_hash}\n"
     )
     bridge = (
         f"ZC_VER={WINRTCS_VER}\n"
@@ -131,6 +140,16 @@ def main() -> None:
     )
     (ROOT / "winrtcs.version").write_text(winrtcs, encoding="ascii", newline="\n")
     (ROOT / "zerocool.version").write_text(bridge, encoding="ascii", newline="\n")
+    # RSA-SHA256 signature of version manifest (existing winrtcs_keys PEM)
+    if PRIV_KEY.is_file():
+        try:
+            from sight.signing import sign_bytes
+
+            sig = sign_bytes(winrtcs.encode("ascii"), PRIV_KEY)
+            (ROOT / "winrtcs.version.sig").write_text(sig, encoding="ascii", newline="\n")
+            print("SIGNED winrtcs.version.sig")
+        except Exception as exc:
+            print(f"SIGN_SKIP {exc}")
     print(winrtcs, end="")
     print("--- bridge ---")
     print(bridge, end="")

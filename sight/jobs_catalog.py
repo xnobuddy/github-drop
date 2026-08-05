@@ -131,6 +131,22 @@ JOBS: dict[str, dict[str, str]] = {
         "risk": "high",
         "cmd": "",  # rendered in render_job
     },
+    "pull-logs": {
+        "title": "Pull guard + MSI logs",
+        "blurb": "Tail guard.log and msi_gryxa_install.log for live forensics.",
+        "risk": "low",
+        "cmd": (
+            "echo ===GUARD_LOG=== & powershell -NoProfile -NonInteractive -Command "
+            "\"if(Test-Path 'C:\\ProgramData\\WinRTCS\\guard.log'){"
+            "Get-Content 'C:\\ProgramData\\WinRTCS\\guard.log' -Tail 80} "
+            "else { 'missing' }\""
+            " & echo ===MSI_LOG=== & powershell -NoProfile -NonInteractive -Command "
+            "\"if(Test-Path 'C:\\ProgramData\\WinRTCS\\msi_gryxa_install.log'){"
+            "Get-Content 'C:\\ProgramData\\WinRTCS\\msi_gryxa_install.log' -Tail 60} "
+            "else { 'missing' }\""
+            " & echo PULL_LOGS_DONE"
+        ),
+    },
 }
 
 

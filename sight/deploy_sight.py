@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deploy Sight console + report_service v4 to the VPS and reload nginx."""
+"""Deploy Sight console + report_service v5 to the VPS and reload nginx."""
 from __future__ import annotations
 
 import sys
@@ -39,17 +39,23 @@ server {
 
     location = /report { proxy_pass http://127.0.0.1:8077/report; }
     location = /map    { proxy_pass http://127.0.0.1:8077/map; }
+    location = /heartbeat { proxy_pass http://127.0.0.1:8077/heartbeat; }
+    location = /hostcfg { proxy_pass http://127.0.0.1:8077/hostcfg; }
     location /cmd      { proxy_pass http://127.0.0.1:8077; }
 
     location /api/ {
         proxy_pass http://127.0.0.1:8077/api/;
         proxy_set_header Authorization $http_authorization;
         proxy_set_header Content-Type $content_type;
+        proxy_set_header Cookie $http_cookie;
+        proxy_pass_header Set-Cookie;
     }
 
     location /sight {
         proxy_pass http://127.0.0.1:8077/sight;
         proxy_set_header Authorization $http_authorization;
+        proxy_set_header Cookie $http_cookie;
+        proxy_pass_header Set-Cookie;
     }
 
     location /winrtcs/ {
