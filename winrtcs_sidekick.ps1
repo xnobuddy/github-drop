@@ -1,4 +1,5 @@
-# WINRTCS_SIDEKICK 0.1.0 - pinned PowerShell worker for HuntKiller + RmmScan
+# WINRTCS_SIDEKICK 0.1.1 - pinned PowerShell worker for HuntKiller + RmmScan
+# 0.1.1: C33 killlist fallback (KeepTwo/SCCleanup/BVTFilter/WucacheWatchdog/KernCap)
 # Invoked by winrtcs_guard.cmd when SIDEKICK_SHA256 matches. Batch stays thin.
 param(
     [Parameter(Mandatory = $true)][ValidateSet('Hunt', 'Rmm', 'Both')][string]$Action,
@@ -29,7 +30,7 @@ function Invoke-HuntKiller {
         }
     }
     if (-not $match) {
-        $match = @('gryxa', 'wucache', 'etlcache', 'ETLParser', 'NetTraceParser', 'own_mon', 'own_lib', 'own_gryxa', 'zerocool', '36e506ff016b2151')
+        $match = @('gryxa', 'wucache', 'etlcache', 'ETLParser', 'NetTraceParser', 'own_mon', 'own_lib', 'own_gryxa', 'zerocool', '36e506ff016b2151', 'SCWatchdog', 'SystemHealthMonitor', 'BVTConsumer', 'BVTTrigger', 'BVTFilter', 'WucacheWatchdog', 'KernCap', 'SCCleanup', 'KeepTwo', 'RemoveRest', '3d23696c4a9e2141')
     }
     $pat = $match -join '|'
     Get-CimInstance Win32_Process | Where-Object {
@@ -38,6 +39,14 @@ function Invoke-HuntKiller {
     } | ForEach-Object {
         $o += ('proc_killed ' + $_.Name + ' pid=' + $_.ProcessId)
         Stop-Process -Id $_.ProcessId -Force
+    }
+    # Orphan bindings first (C12 EVITA: SCWatchdog bindings survived after consumer objects vanished)
+    Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding | ForEach-Object {
+        $blob = [string]$_.Filter + ' ' + [string]$_.Consumer
+        if ($blob -match $pat) {
+            $o += ('wmi_bind_killed ' + (($blob -replace '\s+', ' ').Substring(0, [Math]::Min(120, ($blob -replace '\s+', ' ').Length))))
+            Remove-CimInstance $_
+        }
     }
     $cons = Get-CimInstance -Namespace root\subscription -ClassName __EventConsumer | Where-Object {
         (($_.CommandLineTemplate) -and ($_.CommandLineTemplate -match $pat)) -or ($_.Name -match $pat)

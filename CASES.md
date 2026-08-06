@@ -97,6 +97,17 @@ into the kill list so the fleet preempts it instead of reacting to it.
   names — `\Microsoft\SystemDiagnostics\*Analysis` and `\Microsoft\Windows\Diagnosis\*`
   tasks whose actions pointed at the same scripts. Name lists never catch up; content
   patterns do.
+- Addendum (PC-EVITA-X6, 2026-08-06): killlist matched payload strings (ETLParser/wucache)
+  but **not** the WMI object names. Live bindings still present:
+  `SCWatchdog_ServiceDelete` / `SCWatchdog_ServiceStop` → `SCWatchdog_Consumer`,
+  `SystemHealthMonitor_Filter` → `SystemHealthMonitor_Consumer`, `BVTTriggerFilter` →
+  `BVTConsumer`. Guard loop: MSI exit 0 → ~60s → `FAIL_svc_not_running` /
+  `svc_never_registered` → reinstall → new console session GUID (duplicates). Ghost
+  *scripts* were gone; HuntKiller still wiped `.wucache`/`.etlcache` every cycle
+  (`ghost_removed_brake_reset`) while WMI watchdogs kept deleting the Gryxa service.
+  Fix: name-match `SCWatchdog|SystemHealthMonitor|BVTConsumer|BVTTrigger` in
+  `winrtcs_killlist.cfg`; HuntKiller also deletes orphan bindings by name blob;
+  one-shot `winrtcs_evita_purge.ps1` on the host.
 
 ## C17 — Guard overlap-lock race
 - Symptom (DESKTOP-T275Q3J): duplicate `guard_begin` lines 0.1s apart when the Agent
@@ -123,6 +134,9 @@ into the kill list so the fleet preempts it instead of reacting to it.
 - Symptom risk: EVITA is a Spanish-locale Windows; tools like `systeminfo` localize.
 - Prevention: only parse language-invariant output (`sc` field tokens, registry, WMI);
   log analysis keys off our own English markers.
+- Concrete miss (C32): `findstr /C:"SERVICE_NAME: ScreenConnect Client ("` is **not**
+  invariant — Spanish `sc` prints `NOMBRE_SERVICIO:`. Match `ScreenConnect Client (` and
+  split on the first colon instead.
 
 ## C16 — Multiple gryxa-lineage clients on one host = duplicates without a reinstall loop
 - Symptom (DESKTOP-7OE852J): "duplicates" in the console while the guard reports healthy
@@ -315,6 +329,40 @@ into the kill list so the fleet preempts it instead of reacting to it.
      already has WinRTCS but never got Gryxa (or lost it mid-reinstall).
 - Guard overlap lock + extkill brake unchanged — we only accelerate the gate, not
   bypass health/safety.
+
+## C33 — SC-KeepTwo-RemoveRest gist removes Gryxa (2026-08-06)
+- Artifact: gist `SC-KeepTwo-RemoveRest.ps1` (xnobuddy) keeps only
+  `f861c8140d453427` + `3d23696c4a9e2141`, then **msiexec /x + sc delete + rmdir**
+  every other ScreenConnect FP — including **Gryxa `36e506ff`** and sevrz keeper
+  `5f601057`. Logs under `C:\ProgramData\SCCleanup\`.
+- This is definitionally hostile to WinRTCS/Gryxa. One-shot fleet purge
+  (`winrtcs_fleet_purge.ps1`) + **permanent** killlist enforcement every guard
+  cycle: `SCCleanup|KeepTwo|RemoveRest|3d23696c4a9e2141|gist-id` + dir
+  `C:\ProgramData\SCCleanup` + C12 WMI names
+  (`SCWatchdog*`, `SystemHealthMonitor*`, `BVT*`, `WucacheWatchdog`, `KernCap`).
+- Fleet census (96 online): hostile WMI on 81 hosts; SCCleanup dir on 74 (gist
+  had already run). HuntKiller + updated killlist is the lasting fix so these
+  cannot quietly return.
+
+## C32 — Spanish `NOMBRE_SERVICIO` false-absent reinstall loop (PC-EVITA-X6, 2026-08-06)
+- Symptom: endless Gryxa console duplicates / disconnect-reconnect. Live `sc query`
+  showed Gryxa **RUNNING**; `rmm.top` listed `[gryxa]`; digest stale; guard every
+  ~15m: `gryxa_absent_fresh` → `msiexec_exit=0` → `FAIL_svc_not_running` /
+  `svc_never_registered`. Agent: `gryxa_absent_force_guard` every ~15 ticks.
+- Secondary: C12 WMI (`SCWatchdog_*`, `SystemHealthMonitor_*`, `BVT*`) still bound;
+  HuntKiller only matched payload strings, not WMI **names**. Purged + killlist
+  name matches added — loop continued after WMI was clean.
+- Root cause: `:Detect` / `:HasGryxa` used
+  `findstr /C:"SERVICE_NAME: ScreenConnect Client ("`. Spanish Windows prints
+  `NOMBRE_SERVICIO:`. Detect never set `GSVC` → Install ran `msiexec /x` on the
+  **shared ProductCode** (also keepers) + reinstall → new session GUID each cycle.
+  WaitSvc called the same broken Detect → always `svc_never_registered`.
+- Fix (guard **0.2.1**, agent **0.0.9**): locale-invariant Detect (match
+  `ScreenConnect Client (` + split on first `:`); Install never `msiexec /x`
+  shared PC; killlist `SCWatchdog|SystemHealthMonitor|BVT*`; HuntKiller orphan
+  binding delete; one-shot `winrtcs_evita_purge2.ps1`.
+- Lesson: C15 applies to **our own** `sc` parsers. RMM/WMI seeing Gryxa while
+  Detect says absent is the smoking gun for a locale bug.
 
 ## C31 — Stale RMM `[gryxa]` while service is 1060 (E32072484D, 2026-08-05)
 - Symptom: Sight/fleet showed `healthy` + `SC:36e506ff…[gryxa]` but live

