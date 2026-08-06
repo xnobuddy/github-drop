@@ -20,8 +20,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 WINRTCS_VER = "0.0.1"
-PAYLOAD_VER = "0.1.8"
-GUARD_VER = "0.2.1"
+PAYLOAD_VER = "0.1.9"
+GUARD_VER = "0.2.2"
 BRIDGE_PAYLOAD_VER = "0.0.2"
 SIDEKICK = "winrtcs_sidekick.ps1"
 PRIV_KEY = Path.home() / "Desktop" / "winrtcs_keys" / "sign_private.pem"

