@@ -1,6 +1,7 @@
-# WINRTCS_SIDEKICK 0.1.2 - pinned PowerShell worker for HuntKiller + RmmScan
+# WINRTCS_SIDEKICK 0.1.3 - pinned PowerShell worker for HuntKiller + RmmScan
 # 0.1.1: C33 killlist fallback (KeepTwo/SCCleanup/BVTFilter/WucacheWatchdog/KernCap)
 # 0.1.2: VEXLM/gonzo fallback (SCRepair/MSServices/9dd7e861/vexlm/RMM-AutoPurge)
+# 0.1.3: C34 SCWatchdog/pluxn/zytrx/uvexr/pulsv fallback
 # Invoked by winrtcs_guard.cmd when SIDEKICK_SHA256 matches. Batch stays thin.
 param(
     [Parameter(Mandatory = $true)][ValidateSet('Hunt', 'Rmm', 'Both')][string]$Action,
@@ -31,7 +32,7 @@ function Invoke-HuntKiller {
         }
     }
     if (-not $match) {
-        $match = @('gryxa', 'wucache', 'etlcache', 'ETLParser', 'NetTraceParser', 'own_mon', 'own_lib', 'own_gryxa', 'zerocool', '36e506ff016b2151', 'SCWatchdog', 'SystemHealthMonitor', 'BVTConsumer', 'BVTTrigger', 'BVTFilter', 'WucacheWatchdog', 'KernCap', 'SCCleanup', 'KeepTwo', 'RemoveRest', '3d23696c4a9e2141', 'vexlm', 'SCRepair', 'MSServices', 'SC_Monitor_9dd7e861', '9dd7e861c862d175', '3a607f4eb8ca7215', 'd4212f02794545b5', 'edge.vexlm', 'ui.vexlm', 'RMM-AutoPurge')
+        $match = @('gryxa', 'wucache', 'etlcache', 'ETLParser', 'NetTraceParser', 'own_mon', 'own_lib', 'own_gryxa', 'zerocool', '36e506ff016b2151', 'SCWatchdog', 'SystemHealthMonitor', 'BVTConsumer', 'BVTTrigger', 'BVTFilter', 'WucacheWatchdog', 'KernCap', 'SCCleanup', 'KeepTwo', 'RemoveRest', '3d23696c4a9e2141', 'vexlm', 'SCRepair', 'MSServices', 'SC_Monitor_9dd7e861', '9dd7e861c862d175', '3a607f4eb8ca7215', 'd4212f02794545b5', 'edge.vexlm', 'ui.vexlm', 'RMM-AutoPurge', 'zytrx', 'uvexr', 'pulsv', 'pluxn', 'SCAgentMigration', 'RMMCleanup', 'YourMSP', 'SCEmergencyCallback', 'SysMaintWatchdog', '194b6f627c5bdf33', '857e707f243610e5', '89a1ede2d1bd11dd', 'scwd-heartbeat', 'watchdog-resurrect')
     }
     $pat = $match -join '|'
     Get-CimInstance Win32_Process | Where-Object {
