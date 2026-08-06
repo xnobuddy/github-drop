@@ -28,3 +28,12 @@ _tmp_*
 _verify_*.py
 ._parse.ps1
 
+# ops local (Desktop cleanup 2026-08-06)
+ops/secrets/
+ops/logs/
+ops/gist_extract/
+_gist_extract/
+**/__pycache__/
+sight/__pycache__/
+_gather_desktop.py
+
