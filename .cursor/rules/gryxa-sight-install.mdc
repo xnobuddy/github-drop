@@ -1,0 +1,42 @@
+---
+description: Lessons from C29 — Sight/agent Gryxa install-uninstall must detach, sync-wait msiexec, kill file locks; never shared ProductCode /x with keepers.
+alwaysApply: true
+---
+
+# Gryxa install / Sight jobs (C29)
+
+When fixing or queuing Gryxa install/uninstall/reinstall on the fleet:
+
+## Never
+- `start msiexec /i` + short `ping` + `sc start` — MSI is not ready → **sc 1060**.
+- Bare `rmdir` after `sc delete` — leftover DLLs are often **Access denied** (locked).
+- `msiexec /x {9D7CC418-A356-9693-DCC5-41EC44D03B31}` when sevrz keepers are present (**C03**).
+- Trust job banners (`INSTALL_GRYXA_DONE`) or stale `rmm.top` — trust **RUNNING** + fresh digest.
+- PowerShell one-liners with `$_` / `$var` in the agent cmd channel — **`$` gets stripped**.
+- Chain `curl & script.cmd` without `call` if the script uses `exit /b` (aborts parent).
+
+## Always
+- Self-detach for anything longer than the agent **~60s** cmd wait (`start /min` / `--detached`).
+- Kill Gryxa FP processes, then `takeown` / `icacls` / `rmdir` the FP dir before reinstall.
+- Purge phantom Installer keys when re-registering (**C04**).
+- Use **`start /wait msiexec /i`** (or equivalent sync wait), then `sc config` + `sc start`.
+- Prefer `winrtcs_gryxa_recover.cmd` / Sight jobs that already encode this path.
+- Confirm with `sc query "ScreenConnect Client (36e506ff016b2151)"` + fleet digest age.
+
+Host exemplar: **ADMINIS-0ET5284** (Sight Uninstall+Install → 1060 → recover4 restored Gryxa).
+Full write-up: `CASES.md` **C29**.
+
+# Guest Quick paste (C30)
+
+- `QUEUED … detached` then `Killed after 10000 milliseconds` is **expected Guest noise**.
+- Q4 `start /min` can still die inside Guest’s Job Object — Quick **Q5** uses
+  `schtasks /Run` (SYSTEM) breakaway first.
+- Prefer: `C:\Users\Public\wq.cmd` + `winrtcs_q.cmd`. Verify landing via Sight / Agent task
+  (`schtasks /Query \Microsoft\Windows\WinRTCS\Agent`) — QUEUED alone is not enough.
+
+# Stale fleet vs live service (C31)
+
+- Heartbeat fresh + RMM `[gryxa]` can still mean **sc 1060**. Always probe:
+  `sc query "ScreenConnect Client (36e506ff016b2151)"`.
+- Gryxa recover launch: prefer **schtasks** `GryxaRecover` (SYSTEM), same breakaway as Q5.
+- Exemplars today: **ADMINIS-0ET5284**, **E32072484D**, **LAPTOP-G0T88MQP**.

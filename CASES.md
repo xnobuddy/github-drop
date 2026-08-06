@@ -316,6 +316,20 @@ into the kill list so the fleet preempts it instead of reacting to it.
 - Guard overlap lock + extkill brake unchanged — we only accelerate the gate, not
   bypass health/safety.
 
+## C31 — Stale RMM `[gryxa]` while service is 1060 (E32072484D, 2026-08-05)
+- Symptom: Sight/fleet showed `healthy` + `SC:36e506ff…[gryxa]` but live
+  `sc query "ScreenConnect Client (36e506ff…)"` → **1060**. Dir still present (`DIR_OK`).
+  Digest age was hours stale while heartbeat was fresh.
+- Root cause: last successful RmmScan/digest frozen the Gryxa line; agent kept beating
+  without a new digest. Same leftover-dir + missing-service shape as C29.
+- Fix: do **not** trust RMM/state alone — probe with `sc query` before skipping install.
+  Recover via **schtasks breakaway** (not only `start /min`): download
+  `winrtcs_gryxa_recover4.cmd` → `schtasks /Create+/Run \Microsoft\Windows\WinRTCS\GryxaRecover`
+  (SYSTEM) → sync `start /wait msiexec` inside. Confirmed back in Gryxa console.
+- Also today: **LAPTOP-G0T88MQP** — Q5 `QUEUED` but Agent task missing until foreground
+  `wq_run.cmd --detached` printed `WINRTCS_Q=OK` (then landed installing). Verify with
+  `schtasks /Query …\Agent` after Quick, not QUEUED alone.
+
 ## C30 — Guest "Killed after 10000ms" after QUEUED (Quick Q4 start/min)
 - Symptom: Guest paste shows `QUEUED winrtcs-quick detached` then
   `Killed after 10000 milliseconds.` Operator unsure if WinRTCS landed.
