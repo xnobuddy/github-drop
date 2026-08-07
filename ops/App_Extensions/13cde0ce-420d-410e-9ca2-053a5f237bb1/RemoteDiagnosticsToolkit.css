@@ -1,0 +1,208 @@
+$primaryColor: #026CCF;
+
+.TabProcesses {
+	background-image: url('Images\Processes.png');
+}
+
+.TabSoftware {
+	background-image: url('Images\Software.png');
+}
+
+.TabEventLog {
+	background-image: url('Images\EventLog.png');
+}
+
+.TabServices {
+	background-image: url('Images\Services.png');
+}
+
+.TabUpdates {
+	background-image: url('Images\Updates.png');
+}
+
+[class="RemoteDiagnosticToolkit.Processes"] {
+	overflow-y: auto;
+	overflow-x: hidden;
+	height: 100%;
+}
+
+[class="RemoteDiagnosticToolkit.Users"] {
+	overflow-y: auto;
+	overflow-x: hidden;
+	height: 100%;
+}
+
+[class="RemoteDiagnosticToolkit.Software"] {
+	overflow-y: auto;
+	overflow-x: hidden;
+	height: 100%;
+}
+
+[class="RemoteDiagnosticToolkit.EventLog"] {
+	overflow-y: auto;
+	overflow-x: hidden;
+	height: 100%;
+}
+
+[class="RemoteDiagnosticToolkit.Services"] {
+	overflow-y: auto;
+	overflow-x: hidden;
+	height: 100%;
+}
+
+[class="RemoteDiagnosticToolkit.Updates"] {
+	overflow-y: auto;
+	overflow-x: hidden;
+	height: 100%;
+}
+
+.DiagnosticsHeader {
+	display: flex;
+	align-items: baseline;
+	-webkit-justify-content: space-between;
+	-ms-flex-pack: justify;
+	justify-content: space-between;
+
+	> * {
+		padding: 10px 3%;
+	}
+
+	h2, div {
+		margin: 0;
+		white-space: nowrap;
+	}
+
+	input {
+		min-width: 10px;
+	}
+
+	.LastUpdatePanel {
+		font-size: 0.9em;
+
+		.LastUpdateTime {
+			display: inline;
+			margin-right: 10px;
+			opacity: 0.6;
+			overflow: hidden;
+			white-space: nowrap;
+			text-overflow: ellipsis;
+		}
+
+		a {
+			padding-right: 22px;
+		}
+	}
+
+	.LoadingIndicatorRight {
+		margin-right: 25px;
+	}
+}
+
+.InformationDisplayContainer {
+	position: absolute;
+	top: 50px;
+	left: 0;
+	right: 0;
+	bottom: 30px;
+	margin: 0;
+	padding: 0 3%;
+	overflow: auto;
+	border-bottom-width: 1px;
+
+	.EmptyPanel {
+		text-align: center;
+
+		> img {
+			margin: 6%;
+			width: 96px;
+			opacity: 0.7;
+		}
+
+		> p {
+			margin: 6%;
+			opacity: 0.6;
+		}
+	}
+
+	&.Empty {
+		bottom: 0;
+		border-bottom-width: 0;
+
+		~ .DownloadButtonPanel {
+			display: none;
+		}
+	}
+
+	&.Empty table {
+		display: none;
+	}
+
+	&:not(.Empty) .EmptyPanel {
+		display: none;
+	}
+
+	.DataTable {
+		width: 100%;
+
+		&.NoActionCellDataTable .ActionCell {
+			display: none;
+		}
+
+		/*
+			A position: sticky; property-value combination
+			can neither be applied to a <thead> nor to a <tr>.
+			It can only be applied to a <th>.
+		*/
+		.HeaderCell {
+			position: sticky;
+			position: -webkit-sticky; /* Safari */
+			top: 0px;
+		}
+
+		.Loading {
+			font-style: italic;
+		}
+	}
+
+	.RDTLicenseRestrictionContainer {
+		width: 100%;
+		border: 1px solid $primaryColor;
+		display: flex;
+		align-items: baseline;
+		-webkit-justify-content: space-between;
+		-ms-flex-pack: justify;
+		justify-content: space-between;
+
+		.RDTShoppingBagIcon {
+			width: 25px;
+			color: #026CCF;
+			align-self: center;
+			margin-right: 10px;
+		}
+
+		> * {
+			margin-bottom: 3px;
+			margin-top: 3px;
+		}
+	}
+}
+
+.DownloadButtonPanel {
+	position: absolute;
+	bottom: 0;
+	right: 0;
+	margin: 0;
+
+	.DownloadDataButton {
+		padding: 8px;
+		margin: 0;
+		white-space: nowrap;
+	}
+}
+
+.NoActionCellDataTable {
+	.ActionCell {
+		width: 0%;
+		padding: 0;
+	}
+}

@@ -1,0 +1,24 @@
+.ConfigureSessionVariableCommandModal {
+	width: 850px;
+
+	& .ContentPanel > .SessionVariableConfigurationInstructions {
+		text-align: center;
+	}
+
+	& .ContentPanel > .ConfigurationTable {
+		width: 100%;
+
+		& .ConfigurationLabel {
+			width: 40%;
+			text-align: center;
+		}
+		
+		& .ConfigurationInput {
+			width: 60%;
+		}
+		
+		& .ConfigurationInput > input {
+			width:100%;
+		}
+	}
+}

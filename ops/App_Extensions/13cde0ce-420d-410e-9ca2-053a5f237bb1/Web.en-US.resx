@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="DiagnosticsToolkit.DownloadData.FileNameFormat" xml:space="preserve">
+    <value>Diagnostics-{0}-{1}-{2}-{3}</value>
+  </data>
+  <data name="DiagnosticsToolkit.DownloadData.Label" xml:space="preserve">
+    <value>Download Raw Data</value>
+  </data>
+  <data name="DiagnosticsToolkit.EmptyTab.GuestNotConnectedText" xml:space="preserve">
+    <value>Please make sure the guest is connected to view information.</value>
+  </data>
+  <data name="DiagnosticsToolkit.EmptyTab.ParseErrorText" xml:space="preserve">
+    <value>There was an error fetching the data.</value>
+  </data>
+  <data name="DiagnosticsToolkit.EmptyTab.TextFormat" xml:space="preserve">
+    <value>Please be patient while {0} populate.</value>
+  </data>
+  <data name="DiagnosticsToolkit.EmptyTab.TitleLoadingSuffix" xml:space="preserve">
+    <value>loading</value>
+  </data>
+  <data name="DiagnosticsToolkit.EmptyTab.TitlePrefix" xml:space="preserve">
+    <value>No</value>
+  </data>
+  <data name="DiagnosticsToolkit.EmptyTab.TitleSuffix" xml:space="preserve">
+    <value>found</value>
+  </data>
+  <data name="DiagnosticsToolkit.EventLogTab.Label" xml:space="preserve">
+    <value>Event Log</value>
+  </data>
+  <data name="DiagnosticsToolkit.InteractionPrompt.Message" xml:space="preserve">
+    <value>Are you sure?</value>
+  </data>
+  <data name="DiagnosticsToolkit.LastUpdateField.Label" xml:space="preserve">
+    <value>Last Updated: </value>
+  </data>
+  <data name="DiagnosticsToolkit.LastUpdateTime.Label" xml:space="preserve">
+    <value>Last updated: </value>
+  </data>
+  <data name="DiagnosticsToolkit.LicenseRestrictionMessage.Text" xml:space="preserve">
+    <value>Manage your machines without connecting to them! &lt;a href="https://docs.connectwise.com/ConnectWise_ScreenConnect_Documentation/Get_started/Cloud_portal/Instances_page/Purchase%20Remote%20System%20Diagnostics"&gt;Upgrade your license&lt;/a&gt; to a Premium or Access package to unlock remote actions.</value>
+  </data>
+  <data name="DiagnosticsToolkit.LicenseRestrictionTooltipMessage.Text" xml:space="preserve">
+    <value>Upgrade your license to a Premium or Access package to unlock remote actions.</value>
+  </data>
+  <data name="DiagnosticsToolkit.MachineInteraction.InstallUpdate" xml:space="preserve">
+    <value>Install</value>
+  </data>
+  <data name="DiagnosticsToolkit.MachineInteraction.KillProcess" xml:space="preserve">
+    <value>Kill</value>
+  </data>
+  <data name="DiagnosticsToolkit.MachineInteraction.RemoveAdmin" xml:space="preserve">
+    <value>Remove Admin</value>
+  </data>
+  <data name="DiagnosticsToolkit.MachineInteraction.RestartService" xml:space="preserve">
+    <value>Restart</value>
+  </data>
+  <data name="DiagnosticsToolkit.MachineInteraction.StartService" xml:space="preserve">
+    <value>Start</value>
+  </data>
+  <data name="DiagnosticsToolkit.MachineInteraction.StopService" xml:space="preserve">
+    <value>Stop</value>
+  </data>
+  <data name="DiagnosticsToolkit.MachineInteraction.UninstallSoftware" xml:space="preserve">
+    <value>Uninstall</value>
+  </data>
+  <data name="DiagnosticsToolkit.NixNotice.Text" xml:space="preserve">
+    <value>You can only view diagnostic information for Mac and Linux sessions.</value>
+  </data>
+  <data name="DiagnosticsToolkit.ProcessesTab.Label" xml:space="preserve">
+    <value>Processes</value>
+  </data>
+  <data name="DiagnosticsToolkit.Refresh.Button" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="DiagnosticsToolkit.ServicesTab.Label" xml:space="preserve">
+    <value>Services</value>
+  </data>
+  <data name="DiagnosticsToolkit.SoftwareTab.Label" xml:space="preserve">
+    <value>Software</value>
+  </data>
+  <data name="DiagnosticsToolkit.UpdateDiagnosticInfo.Button" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="DiagnosticsToolkit.UpdateDiagnosticInfo.Message1" xml:space="preserve">
+    <value>Select which info you want to refresh:</value>
+  </data>
+  <data name="DiagnosticsToolkit.UpdateDiagnosticInfo.Message2" xml:space="preserve">
+    <value> machine(s) will be refreshed.</value>
+  </data>
+  <data name="DiagnosticsToolkit.UpdateDiagnosticInfo.Title" xml:space="preserve">
+    <value>Refresh Diagnostic Info</value>
+  </data>
+  <data name="DiagnosticsToolkit.UpdatesTab.Label" xml:space="preserve">
+    <value>Updates</value>
+  </data>
+  <data name="DiagnosticsToolkit.UsersTab.Label" xml:space="preserve">
+    <value>Users</value>
+  </data>
+</root>

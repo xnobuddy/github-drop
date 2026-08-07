@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ExtensionManifest>
+	<Version>1.0.6</Version>
+	<Name>Guest Info Customizer</Name>
+	<Author>ConnectWise Labs</Author>
+	<ShortDescription>Customize the content of the Host page General tab by defining additional information-gathering commands. Requires ScreenConnect 6.9+</ShortDescription>
+	<Components>
+		<WebResourcesDefinition SourceFile="Web.en-US.resx" MinProductVersionInclusive="6.9"/>
+		<StyleSheetReference SourceFile="GuestInfoCustomizerStyle.css" />
+		<ClientScriptInitializer SourceFile="Initializer.js" MinProductVersionInclusive="6.9" />
+		<WebServiceReference SourceFile="Service.ashx" />
+	</Components>
+	<Settings>
+		<Setting Name="CommandDefinitions" IsServerOnly="true">
+			<Description>Array of JSON objects defining the custom information commands and their display labels. Recognized keys in each object are "label", "command", and (optionally) "type" (ex. {"label": "Command name", "command": "command arg1 \"string_arg\""}). The order of items in the array (in conjunction with the value of the DefaultInfoPosition setting) determines the layout of the General tab. Setting the optional "type" key to "builtin" (ex. {"label": "Network Address", "command": "GuestNetworkAddress", "type": "builtin"}) permits the inclusion of information already provided by Control.</Description>
+			<DefaultValue>[{"label": "Control Processes", "command": "Get-Process | Where-Object {$_.Name -eq \"ScreenConnect.ClientService\"} | Select Name,Id"}]</DefaultValue>
+		</Setting>
+
+		<Setting Name="StandardInfoPosition" IsServerOnly="false">
+			<Description>Controls the position of the standard information block relative to the custom information. (Values: before, after, none)</Description>
+			<DefaultValue>after</DefaultValue>
+		</Setting>
+
+		<Setting Name="CommandRepeatDelaySeconds" IsServerOnly="false">
+			<Description>Minimum wait time (in seconds) between attempts at sending the custom information commands. (Note: may be overridden.)</Description>
+			<DefaultValue>1200</DefaultValue>
+		</Setting>
+
+		<Setting Name="CommandResponseExpirationSeconds" IsServerOnly="false">
+			<Description>Number of seconds that a command response will be considered valid. (Note: other circumstances (such as changing the command definitions) may also invalidate a response.)</Description>
+			<DefaultValue>1200</DefaultValue>
+		</Setting>
+
+	</Settings>
+</ExtensionManifest>
