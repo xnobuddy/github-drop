@@ -3,9 +3,14 @@ rem WINRTCS YOGA one-shot: purge C12 WMI then R3 Gryxa recover (schtasks-safe).
 rem Usage: call with --detached from schtasks SYSTEM.
 if /I not "%~1"=="--detached" (
   copy /y "%~f0" "C:\Users\Public\yoga_pr.cmd" >nul 2>&1
-  schtasks /Delete /TN WinRTCSYogaPR /F >nul 2>&1
-  schtasks /Create /TN WinRTCSYogaPR /RU SYSTEM /RL HIGHEST /SC ONCE /ST 23:59 /F /TR "cmd.exe /c C:\Users\Public\yoga_pr.cmd --detached"
-  schtasks /Run /TN WinRTCSYogaPR
+  rem Laptops stay Status=Queued without AllowStartIfOnBatteries — use PS register.
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
+    "$ErrorActionPreference='Stop'; $tn='WinRTCSYogaPR'; Unregister-ScheduledTask -TaskName $tn -Confirm:$false -EA 0; ^
+     $a=New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c C:\Users\Public\yoga_pr.cmd --detached'; ^
+     $st=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2); ^
+     $p=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest; ^
+     Register-ScheduledTask -TaskName $tn -Action $a -Settings $st -Principal $p -Force | Out-Null; ^
+     Start-ScheduledTask -TaskName $tn"
   echo QUEUED yoga-purge-recover - log C:\Users\Public\yoga_pr.log
   exit /b 0
 )

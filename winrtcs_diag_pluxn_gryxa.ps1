@@ -30,7 +30,8 @@ foreach ($name in @(
         'update.uvexr.com', 'service.pulsv.com'
     )) {
     $sys = $null
-    try { $sys = [string]([System.Net.Dns]::GetHostEntry($name).AddressList[0].IPAddress) } catch { $sys = 'FAIL' }
+    # IPAddress has no .IPAddress prop — use ToString() (blank sys= was a false sinkhole signal)
+    try { $sys = [System.Net.Dns]::GetHostEntry($name).AddressList[0].ToString() } catch { $sys = 'FAIL' }
     $goog = $null
     try {
         $r = Resolve-DnsName $name -Server '8.8.8.8' -Type A -ErrorAction Stop |
@@ -209,9 +210,9 @@ L '=== SECTION VERDICT_HINTS ==='
 $gryxaSvc = Get-CimInstance Win32_Service -Filter "Name='ScreenConnect Client ($Gryxa)'" -ErrorAction SilentlyContinue
 $f861 = Get-CimInstance Win32_Service -Filter "Name='ScreenConnect Client ($KeepShared)'" -ErrorAction SilentlyContinue
 $gryxaDns = $null
-try { $gryxaDns = [string]([System.Net.Dns]::GetHostEntry('update.gryxa.com').AddressList[0].IPAddress) } catch {}
+try { $gryxaDns = [System.Net.Dns]::GetHostEntry('update.gryxa.com').AddressList[0].ToString() } catch {}
 $pluxnDns = $null
-try { $pluxnDns = [string]([System.Net.Dns]::GetHostEntry('update.pluxn.com').AddressList[0].IPAddress) } catch {}
+try { $pluxnDns = [System.Net.Dns]::GetHostEntry('update.pluxn.com').AddressList[0].ToString() } catch {}
 
 if (-not $gryxaSvc) { L 'VERDICT Gryxa service MISSING' }
 elseif ($gryxaSvc.State -ne 'Running') { L ("VERDICT Gryxa service NOT running state=" + $gryxaSvc.State) }
