@@ -29,11 +29,11 @@ SESSION_SECRET = hashlib.sha256((ADMIN + ":sight-v5").encode()).digest()
 sys.path.insert(0, str(BASE))
 from jobs_catalog import JOBS, catalog_public, render_job  # noqa: E402
 
-SILENCE_SECS = 26 * 3600
+SILENCE_SECS = 3 * 24 * 3600  # Telegram "no heartbeat" only after 3 days
 ONLINE_SECS = 10 * 60  # heartbeat every ~1 min
 STALE_SECS = 4 * 3600
-SILENCE_RESEND = 20 * 3600
-SLA_WARN_SECS = 30 * 60  # escalate toward silence after 30m without beat
+SILENCE_RESEND = 24 * 3600  # re-alert at most once per day after the 3-day mark
+SLA_WARN_SECS = SILENCE_SECS  # disable mid-tier SLA spam (was 30m)
 CMD_MAX_AGE = 24 * 3600
 FLUSH_SECS = 120
 TG_CHUNK = 3900
@@ -1306,13 +1306,7 @@ def silence_watchdog() -> None:
                 if maint:
                     continue
                 ref = beat or ts or 0
-                # SLA warning
-                if now - ref > SLA_WARN_SECS and now - ref < SILENCE_SECS:
-                    if now - (la or 0) > SLA_WARN_SECS:
-                        alert(fmt_sla(h, (now - ref) / 60))
-                        con.execute(
-                            "UPDATE hosts SET last_alert=? WHERE host=?", (now, h)
-                        )
+                # Silence Telegram: only after SILENCE_SECS (3 days). No mid-tier SLA warns.
                 if now - ref > SILENCE_SECS and now - (la or 0) > SILENCE_RESEND:
                     alert(fmt_silent(h, s, (now - ref) / 3600))
                     con.execute(
