@@ -1,9 +1,27 @@
 # WINRTCS_YOGA_FORENSIC - attribute who removed Gryxa (do not reinstall).
 # Log: C:\Users\Public\yoga_forensic.log
-# Launch via winrtcs_yoga_forensic.cmd (schtasks SYSTEM — Guest kills at 10s).
+# Launch via winrtcs_yoga_forensic_launch.cmd; breakaway to battery-safe SYSTEM task.
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 $log = 'C:\Users\Public\yoga_forensic.log'
+
+if ($env:YOGA_FORENSIC_WORKER -ne '1') {
+    try {
+        $tn = 'WinRTCSYogaForensic'
+        Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
+        $arg = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$env:YOGA_FORENSIC_WORKER=''1''; & ''C:\Users\Public\yoga_forensic.ps1''"'
+        $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+        $st = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+        $p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        Register-ScheduledTask -TaskName $tn -Action $a -Settings $st -Principal $p -Force | Out-Null
+        Start-ScheduledTask -TaskName $tn
+        Set-Content -Path $log -Value ('QUEUED_WORKER ' + (Get-Date -Format o)) -Encoding UTF8
+        Write-Output 'QUEUED_WORKER'
+        exit 0
+    } catch {
+        $env:YOGA_FORENSIC_WORKER = '1'
+    }
+}
 
 function L([string]$m) {
     $line = "[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m
