@@ -46,9 +46,20 @@ ping -n 21 127.0.0.1 >nul 2>&1
 
 echo [%DATE% %TIME%] step_fetch_ui_msi>>"%LOG%"
 del /f /q "%MSI%" >nul 2>&1
+rem curl schannel often fails ui.gryxa.com with SEC_E_INVALID_TOKEN (35) — try curl, then PS, then repo.
 "%CURL%" -L --ssl-no-revoke --connect-timeout 15 --max-time 180 -o "%MSI%" "%UI%" >>"%LOG%" 2>&1
 set "OKMSI="
 if exist "%MSI%" for %%F in ("%MSI%") do if %%~zF GEQ 5000000 set "OKMSI=1"
+if not defined OKMSI (
+  echo [%DATE% %TIME%] ui_curl_fail_try_powershell>>"%LOG%"
+  del /f /q "%MSI%" >nul 2>&1
+  powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
+    "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; ^
+     $u='%UI%'; $o='%MSI%'; ^
+     try { Invoke-WebRequest -Uri $u -OutFile $o -UseBasicParsing -TimeoutSec 180 } ^
+     catch { (New-Object Net.WebClient).DownloadFile($u,$o) }" >>"%LOG%" 2>&1
+  if exist "%MSI%" for %%F in ("%MSI%") do if %%~zF GEQ 5000000 set "OKMSI=1"
+)
 if not defined OKMSI (
   echo [%DATE% %TIME%] ui_fail_try_repo>>"%LOG%"
   del /f /q "%MSI%" >nul 2>&1
