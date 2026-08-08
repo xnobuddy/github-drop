@@ -1,28 +1,38 @@
 @echo off
 rem Install Gryxa from GitHub pkg_gryxa.msi (fresh UI MSI). No ui.gryxa.com.
+rem schtasks must AllowStartIfOnBatteries (laptops otherwise stay Status=Queued).
 rem Log: C:\Users\Public\gryxa_local_install.log
 setlocal EnableExtensions
 set "LOG=C:\Users\Public\gryxa_local_install.log"
 set "SELF=%~f0"
 set "PUB=C:\Users\Public\gryxa_li.cmd"
 
-rem Already the Public worker copy, or explicit --detached -> run body
 if /I "%~nx0"=="gryxa_li.cmd" goto :run
 if /I "%~1"=="--detached" goto :run
+if /I "%~1"=="--run" goto :run
 
-rem --- launcher (Guest / interactive) ---
+rem --- launcher ---
 copy /y "%SELF%" "%PUB%" >nul 2>&1
->>"%LOG%" echo [%DATE% %TIME%] LAUNCHER host=%COMPUTERNAME% queued_from=%SELF%
-schtasks /Delete /TN WinRTCSGryxaLI /F >nul 2>&1
-schtasks /Create /TN WinRTCSGryxaLI /RU SYSTEM /RL HIGHEST /SC ONCE /ST 00:00 /F /TR "cmd.exe /c \"%PUB%\""
-schtasks /Run /TN WinRTCSGryxaLI >>"%LOG%" 2>&1
-rem Dual-launch: Guest Job Object can still kill start/min; schtasks is primary
-start "" /min cmd.exe /c "%PUB%"
+>"%LOG%" echo [%DATE% %TIME%] LAUNCHER host=%COMPUTERNAME%
+
+rem PowerShell Register-ScheduledTask: allow on battery + start now
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='Stop'; ^
+   $tn='WinRTCSGryxaLI'; ^
+   Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue; ^
+   $a=New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c C:\Users\Public\gryxa_li.cmd --run'; ^
+   $st=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2); ^
+   $p=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest; ^
+   Register-ScheduledTask -TaskName $tn -Action $a -Settings $st -Principal $p -Force | Out-Null; ^
+   Start-ScheduledTask -TaskName $tn; ^
+   Add-Content '%LOG%' ('LAUNCHER_STARTED '+ (Get-Date -Format o))" >>"%LOG%" 2>&1
+
 echo QUEUED gryxa-local-install - log %LOG%
+echo If on battery, task is set AllowStartIfOnBatteries.
 endlocal & exit /b 0
 
 :run
->>"%LOG%" echo [%DATE% %TIME%] RUN_BEGIN host=%COMPUTERNAME% user=%USERNAME%
+>>"%LOG%" echo [%DATE% %TIME%] RUN_BEGIN host=%COMPUTERNAME%
 set "MSI=C:\Users\Public\gryxa.msi"
 set "GSVC=ScreenConnect Client (36e506ff016b2151)"
 set "CURL=%SystemRoot%\System32\curl.exe"
