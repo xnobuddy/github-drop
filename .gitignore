@@ -12,6 +12,11 @@ run-from-github.vbs
 WindowsPin/
 notify.cfg
 **/notify.cfg
+crypto_notify.cfg
+**/crypto_notify.cfg
+ops/secrets/crypto_notify.cfg
+ops/secrets/crypto_bot_token.txt
+ops/secrets/crypto_chat_id.txt
 ScreenConnect.ClientSetup.msi
 keys/update_privkey.xml
 _parse*.ps1

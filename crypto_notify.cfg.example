@@ -1,0 +1,5 @@
+# Copy to hosts as C:\ProgramData\WinRTCS\crypto_notify.cfg (or .wucache)
+# Dedicated @NASCryptoBot channel — NOT the RMM Sight bot.
+# Do NOT commit a real crypto_notify.cfg to the public repo.
+BOT_TOKEN=8886691406:AA....replace....
+CHAT_ID=7547462070

