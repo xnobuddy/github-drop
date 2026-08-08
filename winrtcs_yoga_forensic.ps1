@@ -1,9 +1,28 @@
 # WINRTCS_YOGA_FORENSIC - attribute who removed Gryxa (do not reinstall).
 # Log: C:\Users\Public\yoga_forensic.log
-# Run via schtasks SYSTEM (Guest kills at 10s).
+# Prefer schtasks SYSTEM (Guest kills at 10s). Self-detach if launched interactively.
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 $log = 'C:\Users\Public\yoga_forensic.log'
+
+if ($env:YOGA_FORENSIC_INNER -ne '1') {
+    try {
+        $tn = 'WinRTCSYogaForensic'
+        Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
+        $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoP -NonI -EP Bypass -Command "$env:YOGA_FORENSIC_INNER=''1''; & ''C:\Users\Public\yoga_forensic.ps1''"'
+        $st = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+        $p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        Register-ScheduledTask -TaskName $tn -Action $a -Settings $st -Principal $p -Force | Out-Null
+        Start-ScheduledTask -TaskName $tn
+        'QUEUED yoga-forensic - wait ~60s then: type C:\Users\Public\yoga_forensic.log' | Set-Content $log -Encoding UTF8
+        Write-Output 'QUEUED'
+        exit 0
+    } catch {
+        # fall through and run inline if task create fails
+        $env:YOGA_FORENSIC_INNER = '1'
+    }
+}
+
 function L([string]$m) {
     $line = "[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m
     Add-Content -Path $log -Value $line -Encoding UTF8
